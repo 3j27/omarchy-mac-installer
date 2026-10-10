@@ -105,6 +105,25 @@
       XCTAssertEqual(recorder.events, [], "unloading waits for the reply to reach the app")
     }
 
+    func testTheAppTellsWhichRegisteredHelperStaysAfterRemoval() {
+      let blessed = "/Library/PrivilegedHelperTools/probe.helper"
+      let cases: [(String?, Bool, Bool)] = [
+        (nil, true, false),
+        (nil, false, false),
+        (blessed, true, false),
+        ("/Library/PrivilegedHelperTools/./probe.helper", true, false),
+        (blessed, false, true),
+        ("/Applications/Probe.app/Contents/Library/LaunchServices/probe.helper", true, true),
+        ("/Applications/Probe.app/Contents/Library/LaunchServices/probe.helper", false, true),
+      ]
+      for (program, canInstall, stays) in cases {
+        XCTAssertEqual(
+          HelperRemovalFate.staysAfterRemoval(
+            jobProgram: program, appCanInstallHelper: canInstall, blessedBinary: blessed),
+          stays, "\(program ?? "no job") canInstall \(canInstall)")
+      }
+    }
+
     // MARK: Fixtures
 
     private struct Paths {

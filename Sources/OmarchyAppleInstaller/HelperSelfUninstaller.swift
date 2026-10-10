@@ -27,6 +27,26 @@
     public func uninstallAfterRemoval() {}
   }
 
+  /// The app's unprivileged view of the same rule: whether the registered
+  /// helper is one that stays after a completed removal.
+  public enum HelperRemovalFate {
+    /// - Parameters:
+    ///   - jobProgram: the `Program` of the helper's job file, nil when there
+    ///     is no job file or it can't be read.
+    ///   - appCanInstallHelper: whether this app declares its helper for
+    ///     `SMJobBless`; the helper of the same build then declares
+    ///     `SMAuthorizedClients`.
+    public static func staysAfterRemoval(
+      jobProgram: String?, appCanInstallHelper: Bool,
+      blessedBinary: String = "/Library/PrivilegedHelperTools/"
+        + InstallerProductIdentity.helperIdentifier
+    ) -> Bool {
+      guard let jobProgram else { return false }
+      return !appCanInstallHelper
+        || URL(fileURLWithPath: jobProgram).standardizedFileURL.path != blessedBinary
+    }
+  }
+
   public struct LaunchdHelperSelfUninstaller: HelperSelfUninstalling {
     private static let logger = Logger(subsystem: "com.omarchy.installer", category: "helper")
 

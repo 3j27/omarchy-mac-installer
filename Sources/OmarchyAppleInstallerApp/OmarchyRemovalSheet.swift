@@ -471,6 +471,8 @@ struct OmarchyRemovalSheet: View {
     } catch {
       let outcome = RemovalConnectionLoss(
         helperRetired: await RemovalOutcomeProbe.helperRetired(),
+        helperStays: RemovalOutcomeProbe.helperStaysAfterRemoval(
+          appCanInstallHelper: InstallerHelperSetup.canInstall),
         macOSContainerBytes: RemovalOutcomeProbe.macOSContainerBytes(),
         macOSBytesAfter: ticket.macOSBytesAfter, reclaimBytes: ticket.reclaimBytes)
       switch outcome {

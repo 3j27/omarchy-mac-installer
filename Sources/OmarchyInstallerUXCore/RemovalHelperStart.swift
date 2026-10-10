@@ -50,11 +50,11 @@
   /// What a lost connection after a submitted removal means. It counts as
   /// done only when the outcome shows on disk: the helper has retired
   /// completely (it deletes its job file, binary and state only after a
-  /// completed removal) and the macOS container has reached its planned size
-  /// after removal, by the helper's own completion tolerance. Anything less
-  /// stays unknown, including a helper briefly absent while another build
-  /// reinstalls it, and a helper an installer package put in place, which
-  /// stays after a removal.
+  /// completed removal), or is one an installer package put in place, which
+  /// stays after a removal, and the macOS container has reached its planned
+  /// size after removal, by the helper's own completion tolerance. Anything
+  /// less stays unknown, including a helper briefly absent while another
+  /// build reinstalls it.
   public enum RemovalConnectionLoss: Equatable, Sendable {
     case completed
     case unknown
@@ -62,14 +62,17 @@
     /// - Parameters:
     ///   - helperRetired: the helper's job file, binary and state directory
     ///     are all gone, in two looks a moment apart.
+    ///   - helperStays: the registered helper is one an installer package put
+    ///     in place, which never retires; the container size alone then shows
+    ///     the outcome.
     ///   - macOSContainerBytes: the macOS APFS container's size now, if known.
     ///   - macOSBytesAfter: its size once removal completes, from the plan.
     ///   - reclaimBytes: the space removal returns to it, from the plan.
     public init(
-      helperRetired: Bool, macOSContainerBytes: UInt64?, macOSBytesAfter: UInt64,
-      reclaimBytes: UInt64
+      helperRetired: Bool, helperStays: Bool = false, macOSContainerBytes: UInt64?,
+      macOSBytesAfter: UInt64, reclaimBytes: UInt64
     ) {
-      guard helperRetired, let macOSContainerBytes, reclaimBytes > 0,
+      guard helperRetired || helperStays, let macOSContainerBytes, reclaimBytes > 0,
         macOSBytesAfter >= reclaimBytes
       else {
         self = .unknown
