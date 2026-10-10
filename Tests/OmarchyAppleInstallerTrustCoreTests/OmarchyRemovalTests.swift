@@ -879,6 +879,43 @@
       XCTAssertEqual(version, "")
     }
 
+    func testACompletedRemovalKeepsAPackageInstalledHelperTakingWork() async throws {
+      // Only the installer package can register this helper again, so it
+      // stays and the next install works without running the package.
+      let root = try temporaryDirectory()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let uninstaller = RecordingSelfUninstaller(uninstallsAfterRemoval: false)
+      let service = ClosedEngineHelperServer(
+        workingDirectory: root, executor: UnusedRemovalHandoffExecutor(),
+        credentialValidator: RemovalCredentials(reject: false), removalDisks: FakeRemovalDisk(),
+        removalAdminValidator: { _ in }, selfUninstaller: uninstaller)
+      let endpoint = ClosedEngineXPCServiceEndpoint(server: service, version: "28")
+      let inspection = try await service.removal(
+        ticketID: nil, confirmation: "", authorization: nil)
+      let ticket = try XCTUnwrap(inspection.ticket)
+
+      let result = try await service.removal(
+        ticketID: ticket.id, confirmation: ticket.confirmation, authorization: authorization())
+      XCTAssertTrue(result.completed, result.message)
+
+      XCTAssertEqual(uninstaller.calls, 0)
+      let retiring = await service.isRetiring
+      XCTAssertFalse(retiring)
+      let ping = await withCheckedContinuation { c in endpoint.ping { c.resume(returning: $0) } }
+      let version = await withCheckedContinuation { c in
+        endpoint.helperVersion { c.resume(returning: $0) }
+      }
+      XCTAssertTrue(ping, "the app keeps using this helper")
+      XCTAssertEqual(version, "28")
+      do {
+        // The disks now hold nothing to remove, so planning itself refuses;
+        // what matters is that the helper took the request.
+        _ = try await service.removal(ticketID: nil, confirmation: "", authorization: nil)
+      } catch let error as ClosedEngineHelperError {
+        XCTFail("the helper must still take work, got \(error)")
+      } catch {}
+    }
+
     func testHelperErrorCodesKeepTheirValuesAcrossVersions() {
       // XPC carries these as NSError codes between app and helper builds. Swift
       // numbers cases with a value first, then the rest in order; new cases
@@ -1232,7 +1269,11 @@
   private final class RecordingSelfUninstaller: HelperSelfUninstalling, @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
+    let uninstallsAfterRemoval: Bool
     var calls: Int { lock.withLock { count } }
+    init(uninstallsAfterRemoval: Bool = true) {
+      self.uninstallsAfterRemoval = uninstallsAfterRemoval
+    }
     func uninstallAfterRemoval() { lock.withLock { count += 1 } }
   }
 #endif

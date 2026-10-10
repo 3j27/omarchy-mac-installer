@@ -29,16 +29,54 @@
       XCTAssertEqual(recorder.events, ["unload:probe.helper", "exit"])
     }
 
-    func testAHelperWhoseBinaryLivesElsewhereStillUnloads() throws {
+    func testAPackageInstalledHelperRunningFromTheAppStaysInPlace() async throws {
+      // The installer package's job runs the helper inside the app in
+      // /Applications; only the package can register it again.
       let paths = try makeInstalledHelper()
-      try FileManager.default.removeItem(at: paths.binary)
+      let inApp = root.appendingPathComponent(
+        "Applications/Omarchy Installer.app/Contents/Library/LaunchServices/probe.helper")
       let recorder = Recorder()
 
-      uninstaller(paths, recorder).uninstallNow()
+      let helper = uninstaller(paths, recorder, delay: .milliseconds(10), executable: inApp)
+      XCTAssertFalse(helper.uninstallsAfterRemoval)
+      helper.uninstallAfterRemoval()
+      helper.uninstallNow()
+      try await Task.sleep(for: .milliseconds(100))
 
-      XCTAssertFalse(FileManager.default.fileExists(atPath: paths.jobFile.path))
-      XCTAssertFalse(FileManager.default.fileExists(atPath: paths.state.path))
-      XCTAssertEqual(recorder.events, ["unload:probe.helper", "exit"])
+      assertStillInstalled(paths)
+      XCTAssertEqual(recorder.events, [], "a package-installed helper is never unloaded")
+    }
+
+    func testAHelperWithoutAuthorizedClientsStaysInPlaceEvenInPrivilegedHelperTools() throws {
+      // The private ad hoc package copies its helper to PrivilegedHelperTools,
+      // but that build's app cannot bless it again.
+      let paths = try makeInstalledHelper()
+      let recorder = Recorder()
+
+      let helper = uninstaller(paths, recorder, declaresAuthorizedClients: false)
+      XCTAssertFalse(helper.uninstallsAfterRemoval)
+      helper.uninstallNow()
+
+      assertStillInstalled(paths)
+      XCTAssertEqual(recorder.events, [])
+    }
+
+    func testOnlyABlessedHelperRunningFromItsFixedBinaryUninstalls() throws {
+      let binary = root.appendingPathComponent("PrivilegedHelperTools/probe.helper")
+      let cases: [(URL, Bool, Bool)] = [
+        (binary, true, true),
+        (root.appendingPathComponent("PrivilegedHelperTools/./probe.helper"), true, true),
+        (binary, false, false),
+        (
+          root.appendingPathComponent("Applications/A.app/Contents/MacOS/probe.helper"), true, false
+        ),
+      ]
+      for (executable, declares, expected) in cases {
+        XCTAssertEqual(
+          LaunchdHelperSelfUninstaller.installedBySMJobBless(
+            executable: executable, binary: binary, declaresAuthorizedClients: declares),
+          expected, "\(executable.path) declares \(declares)")
+      }
     }
 
     func testUninstallingAfterRemovalWaitsThenRunsInTheBackground() async throws {
@@ -98,14 +136,28 @@
       return paths
     }
 
+    private func assertStillInstalled(
+      _ paths: Paths, file: StaticString = #filePath, line: UInt = #line
+    ) {
+      for item in [paths.jobFile, paths.binary, paths.state] {
+        XCTAssertTrue(
+          FileManager.default.fileExists(atPath: item.path), item.path, file: file, line: line)
+      }
+    }
+
+    /// By default the helper runs from its fixed binary and its build declares
+    /// the app that may install it: the `SMJobBless` case.
     private func uninstaller(
-      _ paths: Paths, _ recorder: Recorder, delay: Duration = .zero
+      _ paths: Paths, _ recorder: Recorder, delay: Duration = .zero,
+      executable: URL? = nil, declaresAuthorizedClients: Bool = true
     ) -> LaunchdHelperSelfUninstaller {
       LaunchdHelperSelfUninstaller(
         label: "probe.helper", jobFile: paths.jobFile, binary: paths.binary,
         workingDirectory: paths.state, delay: delay,
         unload: { recorder.record("unload:\($0)") },
-        exitProcess: { recorder.record("exit") })
+        exitProcess: { recorder.record("exit") },
+        executable: executable ?? paths.binary,
+        declaresAuthorizedClients: declaresAuthorizedClients)
     }
   }
 #endif

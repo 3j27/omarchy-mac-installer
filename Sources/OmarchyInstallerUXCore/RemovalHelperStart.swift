@@ -53,7 +53,8 @@
   /// completed removal) and the macOS container has reached its planned size
   /// after removal, by the helper's own completion tolerance. Anything less
   /// stays unknown, including a helper briefly absent while another build
-  /// reinstalls it.
+  /// reinstalls it, and a helper an installer package put in place, which
+  /// stays after a removal.
   public enum RemovalConnectionLoss: Equatable, Sendable {
     case completed
     case unknown

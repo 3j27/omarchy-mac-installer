@@ -6,7 +6,8 @@ import OmarchyAppleInstallerTrustCore
 enum RemovalOutcomeProbe {
   /// The helper's job file, binary and state directory are all gone, in two
   /// looks a second apart, so a helper another build is reinstalling at that
-  /// moment is not mistaken for one that retired.
+  /// moment is not mistaken for one that retired. A helper an installer
+  /// package put in place never retires, so with it this stays false.
   static func helperRetired() async -> Bool {
     let paths = [
       InstallerProductIdentity.systemLaunchDaemonPath,
