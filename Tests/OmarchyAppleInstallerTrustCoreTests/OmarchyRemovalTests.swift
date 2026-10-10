@@ -899,8 +899,7 @@
       XCTAssertTrue(result.completed, result.message)
 
       XCTAssertEqual(uninstaller.calls, 0)
-      let retiring = await service.isRetiring
-      XCTAssertFalse(retiring)
+      XCTAssertFalse(service.isRetiring)
       let ping = await withCheckedContinuation { c in endpoint.ping { c.resume(returning: $0) } }
       let version = await withCheckedContinuation { c in
         endpoint.helperVersion { c.resume(returning: $0) }

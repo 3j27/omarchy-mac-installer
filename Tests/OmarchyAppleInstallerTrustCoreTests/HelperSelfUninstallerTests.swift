@@ -34,7 +34,7 @@
       // /Applications; only the package can register it again.
       let paths = try makeInstalledHelper()
       let inApp = root.appendingPathComponent(
-        "Applications/Omarchy Installer.app/Contents/Library/LaunchServices/probe.helper")
+        "Applications/Probe.app/Contents/Library/LaunchServices/probe.helper")
       let recorder = Recorder()
 
       let helper = uninstaller(paths, recorder, delay: .milliseconds(10), executable: inApp)
