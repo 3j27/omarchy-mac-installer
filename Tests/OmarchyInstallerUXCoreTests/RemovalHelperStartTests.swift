@@ -66,6 +66,11 @@
       XCTAssertEqual(kept(after - 1_048_577), .unknown)
       XCTAssertEqual(kept(after - reclaim), .unknown)
       XCTAssertEqual(kept(nil), .unknown)
+      XCTAssertTrue(
+        PlainLanguage.removalCompletedWithoutReply(freeSpace: false).contains("removed itself"))
+      XCTAssertFalse(
+        PlainLanguage.removalCompletedWithoutReply(freeSpace: false, serviceStays: true)
+          .contains("removed itself"), "a helper that stays is not said to have gone")
       XCTAssertEqual(
         RemovalConnectionLoss(
           helperRetired: true, macOSContainerBytes: after, macOSBytesAfter: after,

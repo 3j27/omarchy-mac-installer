@@ -89,15 +89,22 @@
   }
 
   extension PlainLanguage {
-    /// Shown when the reply was lost but the helper's retirement proves the
-    /// removal completed.
-    public static func removalCompletedWithoutReply(freeSpace: Bool) -> String {
+    /// Shown when the reply was lost but the disk, with the helper's
+    /// retirement or a helper that stays by design, proves the removal
+    /// completed.
+    /// - Parameter serviceStays: the helper an installer package put in place
+    ///   is still registered, as it stays after a removal.
+    public static func removalCompletedWithoutReply(
+      freeSpace: Bool, serviceStays: Bool = false
+    ) -> String {
       let result =
         freeSpace
         ? "The free space is now part of macOS."
         : "Omarchy and its data have been removed. The freed space is now part of macOS."
       return result
-        + " The removal service finished and removed itself before this window heard back, as can happen if the Mac sleeps."
+        + (serviceStays
+          ? " The removal service finished before this window heard back, as can happen if the Mac sleeps."
+          : " The removal service finished and removed itself before this window heard back, as can happen if the Mac sleeps.")
     }
 
     public static let removalCredentialsFirst =
