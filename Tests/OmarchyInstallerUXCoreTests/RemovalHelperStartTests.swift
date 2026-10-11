@@ -54,6 +54,23 @@
       // A helper still (or again) present leaves it unknown, whatever the disk.
       XCTAssertEqual(loss(false, after), .unknown)
       XCTAssertEqual(loss(true, nil), .unknown, "an unreadable container proves nothing")
+      // A helper an installer package put in place stays, so the disk alone
+      // decides, by the same tolerance.
+      func kept(_ container: UInt64?) -> RemovalConnectionLoss {
+        RemovalConnectionLoss(
+          helperRetired: false, helperStays: true, macOSContainerBytes: container,
+          macOSBytesAfter: after, reclaimBytes: reclaim)
+      }
+      XCTAssertEqual(kept(after), .completed)
+      XCTAssertEqual(kept(after - 1_048_576), .completed)
+      XCTAssertEqual(kept(after - 1_048_577), .unknown)
+      XCTAssertEqual(kept(after - reclaim), .unknown)
+      XCTAssertEqual(kept(nil), .unknown)
+      XCTAssertTrue(
+        PlainLanguage.removalCompletedWithoutReply(freeSpace: false).contains("removed itself"))
+      XCTAssertFalse(
+        PlainLanguage.removalCompletedWithoutReply(freeSpace: false, serviceStays: true)
+          .contains("removed itself"), "a helper that stays is not said to have gone")
       XCTAssertEqual(
         RemovalConnectionLoss(
           helperRetired: true, macOSContainerBytes: after, macOSBytesAfter: after,

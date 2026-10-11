@@ -27,8 +27,9 @@
     case installConfPlanIncomplete
     case installConfTargetMismatch
     case installConfReplay
-    /// A removal completed and the helper is uninstalling itself; it takes
-    /// no more work. The app sets up a fresh helper for the next action.
+    /// A removal completed and the helper, one the app installed itself, is
+    /// uninstalling itself; it takes no more work. The app sets up a fresh
+    /// helper for the next action.
     /// Last, so the bridged error codes of the earlier cases never change.
     case retiring
     /// An app from another build is replacing this helper; it takes no new
@@ -129,7 +130,7 @@
     private let selfUninstaller: any HelperSelfUninstalling
     /// Jobs and replacement share this state; see `HelperWorkState`.
     nonisolated let work: HelperWorkState
-    /// Set once a removal completes: the helper is uninstalling itself. Kept
+    /// Set once a removal completes and the helper is uninstalling itself. Kept
     /// outside the actor so ping and the version check can read it at once,
     /// even while the actor is busy verifying a payload for a long job.
     private nonisolated let retirement = HelperRetirementFlag()
@@ -267,9 +268,12 @@
           return OmarchyRemovalReply(requiresReview: phase != "checking", message: message)
         }
       }.value
-      if reply.completed {
-        // Nothing of Omarchy is left, so the helper goes too. It takes no more
-        // work from here on, before this reply even leaves.
+      if reply.completed, selfUninstaller.uninstallsAfterRemoval {
+        // Nothing of Omarchy is left, so a helper the app installed itself
+        // goes too; the app sets it up again at the next install. It takes no
+        // more work from here on, before this reply even leaves. A helper the
+        // installer package put in place stays and keeps taking work, so the
+        // next install needs no package.
         retirement.set()
         selfUninstaller.uninstallAfterRemoval()
       }

@@ -6,7 +6,8 @@ import OmarchyAppleInstallerTrustCore
 enum RemovalOutcomeProbe {
   /// The helper's job file, binary and state directory are all gone, in two
   /// looks a second apart, so a helper another build is reinstalling at that
-  /// moment is not mistaken for one that retired.
+  /// moment is not mistaken for one that retired. A helper an installer
+  /// package put in place never retires; see `helperStaysAfterRemoval`.
   static func helperRetired() async -> Bool {
     let paths = [
       InstallerProductIdentity.systemLaunchDaemonPath,
@@ -19,6 +20,18 @@ enum RemovalOutcomeProbe {
     guard absent() else { return false }
     try? await Task.sleep(for: .seconds(1))
     return absent()
+  }
+
+  /// The registered helper is one an installer package put in place, which
+  /// stays after a completed removal rather than retiring.
+  static func helperStaysAfterRemoval(appCanInstallHelper: Bool) -> Bool {
+    let job = URL(fileURLWithPath: InstallerProductIdentity.systemLaunchDaemonPath)
+    let program =
+      (try? Data(contentsOf: job)).flatMap {
+        try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any]
+      }?["Program"] as? String
+    return HelperRemovalFate.staysAfterRemoval(
+      jobProgram: program, appCanInstallHelper: appCanInstallHelper)
   }
 
   /// The size of the APFS container macOS runs from.

@@ -75,7 +75,7 @@ Packaging/make-download-zip.sh "/absolute/path/Omarchy Installer.app" /absolute/
 
 It refuses an app without a stapled ticket and checks that the zip holds only the app.
 
-After a completed removal the helper uninstalls itself. A build that can install its own helper sets it up again at the next authorization. A build that cannot (ad hoc builds, and anything relying on the installer package) needs the installer package run again before its next install or removal.
+After a completed removal, a helper the app installed itself with `SMJobBless` uninstalls itself: its job file, its binary in `/Library/PrivilegedHelperTools` and its state directory go, and the app sets it up again at the next authorization. A helper an installer package put in place (the package from `pkg/build-pkg.sh`, which runs it from inside the app in `/Applications`, or the private ad hoc package, whose build cannot bless its helper) stays registered after a removal, because nothing but the package could register it again; Remove followed by Install then works without running the package again. The helper tells the two apart by where it runs from and whether its build declares `SMAuthorizedClients`.
 
 Notarization is deliberately separate from the assembler. The script rejects
 ad-hoc and development-signed bundles, submits a temporary ZIP, staples the

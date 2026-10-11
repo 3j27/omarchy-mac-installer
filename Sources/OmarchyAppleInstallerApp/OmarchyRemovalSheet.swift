@@ -469,14 +469,18 @@ struct OmarchyRemovalSheet: View {
       submitted = false
       message = PlainLanguage.removalNotStarted
     } catch {
+      let helperRetired = await RemovalOutcomeProbe.helperRetired()
+      let helperStays = RemovalOutcomeProbe.helperStaysAfterRemoval(
+        appCanInstallHelper: InstallerHelperSetup.canInstall)
       let outcome = RemovalConnectionLoss(
-        helperRetired: await RemovalOutcomeProbe.helperRetired(),
+        helperRetired: helperRetired, helperStays: helperStays,
         macOSContainerBytes: RemovalOutcomeProbe.macOSContainerBytes(),
         macOSBytesAfter: ticket.macOSBytesAfter, reclaimBytes: ticket.reclaimBytes)
       switch outcome {
       case .completed:
         completed = true
-        message = PlainLanguage.removalCompletedWithoutReply(freeSpace: ticket.kind == .freeSpace)
+        message = PlainLanguage.removalCompletedWithoutReply(
+          freeSpace: ticket.kind == .freeSpace, serviceStays: !helperRetired)
       case .unknown:
         connectionLost()
       }
