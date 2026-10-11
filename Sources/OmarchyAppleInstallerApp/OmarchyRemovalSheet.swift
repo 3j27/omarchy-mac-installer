@@ -476,7 +476,10 @@ struct OmarchyRemovalSheet: View {
       // completed and set aside the earlier installation's journals.
       let keptHelper =
         helperRetired
-        ? nil : await RemovalOutcomeProbe.finalization(of: ticket.id, from: client)
+        ? nil
+        : await RemovalOutcomeProbe.finalization {
+          await client.removalFinalization(ticket: ticket.id)
+        }
       let outcome = RemovalConnectionLoss(
         helperRetired: helperRetired, helperStays: helperStays, keptHelper: keptHelper,
         macOSContainerBytes: RemovalOutcomeProbe.macOSContainerBytes(),

@@ -29,16 +29,18 @@ enum RemovalOutcomeProbe {
       jobProgram: HelperRemovalFate.jobProgram(), appCanInstallHelper: appCanInstallHelper)
   }
 
-  /// What the helper's records say about this removal. While it is busy,
-  /// perhaps still finishing the removal, it is asked again, for up to about
-  /// half a minute. Nil when it never answers, as older helpers don't.
+  /// What the helper's records say about this removal, from `ask`. While
+  /// it is busy, perhaps still finishing the removal, it is asked again, for
+  /// up to about half a minute; it then stays busy, which confirms nothing.
+  /// Nil when it never answers, as older helpers don't.
   static func finalization(
-    of ticket: UUID, from client: AuthenticatedEngineXPCSubmitter
+    attempts: Int = 10, pause: Duration = .seconds(3),
+    ask: @Sendable () async -> RemovalFinalization?
   ) async -> RemovalFinalization? {
     var answer: RemovalFinalization?
-    for attempt in 0..<10 {
-      if attempt > 0 { try? await Task.sleep(for: .seconds(3)) }
-      answer = await client.removalFinalization(ticket: ticket)
+    for attempt in 0..<attempts {
+      if attempt > 0 { try? await Task.sleep(for: pause) }
+      answer = await ask()
       if answer != .busy { break }
     }
     return answer

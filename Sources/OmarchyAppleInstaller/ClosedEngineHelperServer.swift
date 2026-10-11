@@ -723,9 +723,13 @@
       retired = value
     case .none:
       // Earlier versions set the journals aside in the same step and
-      // recorded nothing. Only journals that predate the record can be the
-      // removed installation's; later ones belong to a later install.
-      retired = !executionJournalsPredate(record, in: workingDirectory)
+      // recorded nothing. Only journals nothing has touched since the record
+      // can be the removed installation's; a later install's stay. Dates
+      // that can't be read decide nothing, so installing stays refused.
+      guard let predate = executionJournalsPredate(record, in: workingDirectory) else {
+        throw EarlierRemovalProblem.installRecordUncleared
+      }
+      retired = !predate
     }
     guard !retired else { return }
     do {
@@ -740,15 +744,27 @@
     }
   }
 
-  private func executionJournalsPredate(_ record: URL, in workingDirectory: URL) -> Bool {
+  /// Whether the install journals, the directory and every journal in it,
+  /// were last changed no later than the record; nil when a date can't be
+  /// read. The engine adds later installs' journals to the same directory,
+  /// which changes its modification date, and appending changes the file's.
+  private func executionJournalsPredate(_ record: URL, in workingDirectory: URL) -> Bool? {
     let journals = workingDirectory.appendingPathComponent(
       "execution-journals", isDirectory: true)
-    guard
-      let created = try? journals.resourceValues(forKeys: [.creationDateKey]).creationDate,
-      let recorded = try? record.resourceValues(forKeys: [.contentModificationDateKey])
-        .contentModificationDate
-    else { return false }
-    return created <= recorded
+    guard FileManager.default.fileExists(atPath: journals.path) else { return false }
+    func modified(_ url: URL) -> Date? {
+      try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    }
+    guard let recorded = modified(record), let directory = modified(journals),
+      let entries = try? FileManager.default.contentsOfDirectory(
+        at: journals, includingPropertiesForKeys: [.contentModificationDateKey])
+    else { return nil }
+    var newest = directory
+    for entry in entries {
+      guard let date = modified(entry) else { return nil }
+      newest = max(newest, date)
+    }
+    return newest <= recorded
   }
 
   /// Writes a removal record and makes it, and its name, durable.

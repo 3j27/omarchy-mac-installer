@@ -918,25 +918,42 @@
       // Earlier versions recorded nothing about the journals. Journals made
       // before the record are the removed installation's; later ones belong
       // to a later install and stay.
-      for older in [true, false] {
+      enum Case { case older, newerDirectory, newerJournalInOlderDirectory }
+      for scenario in [Case.older, .newerDirectory, .newerJournalInOlderDirectory] {
+        let older = scenario == .older
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let record = root.appendingPathComponent("removal-\(UUID().uuidString).json")
         let old = #"{"plan":{"members":[],"targetMacOSBytes":1},"phase":"complete"}"#
-        if older {
+        let earlier = Date(timeIntervalSinceNow: -3600)
+        switch scenario {
+        case .older:
           _ = try makeInstallJournals(root)
           try Data(old.utf8).write(to: record)
-        } else {
+        case .newerDirectory:
           try Data(old.utf8).write(to: record)
           try FileManager.default.setAttributes(
-            [.modificationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: record.path)
+            [.modificationDate: earlier], ofItemAtPath: record.path)
           _ = try makeInstallJournals(root)
+        case .newerJournalInOlderDirectory:
+          // The old helper failed to set them aside, and a later install
+          // added its journal to the same directory.
+          let journals = try makeInstallJournals(root)
+          try Data(old.utf8).write(to: record)
+          for item in [journals.appendingPathComponent("abc.jsonl"), record] {
+            try FileManager.default.setAttributes(
+              [.modificationDate: earlier], ofItemAtPath: item.path)
+          }
+          try Data("{}".utf8).write(to: journals.appendingPathComponent("later.jsonl"))
+          try FileManager.default.setAttributes(
+            [.modificationDate: earlier], ofItemAtPath: journals.path)
         }
         let service = server(root: root, disk: FakeRemovalDisk())
         let error = await submitError(service)
         XCTAssertNil(error as? ClosedEngineHelperError, "\(String(describing: error))")
         let journals = root.appendingPathComponent("execution-journals")
-        XCTAssertEqual(FileManager.default.fileExists(atPath: journals.path), !older)
+        XCTAssertEqual(
+          FileManager.default.fileExists(atPath: journals.path), !older, "\(scenario)")
       }
     }
 
