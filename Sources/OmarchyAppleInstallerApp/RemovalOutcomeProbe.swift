@@ -45,6 +45,8 @@ enum RemovalOutcomeProbe {
       if attempt > 0 {
         guard ContinuousClock.now - start + pause <= deadline else { break }
         try? await Task.sleep(for: pause)
+        // A sleep can overrun, as while the Mac sleeps.
+        guard ContinuousClock.now - start <= deadline else { break }
       }
       answer = await ask()
       if answer != .busy { break }

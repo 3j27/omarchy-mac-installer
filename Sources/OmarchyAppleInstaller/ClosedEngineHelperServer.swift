@@ -731,12 +731,13 @@
       // recorded nothing, and an install may have run since. Journals created
       // before the record are the removed installation's and go, even if a
       // later install wrote to them; later ones stay. Dates that can't be
-      // read decide nothing, so installing stays refused.
+      // read decide nothing, so installing stays refused. With none left to
+      // move, an earlier try may still have moved some, so the moves are
+      // made durable and the record marked all the same.
       guard let legacy = legacyJournals(before: record, in: workingDirectory) else {
         throw EarlierRemovalProblem.installRecordUncleared
       }
-      guard !legacy.old.isEmpty else { return }
-      only = legacy.old.count == legacy.total ? nil : legacy.old
+      only = !legacy.old.isEmpty && legacy.old.count == legacy.total ? nil : legacy.old
     }
     do {
       let name = record.deletingPathExtension().lastPathComponent.dropFirst("removal-".count)
@@ -838,10 +839,12 @@
           try fileManager.moveItem(
             at: journal, to: destination.appendingPathComponent(journal.lastPathComponent))
         }
-        try synchronize(journals)
       }
     } else if fileManager.fileExists(atPath: journals.path) {
       try fileManager.moveItem(at: journals, to: freshDestination())
+    }
+    if fileManager.fileExists(atPath: journals.path) {
+      try synchronize(journals)
     }
     if fileManager.fileExists(atPath: retired.path) {
       for entry in try fileManager.contentsOfDirectory(

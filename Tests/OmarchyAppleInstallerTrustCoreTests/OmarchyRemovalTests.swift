@@ -967,7 +967,7 @@
           XCTAssertEqual(try recordedRetirement(record), true)
         case .newerDirectory:
           XCTAssertTrue(exists(removedInstall), "a later install's journal stays")
-          XCTAssertEqual(try recordedRetirement(record), nil)
+          XCTAssertEqual(try recordedRetirement(record), true, "nothing of its own was left")
         case .mixed:
           XCTAssertFalse(exists(removedInstall), "the removed installation's journal goes")
           XCTAssertTrue(exists(archived))
@@ -1003,6 +1003,51 @@
       XCTAssertTrue(synchronized.contains(id.uuidString), "\(synchronized)")
       XCTAssertTrue(synchronized.contains("retired-execution-journals"), "\(synchronized)")
       XCTAssertEqual(try recordedRetirement(record), true)
+    }
+
+    func testARetryOfAnEarlierVersionsRecordRedoesTheSyncThatFailed() throws {
+      // Legacy records are judged by which journals are left, so a retry
+      // after a failed sync may find none to move: it still syncs and marks.
+      for (mixed, failing) in [(false, "retired-execution-journals"), (true, "execution-journals")]
+      {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journals = try makeInstallJournals(root)
+        let id = UUID()
+        let record = try writeRecord(root, id, phase: "complete", retired: nil)
+        let laterInstall = journals.appendingPathComponent("later.jsonl")
+        if mixed {
+          let earlier = Date(timeIntervalSinceNow: -3600)
+          try FileManager.default.setAttributes(
+            [.creationDate: earlier.addingTimeInterval(-60)],
+            ofItemAtPath: journals.appendingPathComponent("abc.jsonl").path)
+          try FileManager.default.setAttributes(
+            [.modificationDate: earlier], ofItemAtPath: record.path)
+          try Data("{}".utf8).write(to: laterInstall)
+        }
+        struct SyncFailed: Error {}
+
+        XCTAssertThrowsError(
+          try settleCompletedRemoval(record, in: root) { directory in
+            if directory.lastPathComponent == failing { throw SyncFailed() }
+            try synchronizeDirectory(directory)
+          }
+        ) { XCTAssertEqual($0 as? EarlierRemovalProblem, .installRecordUncleared) }
+        XCTAssertFalse(
+          FileManager.default.fileExists(atPath: journals.appendingPathComponent("abc.jsonl").path),
+          "the move went through")
+        XCTAssertEqual(try recordedRetirement(record), nil)
+
+        var synchronized: [String] = []
+        try settleCompletedRemoval(record, in: root) { directory in
+          synchronized.append(directory.lastPathComponent)
+          try synchronizeDirectory(directory)
+        }
+        XCTAssertTrue(synchronized.contains(failing), "\(synchronized)")
+        XCTAssertTrue(synchronized.contains(id.uuidString), "\(synchronized)")
+        XCTAssertEqual(try recordedRetirement(record), true)
+        XCTAssertEqual(FileManager.default.fileExists(atPath: laterInstall.path), mixed)
+      }
     }
 
     func testAskingAboutAnUnknownRemovalOrWhileBusyClaimsNothing() async throws {
