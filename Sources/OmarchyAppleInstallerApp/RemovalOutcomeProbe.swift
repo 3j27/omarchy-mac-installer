@@ -29,6 +29,21 @@ enum RemovalOutcomeProbe {
       jobProgram: HelperRemovalFate.jobProgram(), appCanInstallHelper: appCanInstallHelper)
   }
 
+  /// What the helper's records say about this removal. While it is busy,
+  /// perhaps still finishing the removal, it is asked again, for up to about
+  /// half a minute. Nil when it never answers, as older helpers don't.
+  static func finalization(
+    of ticket: UUID, from client: AuthenticatedEngineXPCSubmitter
+  ) async -> RemovalFinalization? {
+    var answer: RemovalFinalization?
+    for attempt in 0..<10 {
+      if attempt > 0 { try? await Task.sleep(for: .seconds(3)) }
+      answer = await client.removalFinalization(ticket: ticket)
+      if answer != .busy { break }
+    }
+    return answer
+  }
+
   /// The size of the APFS container macOS runs from.
   static func macOSContainerBytes() -> UInt64? {
     let process = Process()

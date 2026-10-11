@@ -342,6 +342,29 @@
       XCTAssertGreaterThanOrEqual(headlines.count, 8)
     }
 
+    func testAnInstallRefusedForAnEarlierRemovalSaysWhyAndHowToRecover() {
+      for (helperError, headline) in [
+        (
+          ClosedEngineHelperError.earlierRemovalUnfinished,
+          PlainLanguage.earlierRemovalUnfinishedHeadline
+        ),
+        (.earlierInstallRecordUncleared, PlainLanguage.earlierInstallRecordUnclearedHeadline),
+      ] {
+        let bridged = helperError as NSError
+        // Over XPC the app sees the helper's error by domain and code.
+        for error in [
+          helperError as any Error,
+          EngineXPCSubmissionError.helperRejected(domain: bridged.domain, code: bridged.code),
+        ] {
+          let failure = PlainLanguage.failure(for: error)
+          XCTAssertEqual(failure.headline, headline, "\(error)")
+          XCTAssertTrue(failure.plainDetail.contains("nothing was changed"), failure.plainDetail)
+          XCTAssertTrue(
+            failure.remedy?.contains(InstallerProductIdentity.helperWorkingDirectory) == true)
+        }
+      }
+    }
+
     func testAnOutdatedInstallerOffersTheDownloadItNeeds() {
       let url = URL(
         string: "https://downloads.example.com/installer/stable/Installer.pkg"

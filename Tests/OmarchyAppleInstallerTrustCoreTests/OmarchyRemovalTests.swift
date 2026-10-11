@@ -822,6 +822,149 @@
       let kept = root.appendingPathComponent(
         "retired-execution-journals/\(ticket.id.uuidString)/abc.jsonl")
       XCTAssertEqual(try Data(contentsOf: kept), finished)
+      let record = root.appendingPathComponent("removal-\(ticket.id.uuidString).json")
+      XCTAssertEqual(try recordedRetirement(record), true, "set aside, durably recorded")
+      let finalization = await service.removalFinalization(ticketID: ticket.id)
+      XCTAssertEqual(finalization, .finalized)
+    }
+
+    func testStoppingAfterMacOSGrewButBeforeCompleteKeepsInstallingBlocked() async throws {
+      // Crash window: macOS took the space back, but the helper stopped
+      // before it recorded "complete". The app must not call that done.
+      let root = try temporaryDirectory()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let journals = try makeInstallJournals(root)
+      let id = UUID()
+      try writeRecord(root, id, phase: "returning-space-to-macos", retired: false)
+      let service = server(root: root, disk: FakeRemovalDisk())
+
+      let finalization = await service.removalFinalization(ticketID: id)
+      XCTAssertEqual(finalization, .unfinished)
+      let error = await submitError(service)
+      XCTAssertEqual(error as? ClosedEngineHelperError, .earlierRemovalUnfinished)
+      XCTAssertTrue(FileManager.default.fileExists(atPath: journals.path), "nothing is guessed")
+    }
+
+    func testStoppingAfterCompleteButBeforeSettingJournalsAsideIsSettledFirst() async throws {
+      // Crash window: "complete" is recorded, the install journals are not
+      // set aside yet. Left alone, a reinstall at the same size would find
+      // its old journal complete and skip installing.
+      for asks in ["app", "install"] {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journals = try makeInstallJournals(root)
+        let id = UUID()
+        let record = try writeRecord(root, id, phase: "complete", retired: false)
+        let service = server(root: root, disk: FakeRemovalDisk())
+
+        if asks == "app" {
+          let finalization = await service.removalFinalization(ticketID: id)
+          XCTAssertEqual(finalization, .finalized)
+        } else {
+          let error = await submitError(service)
+          XCTAssertNil(error as? ClosedEngineHelperError, "the install passes the gate")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: journals.path), asks)
+        XCTAssertTrue(
+          FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(
+              "retired-execution-journals/\(id.uuidString)/abc.jsonl"
+            ).path), asks)
+        XCTAssertEqual(try recordedRetirement(record), true, asks)
+      }
+    }
+
+    func testFailingToSetJournalsAsideBlocksASameSizeReinstallUntilItWorks() async throws {
+      let root = try temporaryDirectory()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let journals = try makeInstallJournals(root)
+      // A file where the retired journals go makes moving them fail.
+      let obstacle = root.appendingPathComponent("retired-execution-journals")
+      try Data("x".utf8).write(to: obstacle)
+      let service = server(root: root, disk: FakeRemovalDisk())
+      let inspection = try await service.removal(
+        ticketID: nil, confirmation: "", authorization: nil)
+      let ticket = try XCTUnwrap(inspection.ticket)
+
+      let result = try await service.removal(
+        ticketID: ticket.id, confirmation: ticket.confirmation, authorization: authorization())
+      XCTAssertTrue(result.completed, "the disks are done")
+      XCTAssertTrue(result.message.contains("won’t install until that works"), result.message)
+      let record = root.appendingPathComponent("removal-\(ticket.id.uuidString).json")
+      XCTAssertEqual(try recordedRetirement(record), false)
+
+      // The same-size reinstall is refused, not handed the old journal.
+      let refused = await submitError(service)
+      XCTAssertEqual(refused as? ClosedEngineHelperError, .earlierInstallRecordUncleared)
+      let finalization = await service.removalFinalization(ticketID: ticket.id)
+      XCTAssertEqual(finalization, .installRecordUncleared)
+      do {
+        _ = try await service.removal(ticketID: nil, confirmation: "", authorization: nil)
+        XCTFail("a new removal must not start either")
+      } catch {
+        XCTAssertTrue(error.localizedDescription.contains("set aside"), "\(error)")
+      }
+      XCTAssertTrue(FileManager.default.fileExists(atPath: journals.path))
+
+      // Once moving works, the next install sets them aside and goes ahead.
+      try FileManager.default.removeItem(at: obstacle)
+      let next = await submitError(service)
+      XCTAssertNil(next as? ClosedEngineHelperError, "\(String(describing: next))")
+      XCTAssertFalse(FileManager.default.fileExists(atPath: journals.path))
+      XCTAssertEqual(try recordedRetirement(record), true)
+    }
+
+    func testCompleteRecordsFromEarlierVersionsSetAsideOnlyJournalsThatPredateThem() async throws {
+      // Earlier versions recorded nothing about the journals. Journals made
+      // before the record are the removed installation's; later ones belong
+      // to a later install and stay.
+      for older in [true, false] {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let record = root.appendingPathComponent("removal-\(UUID().uuidString).json")
+        let old = #"{"plan":{"members":[],"targetMacOSBytes":1},"phase":"complete"}"#
+        if older {
+          _ = try makeInstallJournals(root)
+          try Data(old.utf8).write(to: record)
+        } else {
+          try Data(old.utf8).write(to: record)
+          try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: record.path)
+          _ = try makeInstallJournals(root)
+        }
+        let service = server(root: root, disk: FakeRemovalDisk())
+        let error = await submitError(service)
+        XCTAssertNil(error as? ClosedEngineHelperError, "\(String(describing: error))")
+        let journals = root.appendingPathComponent("execution-journals")
+        XCTAssertEqual(FileManager.default.fileExists(atPath: journals.path), !older)
+      }
+    }
+
+    func testAskingAboutAnUnknownRemovalOrWhileBusyClaimsNothing() async throws {
+      let root = try temporaryDirectory()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let work = HelperWorkState()
+      let service = ClosedEngineHelperServer(
+        workingDirectory: root, executor: UnusedRemovalHandoffExecutor(),
+        credentialValidator: RemovalCredentials(reject: false), removalDisks: FakeRemovalDisk(),
+        removalAdminValidator: { _ in }, work: work)
+      let id = UUID()
+      try writeRecord(root, id, phase: "complete", retired: true)
+      let unknown = await service.removalFinalization(ticketID: UUID())
+      XCTAssertEqual(unknown, .unknown)
+      try work.beginJob()
+      let busy = await service.removalFinalization(ticketID: id)
+      XCTAssertEqual(busy, .busy)
+      work.endJob()
+      let endpoint = ClosedEngineXPCServiceEndpoint(server: service)
+      let answers = await withCheckedContinuation { c in
+        endpoint.removalFinalization(ticket: id.uuidString) { c.resume(returning: $0) }
+      }
+      XCTAssertEqual(answers, "finalized")
+      let malformed = await withCheckedContinuation { c in
+        endpoint.removalFinalization(ticket: "not-a-ticket") { c.resume(returning: $0) }
+      }
+      XCTAssertEqual(malformed, "unknown")
     }
 
     func testOnlyACompletedRemovalUninstallsTheHelper() async throws {
@@ -925,6 +1068,7 @@
         (.transcriptDeviceMismatch, 5), (.transcriptIncomplete, 6), (.transcriptPlanMismatch, 7),
         (.installConfPlanIncomplete, 8), (.installConfTargetMismatch, 9),
         (.installConfReplay, 10), (.retiring, 11), (.beingReplaced, 12),
+        (.earlierRemovalUnfinished, 13), (.earlierInstallRecordUncleared, 14),
       ]
       for (error, code) in codes {
         XCTAssertEqual((error as NSError).code, code, "\(error)")
@@ -1202,6 +1346,38 @@
         workingDirectory: root, executor: UnusedRemovalHandoffExecutor(),
         credentialValidator: RemovalCredentials(reject: false), removalDisks: disk,
         removalAdminValidator: { _ in })
+    }
+    @discardableResult
+    private func writeRecord(_ root: URL, _ id: UUID, phase: String, retired: Bool?) throws -> URL {
+      var object: [String: Any] = [
+        "plan": ["members": [], "targetMacOSBytes": 1], "phase": phase,
+      ]
+      if let retired { object["executionJournalsRetired"] = retired }
+      let record = root.appendingPathComponent("removal-\(id.uuidString).json")
+      try JSONSerialization.data(withJSONObject: object).write(to: record)
+      return record
+    }
+    private func makeInstallJournals(_ root: URL) throws -> URL {
+      let journals = root.appendingPathComponent("execution-journals", isDirectory: true)
+      try FileManager.default.createDirectory(at: journals, withIntermediateDirectories: false)
+      try Data(#"{"completion":"awaiting_recovery"}"#.utf8).write(
+        to: journals.appendingPathComponent("abc.jsonl"))
+      return journals
+    }
+    private func recordedRetirement(_ record: URL) throws -> Bool? {
+      let object = try JSONSerialization.jsonObject(with: Data(contentsOf: record))
+      return (object as? [String: Any])?["executionJournalsRetired"] as? Bool
+    }
+    /// What an install request runs into. Past the gates it fails on the
+    /// test's stand-in package, never reaching the engine.
+    private func submitError(_ service: ClosedEngineHelperServer) async -> (any Error)? {
+      do {
+        _ = try await service.submit(
+          packageDirectory: .standardInput, authorization: authorization())
+        return nil
+      } catch {
+        return error
+      }
     }
     private func authorization() throws -> MachineOwnerAuthorization {
       try MachineOwnerAuthorization(username: "test-admin", password: Data("test-password".utf8))
