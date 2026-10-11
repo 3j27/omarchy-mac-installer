@@ -25,13 +25,33 @@ enum RemovalOutcomeProbe {
   /// The registered helper is one an installer package put in place, which
   /// stays after a completed removal rather than retiring.
   static func helperStaysAfterRemoval(appCanInstallHelper: Bool) -> Bool {
-    let job = URL(fileURLWithPath: InstallerProductIdentity.systemLaunchDaemonPath)
-    let program =
-      (try? Data(contentsOf: job)).flatMap {
-        try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any]
-      }?["Program"] as? String
-    return HelperRemovalFate.staysAfterRemoval(
-      jobProgram: program, appCanInstallHelper: appCanInstallHelper)
+    HelperRemovalFate.staysAfterRemoval(
+      jobProgram: HelperRemovalFate.jobProgram(), appCanInstallHelper: appCanInstallHelper)
+  }
+
+  /// What the helper's records say about this removal, from `ask`. While
+  /// it is busy, perhaps still finishing the removal, it is asked again, at
+  /// most `attempts` times and no new question after `deadline` from the
+  /// first; it then stays busy, which confirms nothing. With the client's
+  /// 10-second answer timeout, the whole wait stays under about 40 seconds.
+  /// Nil when it never answers, as older helpers don't.
+  static func finalization(
+    attempts: Int = 10, pause: Duration = .seconds(3), deadline: Duration = .seconds(30),
+    ask: @Sendable () async -> RemovalFinalization?
+  ) async -> RemovalFinalization? {
+    let start = ContinuousClock.now
+    var answer: RemovalFinalization?
+    for attempt in 0..<attempts {
+      if attempt > 0 {
+        guard ContinuousClock.now - start + pause <= deadline else { break }
+        try? await Task.sleep(for: pause)
+        // A sleep can overrun, as while the Mac sleeps.
+        guard ContinuousClock.now - start <= deadline else { break }
+      }
+      answer = await ask()
+      if answer != .busy { break }
+    }
+    return answer
   }
 
   /// The size of the APFS container macOS runs from.

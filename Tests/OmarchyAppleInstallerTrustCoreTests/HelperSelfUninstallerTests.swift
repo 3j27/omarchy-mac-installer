@@ -124,7 +124,91 @@
       }
     }
 
+    func testTheHelperAndTheAppNormalizeSymlinkedPathsTheSameWay() throws {
+      // The job file may name the blessed binary through a symlink; the
+      // helper resolves its own path, so the app must too, or one side keeps
+      // a helper the other expects gone.
+      let binary = root.appendingPathComponent("PrivilegedHelperTools/probe.helper")
+      try FileManager.default.createDirectory(
+        at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try Data("x".utf8).write(to: binary)
+      let link = root.appendingPathComponent("link.helper")
+      try FileManager.default.createSymbolicLink(at: link, withDestinationURL: binary)
+      let dotted = root.appendingPathComponent("PrivilegedHelperTools/../link.helper")
+
+      for path in [link.path, dotted.path] {
+        XCTAssertEqual(HelperBinaryPath.normalized(path), HelperBinaryPath.normalized(binary.path))
+        XCTAssertTrue(
+          LaunchdHelperSelfUninstaller.installedBySMJobBless(
+            executable: URL(fileURLWithPath: path), binary: binary,
+            declaresAuthorizedClients: true), path)
+        XCTAssertFalse(
+          HelperRemovalFate.staysAfterRemoval(
+            jobProgram: path, appCanInstallHelper: true, blessedBinary: binary.path), path)
+      }
+    }
+
+    func testPackagedHelperMetadataIsReadTheWayTheBuildScriptsWriteIt() throws {
+      let repository = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      let packaging = repository.appendingPathComponent("Packaging")
+      let identifier = InstallerProductIdentity.helperIdentifier
+
+      // The helper's embedded Info.plist: ad hoc builds leave out
+      // SMAuthorizedClients, signed ones name their app.
+      for requirement in ["", #"identifier "com.example.app""#] {
+        let output = root.appendingPathComponent("plists-\(requirement.isEmpty)")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        try run(
+          packaging.appendingPathComponent("helper-plists"),
+          [output.path, "7", "1.0"] + (requirement.isEmpty ? [] : [requirement]))
+        let info = try PropertyListSerialization.propertyList(
+          from: Data(contentsOf: output.appendingPathComponent("helper-info.plist")), format: nil)
+        XCTAssertEqual(
+          LaunchdHelperSelfUninstaller.declaresAuthorizedClients(info as? [String: Any]),
+          !requirement.isEmpty, "requirement \(requirement)")
+      }
+      XCTAssertFalse(LaunchdHelperSelfUninstaller.declaresAuthorizedClients(nil))
+
+      // The job file the installer package installs runs the helper from the
+      // app in /Applications, so the app keeps it whatever it could bless.
+      let app = root.appendingPathComponent("Probe Installer.app")
+      let helper = "Contents/Library/LaunchServices/\(identifier)"
+      let embedded = app.appendingPathComponent(
+        "Contents/Library/LaunchDaemons/\(identifier).plist")
+      for file in [app.appendingPathComponent(helper), embedded] {
+        try FileManager.default.createDirectory(
+          at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+      }
+      try Data("x".utf8).write(to: app.appendingPathComponent(helper))
+      try PropertyListSerialization.data(
+        fromPropertyList: [
+          "Label": identifier, "BundleProgram": helper, "MachServices": [identifier: true],
+          "UserName": "root",
+        ], format: .xml, options: 0
+      ).write(to: embedded)
+      let job = root.appendingPathComponent("\(identifier).plist")
+      try run(packaging.appendingPathComponent("pkg/derive-daemon-plist"), [app.path, job.path])
+      let program = try XCTUnwrap(HelperRemovalFate.jobProgram(atPath: job.path))
+      XCTAssertEqual(program, "/Applications/Probe Installer.app/\(helper)")
+      for canInstall in [true, false] {
+        XCTAssertTrue(
+          HelperRemovalFate.staysAfterRemoval(jobProgram: program, appCanInstallHelper: canInstall))
+      }
+      XCTAssertNil(HelperRemovalFate.jobProgram(atPath: root.appendingPathComponent("none").path))
+    }
+
     // MARK: Fixtures
+
+    private func run(_ script: URL, _ arguments: [String]) throws {
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/bin/bash")
+      process.arguments = [script.path] + arguments
+      process.standardOutput = FileHandle.nullDevice
+      try process.run()
+      process.waitUntilExit()
+      XCTAssertEqual(process.terminationStatus, 0, script.lastPathComponent)
+    }
 
     private struct Paths {
       let jobFile: URL
