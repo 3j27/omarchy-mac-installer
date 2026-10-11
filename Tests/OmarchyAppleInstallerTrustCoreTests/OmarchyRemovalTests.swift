@@ -915,17 +915,20 @@
     }
 
     func testCompleteRecordsFromEarlierVersionsSetAsideOnlyJournalsThatPredateThem() async throws {
-      // Earlier versions recorded nothing about the journals. Journals made
-      // before the record are the removed installation's; later ones belong
-      // to a later install and stay.
-      enum Case { case older, newerDirectory, newerJournalInOlderDirectory }
-      for scenario in [Case.older, .newerDirectory, .newerJournalInOlderDirectory] {
-        let older = scenario == .older
+      // Earlier versions recorded nothing about the journals, and an install
+      // may have run since. Journals created before the record are the
+      // removed installation's and go; later ones belong to a later install.
+      enum Case { case older, newerDirectory, mixed }
+      for scenario in [Case.older, .newerDirectory, .mixed] {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let record = root.appendingPathComponent("removal-\(UUID().uuidString).json")
+        let id = UUID()
+        let record = root.appendingPathComponent("removal-\(id.uuidString).json")
         let old = #"{"plan":{"members":[],"targetMacOSBytes":1},"phase":"complete"}"#
         let earlier = Date(timeIntervalSinceNow: -3600)
+        let journals = root.appendingPathComponent("execution-journals")
+        let removedInstall = journals.appendingPathComponent("abc.jsonl")
+        let laterInstall = journals.appendingPathComponent("later.jsonl")
         switch scenario {
         case .older:
           _ = try makeInstallJournals(root)
@@ -935,26 +938,71 @@
           try FileManager.default.setAttributes(
             [.modificationDate: earlier], ofItemAtPath: record.path)
           _ = try makeInstallJournals(root)
-        case .newerJournalInOlderDirectory:
-          // The old helper failed to set them aside, and a later install
-          // added its journal to the same directory.
-          let journals = try makeInstallJournals(root)
-          try Data(old.utf8).write(to: record)
-          for item in [journals.appendingPathComponent("abc.jsonl"), record] {
-            try FileManager.default.setAttributes(
-              [.modificationDate: earlier], ofItemAtPath: item.path)
-          }
-          try Data("{}".utf8).write(to: journals.appendingPathComponent("later.jsonl"))
+        case .mixed:
+          // The old helper failed to set journal abc aside; a later attempt
+          // at another size added its own and stopped. A retry at abc's size
+          // must not find abc complete and skip installing.
+          _ = try makeInstallJournals(root)
           try FileManager.default.setAttributes(
-            [.modificationDate: earlier], ofItemAtPath: journals.path)
+            [.creationDate: earlier.addingTimeInterval(-60)], ofItemAtPath: removedInstall.path)
+          try Data(old.utf8).write(to: record)
+          try FileManager.default.setAttributes(
+            [.modificationDate: earlier], ofItemAtPath: record.path)
+          try Data("{}".utf8).write(to: laterInstall)
+          let handle = try FileHandle(forWritingTo: removedInstall)
+          try handle.seekToEnd()
+          try handle.write(contentsOf: Data("\n".utf8))
+          try handle.close()
         }
         let service = server(root: root, disk: FakeRemovalDisk())
         let error = await submitError(service)
         XCTAssertNil(error as? ClosedEngineHelperError, "\(String(describing: error))")
-        let journals = root.appendingPathComponent("execution-journals")
-        XCTAssertEqual(
-          FileManager.default.fileExists(atPath: journals.path), !older, "\(scenario)")
+        let exists = { (url: URL) in FileManager.default.fileExists(atPath: url.path) }
+        let archived = root.appendingPathComponent(
+          "retired-execution-journals/\(id.uuidString)/abc.jsonl")
+        switch scenario {
+        case .older:
+          XCTAssertFalse(exists(journals))
+          XCTAssertTrue(exists(archived))
+          XCTAssertEqual(try recordedRetirement(record), true)
+        case .newerDirectory:
+          XCTAssertTrue(exists(removedInstall), "a later install's journal stays")
+          XCTAssertEqual(try recordedRetirement(record), nil)
+        case .mixed:
+          XCTAssertFalse(exists(removedInstall), "the removed installation's journal goes")
+          XCTAssertTrue(exists(archived))
+          XCTAssertTrue(exists(laterInstall), "the later attempt's journal stays")
+          XCTAssertEqual(try recordedRetirement(record), true)
+        }
       }
+    }
+
+    func testARetryRedoesTheSyncThatFailedAfterTheJournalsMoved() throws {
+      let root = try temporaryDirectory()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let journals = try makeInstallJournals(root)
+      let id = UUID()
+      let record = try writeRecord(root, id, phase: "complete", retired: false)
+      struct SyncFailed: Error {}
+
+      XCTAssertThrowsError(
+        try settleCompletedRemoval(record, in: root) { directory in
+          if directory.lastPathComponent == "retired-execution-journals" { throw SyncFailed() }
+          try synchronizeDirectory(directory)
+        }
+      ) { XCTAssertEqual($0 as? EarlierRemovalProblem, .installRecordUncleared) }
+      XCTAssertFalse(
+        FileManager.default.fileExists(atPath: journals.path), "the rename went through")
+      XCTAssertEqual(try recordedRetirement(record), false)
+
+      var synchronized: [String] = []
+      try settleCompletedRemoval(record, in: root) { directory in
+        synchronized.append(directory.lastPathComponent)
+        try synchronizeDirectory(directory)
+      }
+      XCTAssertTrue(synchronized.contains(id.uuidString), "\(synchronized)")
+      XCTAssertTrue(synchronized.contains("retired-execution-journals"), "\(synchronized)")
+      XCTAssertEqual(try recordedRetirement(record), true)
     }
 
     func testAskingAboutAnUnknownRemovalOrWhileBusyClaimsNothing() async throws {

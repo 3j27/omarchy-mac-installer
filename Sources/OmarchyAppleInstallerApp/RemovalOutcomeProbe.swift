@@ -30,16 +30,22 @@ enum RemovalOutcomeProbe {
   }
 
   /// What the helper's records say about this removal, from `ask`. While
-  /// it is busy, perhaps still finishing the removal, it is asked again, for
-  /// up to about half a minute; it then stays busy, which confirms nothing.
+  /// it is busy, perhaps still finishing the removal, it is asked again, at
+  /// most `attempts` times and no new question after `deadline` from the
+  /// first; it then stays busy, which confirms nothing. With the client's
+  /// 10-second answer timeout, the whole wait stays under about 40 seconds.
   /// Nil when it never answers, as older helpers don't.
   static func finalization(
-    attempts: Int = 10, pause: Duration = .seconds(3),
+    attempts: Int = 10, pause: Duration = .seconds(3), deadline: Duration = .seconds(30),
     ask: @Sendable () async -> RemovalFinalization?
   ) async -> RemovalFinalization? {
+    let start = ContinuousClock.now
     var answer: RemovalFinalization?
     for attempt in 0..<attempts {
-      if attempt > 0 { try? await Task.sleep(for: pause) }
+      if attempt > 0 {
+        guard ContinuousClock.now - start + pause <= deadline else { break }
+        try? await Task.sleep(for: pause)
+      }
       answer = await ask()
       if answer != .busy { break }
     }

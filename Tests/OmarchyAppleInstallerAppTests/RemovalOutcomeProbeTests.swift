@@ -25,6 +25,15 @@
       }
     }
 
+    func testNoNewQuestionAfterTheDeadline() async {
+      let script = Script([.busy, .finalized])
+      let answer = await RemovalOutcomeProbe.finalization(
+        attempts: 10, pause: .milliseconds(20), deadline: .milliseconds(10)
+      ) { script.next() }
+      XCTAssertEqual(answer, .busy)
+      XCTAssertEqual(script.asked, 1)
+    }
+
     private final class Script: @unchecked Sendable {
       private let lock = NSLock()
       private var answers: [RemovalFinalization?]

@@ -709,32 +709,39 @@
 
   /// Sets aside the install journals once a removal's record says
   /// "complete", then records that durably. Does nothing for a record that
-  /// already says so.
-  func settleCompletedRemoval(_ record: URL, in workingDirectory: URL) throws {
+  /// already says so. `synchronize` is for tests.
+  func settleCompletedRemoval(
+    _ record: URL, in workingDirectory: URL,
+    synchronize: (URL) throws -> Void = synchronizeDirectory
+  ) throws {
     let properties = try? record.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
     guard properties?.isRegularFile == true, properties?.isSymbolicLink != true,
       let data = try? Data(contentsOf: record),
       var journal = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
       journal["phase"] as? String == "complete"
     else { throw EarlierRemovalProblem.unfinished }
-    let retired: Bool
+    var only: [URL]?
     switch journal["executionJournalsRetired"] as? Bool {
-    case .some(let value):
-      retired = value
+    case .some(true):
+      return
+    case .some(false):
+      break
     case .none:
       // Earlier versions set the journals aside in the same step and
-      // recorded nothing. Only journals nothing has touched since the record
-      // can be the removed installation's; a later install's stay. Dates
-      // that can't be read decide nothing, so installing stays refused.
-      guard let predate = executionJournalsPredate(record, in: workingDirectory) else {
+      // recorded nothing, and an install may have run since. Journals created
+      // before the record are the removed installation's and go, even if a
+      // later install wrote to them; later ones stay. Dates that can't be
+      // read decide nothing, so installing stays refused.
+      guard let legacy = legacyJournals(before: record, in: workingDirectory) else {
         throw EarlierRemovalProblem.installRecordUncleared
       }
-      retired = !predate
+      guard !legacy.old.isEmpty else { return }
+      only = legacy.old.count == legacy.total ? nil : legacy.old
     }
-    guard !retired else { return }
     do {
       let name = record.deletingPathExtension().lastPathComponent.dropFirst("removal-".count)
-      try retireExecutionJournals(in: workingDirectory, removal: String(name))
+      try retireExecutionJournals(
+        in: workingDirectory, removal: String(name), only: only, synchronize: synchronize)
       journal["executionJournalsRetired"] = true
       try writeRemovalRecord(
         JSONSerialization.data(withJSONObject: journal, options: [.sortedKeys]), to: record,
@@ -744,27 +751,29 @@
     }
   }
 
-  /// Whether the install journals, the directory and every journal in it,
-  /// were last changed no later than the record; nil when a date can't be
-  /// read. The engine adds later installs' journals to the same directory,
-  /// which changes its modification date, and appending changes the file's.
-  private func executionJournalsPredate(_ record: URL, in workingDirectory: URL) -> Bool? {
+  /// The install journals created no later than the record, and how many
+  /// journals there are; nil when a date can't be read. The engine creates
+  /// a journal once per plan and only appends to it, so its creation date
+  /// tells which install it began with.
+  private func legacyJournals(
+    before record: URL, in workingDirectory: URL
+  ) -> (old: [URL], total: Int)? {
     let journals = workingDirectory.appendingPathComponent(
       "execution-journals", isDirectory: true)
-    guard FileManager.default.fileExists(atPath: journals.path) else { return false }
-    func modified(_ url: URL) -> Date? {
-      try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-    }
-    guard let recorded = modified(record), let directory = modified(journals),
+    guard FileManager.default.fileExists(atPath: journals.path) else { return ([], 0) }
+    guard
+      let recorded = try? record.resourceValues(forKeys: [.contentModificationDateKey])
+        .contentModificationDate,
       let entries = try? FileManager.default.contentsOfDirectory(
-        at: journals, includingPropertiesForKeys: [.contentModificationDateKey])
+        at: journals, includingPropertiesForKeys: [.creationDateKey])
     else { return nil }
-    var newest = directory
+    var old: [URL] = []
     for entry in entries {
-      guard let date = modified(entry) else { return nil }
-      newest = max(newest, date)
+      guard let created = try? entry.resourceValues(forKeys: [.creationDateKey]).creationDate
+      else { return nil }
+      if created <= recorded { old.append(entry) }
     }
-    return newest <= recorded
+    return (old, entries.count)
   }
 
   /// Writes a removal record and makes it, and its name, durable.
@@ -776,7 +785,7 @@
     try synchronizeDirectory(workingDirectory)
   }
 
-  private func synchronizeDirectory(_ directory: URL) throws {
+  func synchronizeDirectory(_ directory: URL) throws {
     let descriptor = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
     guard descriptor >= 0 else {
       throw RemovalFailure(message: "The removal record couldn’t be saved.")
@@ -791,28 +800,58 @@
   /// returns the disk to the layout that plan was made from. Left in place,
   /// a reinstall at the same size finds its earlier journal complete and
   /// reports success without writing anything. They are kept for diagnosis
-  /// under `retired-execution-journals/<removal ticket>`. The move is durable
-  /// before this returns.
-  func retireExecutionJournals(in workingDirectory: URL, removal: String) throws {
+  /// under `retired-execution-journals/<removal ticket>`: the whole
+  /// directory, or with `only`, just those journals.
+  ///
+  /// Every call ends by making the moves durable, including moves an earlier
+  /// call made before it failed, so a retry never skips that step.
+  func retireExecutionJournals(
+    in workingDirectory: URL, removal: String, only: [URL]? = nil,
+    synchronize: (URL) throws -> Void = synchronizeDirectory
+  ) throws {
+    let fileManager = FileManager.default
     let journals = workingDirectory.appendingPathComponent(
       "execution-journals", isDirectory: true)
-    guard FileManager.default.fileExists(atPath: journals.path) else { return }
     let retired = workingDirectory.appendingPathComponent(
       "retired-execution-journals", isDirectory: true)
-    if !FileManager.default.fileExists(atPath: retired.path) {
-      try FileManager.default.createDirectory(
-        at: retired, withIntermediateDirectories: false,
-        attributes: [.posixPermissions: 0o700])
+    func freshDestination() throws -> URL {
+      if !fileManager.fileExists(atPath: retired.path) {
+        try fileManager.createDirectory(
+          at: retired, withIntermediateDirectories: false,
+          attributes: [.posixPermissions: 0o700])
+      }
+      var destination = retired.appendingPathComponent(removal, isDirectory: true)
+      var attempt = 1
+      while fileManager.fileExists(atPath: destination.path) {
+        attempt += 1
+        destination = retired.appendingPathComponent("\(removal)-\(attempt)", isDirectory: true)
+      }
+      return destination
     }
-    var destination = retired.appendingPathComponent(removal, isDirectory: true)
-    var attempt = 1
-    while FileManager.default.fileExists(atPath: destination.path) {
-      attempt += 1
-      destination = retired.appendingPathComponent("\(removal)-\(attempt)", isDirectory: true)
+    if let only {
+      if !only.isEmpty {
+        let destination = try freshDestination()
+        try fileManager.createDirectory(
+          at: destination, withIntermediateDirectories: false,
+          attributes: [.posixPermissions: 0o700])
+        for journal in only {
+          try fileManager.moveItem(
+            at: journal, to: destination.appendingPathComponent(journal.lastPathComponent))
+        }
+        try synchronize(journals)
+      }
+    } else if fileManager.fileExists(atPath: journals.path) {
+      try fileManager.moveItem(at: journals, to: freshDestination())
     }
-    try FileManager.default.moveItem(at: journals, to: destination)
-    try synchronizeDirectory(retired)
-    try synchronizeDirectory(workingDirectory)
+    if fileManager.fileExists(atPath: retired.path) {
+      for entry in try fileManager.contentsOfDirectory(
+        at: retired, includingPropertiesForKeys: nil)
+      where entry.lastPathComponent.hasPrefix(removal) {
+        try synchronize(entry)
+      }
+      try synchronize(retired)
+    }
+    try synchronize(workingDirectory)
   }
 
   public final class AuthenticatedEngineXPCListenerDelegate:
