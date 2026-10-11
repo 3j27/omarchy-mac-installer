@@ -27,6 +27,15 @@
     public func uninstallAfterRemoval() {}
   }
 
+  /// The one form in which the helper and the app compare helper binary
+  /// paths: symlinks resolved, then `.` and `..` removed. Both sides of the
+  /// keep-or-uninstall rule use it, so they never disagree about a path.
+  public enum HelperBinaryPath {
+    public static func normalized(_ path: String) -> String {
+      URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+    }
+  }
+
   /// The app's unprivileged view of the same rule: whether the registered
   /// helper is one that stays after a completed removal.
   public enum HelperRemovalFate {
@@ -43,7 +52,17 @@
     ) -> Bool {
       guard let jobProgram else { return false }
       return !appCanInstallHelper
-        || URL(fileURLWithPath: jobProgram).standardizedFileURL.path != blessedBinary
+        || HelperBinaryPath.normalized(jobProgram) != HelperBinaryPath.normalized(blessedBinary)
+    }
+
+    /// The `Program` of a launchd job file, read without privileges; nil when
+    /// the file is missing, unreadable or names no program.
+    public static func jobProgram(
+      atPath path: String = InstallerProductIdentity.systemLaunchDaemonPath
+    ) -> String? {
+      (try? Data(contentsOf: URL(fileURLWithPath: path))).flatMap {
+        try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any]
+      }?["Program"] as? String
     }
   }
 
@@ -81,8 +100,8 @@
       unload: @escaping @Sendable (String) -> Void = LaunchdHelperSelfUninstaller.bootout,
       exitProcess: @escaping @Sendable () -> Void = { exit(0) },
       executable: URL = URL(fileURLWithPath: CommandLine.arguments[0]),
-      declaresAuthorizedClients: Bool = Bundle.main.object(
-        forInfoDictionaryKey: "SMAuthorizedClients") != nil
+      declaresAuthorizedClients: Bool = LaunchdHelperSelfUninstaller.declaresAuthorizedClients(
+        Bundle.main.infoDictionary)
     ) {
       self.label = label
       self.jobFile = jobFile
@@ -106,8 +125,16 @@
       executable: URL, binary: URL, declaresAuthorizedClients: Bool
     ) -> Bool {
       guard declaresAuthorizedClients else { return false }
-      let running = executable.resolvingSymlinksInPath().standardizedFileURL.path
-      return running == binary.resolvingSymlinksInPath().standardizedFileURL.path
+      return HelperBinaryPath.normalized(executable.path)
+        == HelperBinaryPath.normalized(binary.path)
+    }
+
+    /// Whether a helper's embedded Info.plist names the app allowed to
+    /// install it. `Packaging/helper-plists` writes the key only for builds
+    /// with a client requirement, the ones that can bless their helper.
+    public static func declaresAuthorizedClients(_ info: [String: Any]?) -> Bool {
+      guard let clients = info?["SMAuthorizedClients"] as? [Any] else { return false }
+      return !clients.isEmpty
     }
 
     /// Deletes the files at once, so the app sees no helper from this moment

@@ -25,13 +25,8 @@ enum RemovalOutcomeProbe {
   /// The registered helper is one an installer package put in place, which
   /// stays after a completed removal rather than retiring.
   static func helperStaysAfterRemoval(appCanInstallHelper: Bool) -> Bool {
-    let job = URL(fileURLWithPath: InstallerProductIdentity.systemLaunchDaemonPath)
-    let program =
-      (try? Data(contentsOf: job)).flatMap {
-        try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any]
-      }?["Program"] as? String
-    return HelperRemovalFate.staysAfterRemoval(
-      jobProgram: program, appCanInstallHelper: appCanInstallHelper)
+    HelperRemovalFate.staysAfterRemoval(
+      jobProgram: HelperRemovalFate.jobProgram(), appCanInstallHelper: appCanInstallHelper)
   }
 
   /// The size of the APFS container macOS runs from.
