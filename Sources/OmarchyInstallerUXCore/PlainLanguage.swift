@@ -129,6 +129,17 @@
     public static let helperBeingReplacedHeadline = "The installation service is being updated"
     public static let helperBeingReplacedDetail =
       "Another copy of the installer is replacing the installation service, so this request didn't start and nothing was changed. Try again in a moment."
+    public static let earlierRemovalUnfinishedHeadline = "An earlier removal didn’t finish"
+    public static let earlierRemovalUnfinishedDetail =
+      "The installer’s record of an earlier Omarchy removal stops before it finished, so the disk may not be in the layout the installer expects. Installation didn’t start and nothing was changed."
+    public static let earlierRemovalUnfinishedRemedy =
+      "Check the disk layout in Disk Utility, and keep the removal record in \(InstallerProductIdentity.helperWorkingDirectory) for support. The installer won’t install until that record is resolved."
+    public static let earlierInstallRecordUnclearedHeadline =
+      "The installer couldn’t clear an earlier installation’s record"
+    public static let earlierInstallRecordUnclearedDetail =
+      "After the last removal, the installer couldn’t set aside its record of the installation it removed. Installing at the same size could reuse that record and skip installing, so installation didn’t start and nothing was changed."
+    public static let earlierInstallRecordUnclearedRemedy =
+      "Try again: each attempt tries to set the record aside first. If this keeps happening, keep the records in \(InstallerProductIdentity.helperWorkingDirectory) for support."
     public static let helperRetiringHeadline = "The installation service was just removed"
     public static let helperRetiringDetail =
       "Omarchy's removal finished and its installation service is removing itself. Nothing was changed. Try again in a moment; the app sets the service up again with your password."
@@ -383,6 +394,21 @@
         .compactMap { $0 }
         .filter { !$0.isEmpty }
         .joined(separator: " · ")
+    }
+
+    /// The helper refused to install because of an earlier removal's record.
+    static func earlierRemovalGate(unfinished: Bool, technicalDetail: String) -> FailureDisplay {
+      unfinished
+        ? FailureDisplay(
+          headline: earlierRemovalUnfinishedHeadline,
+          plainDetail: earlierRemovalUnfinishedDetail,
+          technicalDetail: technicalDetail,
+          remedy: earlierRemovalUnfinishedRemedy)
+        : FailureDisplay(
+          headline: earlierInstallRecordUnclearedHeadline,
+          plainDetail: earlierInstallRecordUnclearedDetail,
+          technicalDetail: technicalDetail,
+          remedy: earlierInstallRecordUnclearedRemedy)
     }
 
     /// The blocked-model card: names this Mac and, when the signed catalog
@@ -640,6 +666,15 @@
               technicalDetail: technical
             )
           }
+          for unfinished in [true, false] {
+            let gate =
+              (unfinished
+              ? ClosedEngineHelperError.earlierRemovalUnfinished
+              : .earlierInstallRecordUncleared) as NSError
+            if domain == gate.domain, code == gate.code {
+              return earlierRemovalGate(unfinished: unfinished, technicalDetail: technical)
+            }
+          }
           let busy = ClosedEngineHelperError.busy as NSError
           if domain == busy.domain, code == busy.code {
             return FailureDisplay(
@@ -698,6 +733,10 @@
           )
         case .unsupportedDevice(let identifier):
           return unsupportedModel(deviceIdentifier: identifier, technicalDetail: technical)
+        case .earlierRemovalUnfinished:
+          return earlierRemovalGate(unfinished: true, technicalDetail: technical)
+        case .earlierInstallRecordUncleared:
+          return earlierRemovalGate(unfinished: false, technicalDetail: technical)
         default:
           return FailureDisplay(
             headline: "The installation service reported an error",
