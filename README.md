@@ -2,7 +2,20 @@
 
 Development source for the Apple Silicon macOS installer, extracted from [maralcbr/omarchy-mx-mac](https://github.com/maralcbr/omarchy-mx-mac) into [omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer).
 
-This first extraction preserves the installer behavior and Git attribution. The app is now named **Omarchy Installer**; it keeps the original `com.omarchy.mx.*` identifiers, download keys and release configuration, and the package removes a copy left under the old name, Omarchy MX Mac Installer. Integration with the shared Omarchy packages and Linux installation image is the next, separate change. This candidate is not an installation release.
+This first extraction preserves the installer behavior and Git attribution. The app is named **Omarchy Installer** and uses Omarchy's `org.omarchy.installer` identifiers (`Packaging/identity.conf`); the package removes a copy left under the old name, Omarchy MX Mac Installer. Integration with the shared Omarchy packages and Linux installation image is the next, separate change. This candidate is not an installation release.
+
+### Upgrading from a `com.omarchy.mx` preview
+
+Earlier preview and lab builds used `com.omarchy.mx.installer`. The new app has the same name, so it replaces the old one in `/Applications`, but it installs its own helper and never touches the old helper or state: the old helper stays registered (and listed under Login Items in System Settings), and an install or removal record the old app left is not seen by the new one. Finish or clean up any interrupted install or removal with the old app before switching. To remove what the old app left:
+
+```sh
+sudo launchctl bootout system/com.omarchy.mx.installer.helper
+sudo rm -f /Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist /Library/PrivilegedHelperTools/com.omarchy.mx.installer.helper
+sudo rm -rf /var/db/com.omarchy.mx.installer /var/db/com.omarchy.mx.installer.aside
+rm -rf ~/Library/Application\ Support/com.omarchy.mx.installer*
+```
+
+The last line also frees any image the old app downloaded. A Mac that ran the old installer package can also drop its receipt with `sudo pkgutil --forget com.omarchy.mx.installer.pkg`.
 
 ## Source layout
 
