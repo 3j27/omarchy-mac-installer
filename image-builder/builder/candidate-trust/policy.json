@@ -14,5 +14,19 @@
   "minimum_versions": {
     "omarchy-mac-boot": "20260921-10",
     "limine-mkinitcpio-hook": "1.39.0-2"
+  },
+  "channel": {
+    "lanes": ["edge"],
+    "repository": "omarchy",
+    "primary_fingerprint": "40DFB630FF42BCFFB047046CF0134EE680CAC571",
+    "signing_fingerprint": "40DFB630FF42BCFFB047046CF0134EE680CAC571",
+    "public_key": "omarchy-channel.asc",
+    "public_key_sha256": "15d6aac44df688165b2ea35fe0b23af239bbc66a6909c10a5c219e8d94b707de",
+    "runtime_packages": {
+      "omarchy": "omarchy-dev",
+      "omarchy-settings": "omarchy-settings-dev",
+      "omarchy-mac": "omarchy-mac",
+      "omarchy-mac-boot": "omarchy-mac-boot"
+    }
   }
 }

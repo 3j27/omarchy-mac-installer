@@ -220,6 +220,77 @@ def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, n
     return candidate_set.digest(directory / "signing.json")
 
 
+# ── channel ───────────────────────────────────────────────────────────────
+# What edge serves for each runtime role (the policy's channel runtime_packages).
+CHANNEL_NAMES = {"omarchy": "omarchy-dev", "omarchy-settings": "omarchy-settings-dev"}
+CHANNEL_VERSIONS = dict(VERSIONS, **{"omarchy": "4.0.0.r6971.g492b883-1", "omarchy-settings": "4.0.0.r6971.g492b883-1",
+                                     "omarchy-mac": "0.1.4-1", "omarchy-mac-boot": "20261010-1"})
+
+
+def channel_trust(base: Path, candidate: Signer, channel: Signer) -> Path:
+    """A trust directory pinning CANDIDATE as the candidate test key and CHANNEL as the channel key."""
+    trust = base / "channel-trust"
+    trust.mkdir(parents=True)
+    shutil.copy(candidate.trust / "public.asc", trust / "public.asc")
+    (trust / "omarchy-channel.asc").write_bytes(channel.gpg(["--armor", "--export", channel.fingerprint]))
+    policy = json.loads((candidate.trust / "policy.json").read_text())
+    policy["channel"] = dict(POLICY["channel"], primary_fingerprint=channel.fingerprint.upper(),
+                             signing_fingerprint=channel.fingerprint.upper(),
+                             public_key_sha256=candidate_set.digest(trust / "omarchy-channel.asc"))
+    (trust / "policy.json").write_text(json.dumps(policy))
+    return trust
+
+
+def channel_contents() -> dict[str, dict[str, bytes]]:
+    """Each set package's files as edge builds them: the -dev runtime ships no source revision."""
+    contents = default_contents("e1b0e5e9b")
+    for role in CHANNEL_NAMES:
+        contents[role] = {path: data for path, data in contents[role].items() if "source-revision" not in path}
+    return contents
+
+
+def desc(name: str, version: str, filename: str, path: Path, arch: str, provides=(), deps=()) -> str:
+    lines = [("FILENAME", [filename]), ("NAME", [name]), ("VERSION", [version]), ("CSIZE", [str(path.stat().st_size)]),
+             ("SHA256SUM", [candidate_set.digest(path)]), ("ARCH", [arch]), ("PROVIDES", list(provides)),
+             ("DEPENDS", list(deps))]
+    return "".join(f"%{key}%\n" + "".join(v + "\n" for v in values) + "\n" for key, values in lines if values)
+
+
+def make_channel(directory: Path, signer: Signer, *, versions=None, contents=None, extra=(), unsigned=(),
+                 signers=None, entry_edit=None) -> tuple[Path, str]:
+    """An edge snapshot in DIRECTORY: packages/ holds every set archive and its detached signature by
+    SIGNER (SIGNERS per name, none for UNSIGNED), and omarchy.db lists them, plus EXTRA (name, version)
+    entries. ENTRY_EDIT(name, desc) may rewrite an entry. Returns the database and its sha256."""
+    versions = dict(CHANNEL_VERSIONS, **(versions or {}))
+    contents = contents or channel_contents()
+    packages = directory / "packages"
+    packages.mkdir(parents=True)
+    entries = directory / "entries"
+    entries.mkdir()
+    signers = signers or {}
+    for role in VERSIONS:
+        name = CHANNEL_NAMES.get(role, role)
+        version = versions[role]
+        filename = f"{name}-{version}-aarch64.pkg.tar.xz"
+        deps = ["omarchy-settings-dev"] if role == "omarchy" else ["omarchy"] if role == "omarchy-mac-boot" else []
+        write_archive(packages / filename, name, version, contents.get(role, {}), deps)
+        if name not in unsigned:
+            signers.get(name, signer).sign(packages / filename)
+        text = desc(name, version, filename, packages / filename, "aarch64",
+                    provides=[role] if name != role else [], deps=deps)
+        (entries / f"{name}-{version}").mkdir()
+        (entries / f"{name}-{version}" / "desc").write_text(entry_edit(name, text) if entry_edit else text)
+    for name, version in extra:
+        path = packages / f"{name}-{version}-any.pkg.tar.xz"
+        write_archive(path, name, version, {}, [], "any")
+        (entries / f"{name}-{version}").mkdir()
+        (entries / f"{name}-{version}" / "desc").write_text(desc(name, version, path.name, path, "any"))
+    database = directory / "omarchy.db"
+    subprocess.run(["bsdtar", "-czf", str(database), "-C", str(entries), *sorted(e.name for e in entries.iterdir())],
+                   check=True)
+    return database, candidate_set.digest(database)
+
+
 # ── payload ───────────────────────────────────────────────────────────────
 PAYLOAD_MEMBERS = ("esp", "boot.img", "root.img", "omarchy-volume.icns")
 
@@ -340,10 +411,12 @@ def write(root: Path, relative: str, data: bytes | str, mode: int = 0o644) -> Pa
     return path
 
 
-def local_package(root: Path, name: str, version: str, files: list[str]) -> None:
+def local_package(root: Path, name: str, version: str, files: list[str], provides: tuple[str, ...] = ()) -> None:
     entry = root / "var/lib/pacman/local" / f"{name}-{version}"
     entry.mkdir(parents=True, exist_ok=True)
-    (entry / "desc").write_text(f"%NAME%\n{name}\n\n%VERSION%\n{version}\n\n")
+    provided = "".join(f"{p}\n" for p in provides)
+    (entry / "desc").write_text(f"%NAME%\n{name}\n\n%VERSION%\n{version}\n\n"
+                                + (f"%PROVIDES%\n{provided}\n" if provides else ""))
     (entry / "files").write_text("%FILES%\n" + "".join(f + "\n" for f in files) + "\n")
     mtree = "#mtree\n" + "".join(
         f"./{f} time=1.0 size={(root / f).stat().st_size} "
@@ -361,10 +434,17 @@ PACKAGE_SET_SHA256 = "9" * 64
 BUILT = "2026-09-28T03:04:05Z"
 
 
-def image_target(summary: dict, profile: str = "test") -> str:
+def set_lines(summary: dict) -> str:
+    """The set's lines in the image-target manifest and the factory seal: a channel set names its database."""
+    if summary.get("kind") == "channel":
+        return f"channel_set={summary['set']}\nchannel_db_sha256={summary['database_sha256']}\n"
+    return f"candidate_set={summary['set']}\ncandidate_source_commit={summary['source_commit']}\n"
+
+
+def image_target(summary: dict, profile: str | None = None) -> str:
     """The image-target manifest build-mac-image writes for SUMMARY's set."""
-    return (f"format=1\nplatform=apple-silicon\ncandidate_set={summary['set']}\n"
-            f"candidate_source_commit={summary['source_commit']}\nbuilder_commit={'c' * 40}\n"
+    profile = profile or ("release" if summary.get("kind") == "channel" else "test")
+    return (f"format=1\nplatform=apple-silicon\n{set_lines(summary)}builder_commit={'c' * 40}\n"
             f"builder_tree_clean=true\nimage_profile={profile}\n"
             f"package_set_sha256={PACKAGE_SET_SHA256}\nbuilt={BUILT}\n")
 
@@ -428,8 +508,9 @@ def make_root(root: Path, candidates: Path, layout: str | None = None) -> None:
     others = {name: "1.0-1" for name in ("limine", "limine-snapper-sync", "asahi-fwextract", "speakersafetyd",
                                          "alsa-ucm-conf-asahi", "asahi-audio", "vulkan-asahi", "asahi-bless", "iwd",
                                          "networkmanager", "bluez", "wireplumber")}
+    provides = {p["name"]: (p["role"],) for p in summary["packages"] if p.get("role", p["name"]) != p["name"]}
     for name, version in {**versions, **others}.items():
-        local_package(root, name, version, owners.get(name, []))
+        local_package(root, name, version, owners.get(name, []), provides.get(name, ()))
     state = root / "var/lib/omarchy"
     write(root, "var/lib/omarchy/image/target", image_target(summary))
     (state / "image").chmod(0o755)
@@ -482,8 +563,7 @@ def make_factory(factory: Path, root: Path, summary: dict) -> None:
     for rel in ("var/lib/omarchy/mac-first-boot", "var/lib/omarchy/provisioning/pending"):
         path = factory / rel
         shutil.rmtree(path) if path.is_dir() else path.unlink()
-    write(factory, "var/lib/omarchy/factory-sealed",
-          f"format=2\ncandidate_set={summary['set']}\ncandidate_source_commit={summary['source_commit']}\n")
+    write(factory, "var/lib/omarchy/factory-sealed", "format=2\n" + set_lines(summary))
 
 
 def owner_uid() -> int:
