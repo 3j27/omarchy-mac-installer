@@ -252,6 +252,9 @@ published_size() {
 }
 
 banner "Omarchy MX Mac — cutover to channel distribution"
+warn "This wizard publishes to $PUBLIC_BASE. Apps built from Release/release.json"
+warn "read their catalogs from $INSTALLER_CATALOG_BASE instead, so they will not"
+warn "see what this wizard publishes until publishing moves there."
 
 # ── 1 ─────────────────────────────────────────────────────────────────────
 stage "Mint the long-lived signing key"
