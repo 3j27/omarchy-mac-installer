@@ -183,16 +183,19 @@ class EngineContractTest(unittest.TestCase):
         symlink = zipfile.ZipInfo("esp/link")
         symlink.external_attr = (0o120777 << 16)
         refused = 0
-        # Inside esp/, where the builder takes members, so only its path checks stand between.
+        # Inside esp/, where the builder takes members, so only its path checks stand between; the
+        # duplicates repeat a member's own bytes, so nothing but the duplicate-name check refuses them.
         for name, info in (("esp/../escape", None), ("/esp/absolute", None), ("esp/back\\slash", None),
-                           ("esp/limine.conf", None), ("esp/link", symlink)):
+                           ("esp/m1n1/boot.bin", None), ("boot.img", None), ("esp/link", symlink)):
             with self.subTest(member=name):
                 fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID)
+                with zipfile.ZipFile(payload) as archive:
+                    data = archive.read(name) if name in archive.namelist() else b"x"
                 with warnings.catch_warnings(), zipfile.ZipFile(payload, "a") as archive:
                     warnings.simplefilter("ignore")  # a duplicate name is the point
-                    archive.writestr(info or name, b"x")
+                    archive.writestr(info or name, data)
                 refused += self.assert_builder_refuses(payload, metadata, f"a member {name}")
-        self.assertEqual(refused, 5, "the engine refuses every unsafe member")
+        self.assertEqual(refused, 6, "the engine refuses every unsafe member")
 
     def test_the_builder_refuses_images_over_their_partitions(self):
         # Both sides read the partition sizes the metadata declares; shrunk below the fixture's images,
