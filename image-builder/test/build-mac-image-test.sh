@@ -663,3 +663,87 @@ done
 [[ $(wc -l <"$scratch/requests") -eq 6 && $(head -n 1 "$scratch/requests") == "-S --noconfirm --needed vulkan-asahi" ]] ||
   fail "every sync or refresh is recorded: $(<"$scratch/requests")"
 pass "the first-boot probe's pacman refuses and records every sync or refresh, and runs everything else"
+
+# ── channel mode ───────────────────────────────────────────────────────────
+# A channel record names its set and the channel database instead of a
+# candidate set; the set's -dev runtime fills the omarchy roles.
+channel=$scratch/channel
+mkdir -p "$channel/candidates" "$channel/target"
+db_sha=$(printf '7%.0s' {1..64})
+cat >"$channel/inputs" <<EOF2
+format=2
+resolved_at=2026-10-14T00:00:00Z
+channel_set=omarchy-edge-${db_sha:0:12}
+channel_signer=40DFB630FF42BCFFB047046CF0134EE680CAC571
+channel_manifest_sha256=$(printf '8%.0s' {1..64})
+omarchy_channel=edge
+omarchy_server=https://pkgs.omarchy.org/edge/\$arch
+omarchy_db_sha256=$db_sha
+asahi_alarm_server=https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64
+asahi_alarm_db_sha256=$(printf '2%.0s' {1..64})
+alarm_server=https://ca.us.mirror.archlinuxarm.org/\$arch/\$repo
+alarm_core_db_sha256=$(printf '3%.0s' {1..64})
+alarm_extra_db_sha256=$(printf '4%.0s' {1..64})
+alarm_alarm_db_sha256=$(printf '5%.0s' {1..64})
+alarm_aur_db_sha256=$(printf '6%.0s' {1..64})
+alarm_rootfs_sha256=$(printf '9%.0s' {1..64})
+EOF2
+"$BASH" "$here/bin/mac-image-inputs" check "$channel/inputs" >/dev/null || fail "the channel fixture is a canonical record"
+cat >"$channel/candidates/import.json" <<'EOF2'
+{"kind": "channel", "candidate_only": false, "packages": [
+  {"name": "omarchy-dev", "role": "omarchy", "version": "4.0.0.r6971.g492b883-1", "filename": "d.pkg.tar.zst", "group": "runtime"},
+  {"name": "omarchy-settings-dev", "role": "omarchy-settings", "version": "4.0.0.r6971.g492b883-1", "filename": "s.pkg.tar.zst", "group": "runtime"},
+  {"name": "omarchy-mac", "role": "omarchy-mac", "version": "0.1.4-1", "filename": "m.pkg.tar.zst", "group": "runtime", "source_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  {"name": "uboot-asahi", "version": "2026.07-1", "filename": "u.pkg.tar.zst", "group": "boot"}
+]}
+EOF2
+(
+  candidates=$channel/candidates target=$channel/target profile=release
+  field() { sed -n "s/^$1=//p" "$channel/inputs"; }
+  fail() { builder_fail "$@"; }
+  chown() { :; }
+  [[ $(record_kind "$channel/inputs") == channel && $(record_kind "$scratch/inputs") == candidate ]] ||
+    fail "a record with channel_set names a channel set, any other a candidate set"
+  [[ $(set_kind) == channel && $(set_name) == "omarchy-edge-${db_sha:0:12}" ]] || fail "the container reads the channel set's name"
+  [[ $(qualified omarchy omarchy-settings omarchy-mac uboot-asahi gum | paste -sd' ' -) == \
+    "omarchy-candidates/omarchy-dev omarchy-candidates/omarchy-settings-dev omarchy-candidates/omarchy-mac omarchy-candidates/uboot-asahi gum" ]] ||
+    fail "a runtime role installs the channel package that fills it: $(qualified omarchy omarchy-settings | paste -sd' ' -)"
+  [[ $(candidate_archive omarchy) == d.pkg.tar.zst && $(candidate_archive omarchy-dev) == d.pkg.tar.zst ]] ||
+    fail "the runtime's lists are read from the package that fills the omarchy role"
+  [[ $(image_profile) == release ]] || fail "a channel image is a public (release) image"
+  MAC_IMAGE_BUILDER_COMMIT=$builder_commit MAC_IMAGE_BUILDER_CLEAN=true write_image_target
+  [[ $(<"$target/var/lib/omarchy/image/target") == "format=1
+platform=apple-silicon
+channel_set=omarchy-edge-${db_sha:0:12}
+channel_db_sha256=$db_sha
+builder_commit=$builder_commit
+builder_tree_clean=true
+image_profile=release" ]] || fail "a channel image's target names the channel set and database" "$(<"$target/var/lib/omarchy/image/target")"
+  [[ $(sealed_body) == "format=2
+channel_set=omarchy-edge-${db_sha:0:12}
+channel_db_sha256=$db_sha" ]] || fail "@factory is sealed for the channel set and database"
+  [[ $(image_inputs) == "channel_set channel_signer channel_manifest_sha256 omarchy_channel omarchy_db_sha256" ]] ||
+    fail "IMAGE names the channel set, signer, manifest and database"
+  if (profile=lab; write_image_target) >/dev/null 2>&1; then
+    fail "a channel image target is never written for a lab image"
+  fi
+)
+pass "a channel record installs the -dev runtime by its roles and records a release image of the channel set and database"
+
+(
+  candidates=$channel/candidates
+  [[ $(jq -r '.packages[] | select(.group == "runtime" and .source_commit != null) | .name' "$candidates/import.json") == omarchy-mac ]] ||
+    fail "only runtime packages with a source revision get candidate_source lines"
+)
+pass "PROVENANCE names a source commit only for runtime packages that ship one"
+
+mkdir -p "$scratch/lab"
+for options in "--candidates $channel|takes no --candidates" "--lab-access $scratch/lab|built from a candidate set only"; do
+  IFS='|' read -r option expected <<<"$options"
+  read -ra words <<<"$option"
+  refusal=$( (command() { return 0; }; host_main --inputs "$channel/inputs" "${words[@]}" "$scratch/out") 2>&1 >/dev/null) &&
+    fail "a channel record refuses ${words[0]}"
+  [[ $refusal == *"$expected"* ]] || fail "a channel record refuses ${words[0]}: $refusal"
+done
+[[ ! -e $scratch/out ]] || fail "a refused channel build writes nothing"
+pass "a channel record refuses --candidates and --lab-access"
