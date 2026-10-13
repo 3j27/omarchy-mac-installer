@@ -680,6 +680,37 @@ final class VerifiedArtifactStagerTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(server.connectionCount, 2)
     XCTAssertEqual(reported.values.last, UInt64(payload.count))
     XCTAssertEqual(reported.values, reported.values.sorted())
+    XCTAssertEqual(Set(server.acceptEncodings), ["identity"])
+  }
+
+  func testAFailedRangeStopsTheOtherConnections() async throws {
+    let payload = rangeFixture(count: 1_048_576)
+    let server = try RangeHTTPServer(
+      payload: payload, failFirstWith: 404, responseDelay: .milliseconds(50))
+    let url = try await server.start()
+    defer { server.stop() }
+    let downloader = RangedArtifactDownloader(
+      tuning: .init(rangeBytes: 65_536, connections: 4, retryDelay: .zero))
+
+    do {
+      let file = try await downloader.download(
+        from: url, expectedSizeBytes: UInt64(payload.count), onBytes: nil)
+      try? FileManager.default.removeItem(at: file)
+      XCTFail("a 404 range must fail the download")
+    } catch {
+      XCTAssertEqual(error as? ArtifactStageError, .unexpectedHTTPStatus(404))
+    }
+    // Without cancellation the other three connections fetch all 16 ranges.
+    XCTAssertLessThan(server.rangeHeaders.count, 16)
+  }
+
+  func testRetryDelayDoublesUpToTheCap() {
+    let tuning = RangedArtifactDownloader.Tuning()
+    XCTAssertEqual(
+      (1...7).map { tuning.delay(afterFailures: $0) },
+      [1, 2, 4, 8, 16, 30, 30].map { Duration.seconds($0) })
+    XCTAssertEqual(
+      RangedArtifactDownloader.Tuning(retryDelay: .zero).delay(afterFailures: 5), .zero)
   }
 
   func testServerThatIgnoresRangeFallsBackToOneStream() async throws {
@@ -951,6 +982,7 @@ private final class ByteRecorder: @unchecked Sendable {
 private final class RangeHTTPServer: @unchecked Sendable {
   private let payload: Data
   private let honorsRange: Bool
+  private let failFirstWith: Int?
   private let responseDelay: DispatchTimeInterval
   private let listener: NWListener
   private let lock = NSLock()
@@ -958,6 +990,7 @@ private final class RangeHTTPServer: @unchecked Sendable {
   private var dropsLeft: Int
   private var activeRequests = 0
   private var requests = [String?]()
+  private var encodings = [String?]()
   private var peak = 0
   private var startContinuation: CheckedContinuation<URL, any Error>?
 
@@ -965,16 +998,19 @@ private final class RangeHTTPServer: @unchecked Sendable {
     payload: Data,
     honorsRange: Bool = true,
     drops: Int = 0,
+    failFirstWith: Int? = nil,
     responseDelay: DispatchTimeInterval = .never
   ) throws {
     self.payload = payload
     self.honorsRange = honorsRange
+    self.failFirstWith = failFirstWith
     self.dropsLeft = drops
     self.responseDelay = responseDelay
     listener = try NWListener(using: .tcp, on: .any)
   }
 
   var rangeHeaders: [String?] { lock.withLock { requests } }
+  var acceptEncodings: [String?] { lock.withLock { encodings } }
   var peakActiveRequests: Int { lock.withLock { peak } }
   var connectionCount: Int { lock.withLock { connections.count } }
 
@@ -1035,9 +1071,12 @@ private final class RangeHTTPServer: @unchecked Sendable {
   }
 
   private func respond(to head: String, on connection: NWConnection) {
-    let range = head.components(separatedBy: "\r\n")
-      .first { $0.lowercased().hasPrefix("range:") }
-      .map { $0.dropFirst("range:".count).trimmingCharacters(in: .whitespaces) }
+    func header(_ name: String) -> String? {
+      head.components(separatedBy: "\r\n")
+        .first { $0.lowercased().hasPrefix("\(name):") }
+        .map { $0.dropFirst(name.count + 1).trimmingCharacters(in: .whitespaces) }
+    }
+    let range = header("range")
     var status = "200 OK"
     var extra = ""
     var body = payload
@@ -1049,8 +1088,22 @@ private final class RangeHTTPServer: @unchecked Sendable {
       status = "206 Partial Content"
       extra = "Content-Range: bytes \(first)-\(last)/\(payload.count)\r\n"
     }
+    let failure = lock.withLock { () -> Int? in
+      defer {
+        requests.append(range)
+        encodings.append(header("accept-encoding"))
+      }
+      return requests.isEmpty ? failFirstWith : nil
+    }
+    if let failure {
+      connection.send(
+        content: Data("HTTP/1.1 \(failure) Failed\r\nContent-Length: 0\r\n\r\n".utf8),
+        completion: .contentProcessed { [weak self] _ in
+          self?.receiveRequest(on: connection, buffer: Data())
+        })
+      return
+    }
     let drop = lock.withLock { () -> Bool in
-      requests.append(range)
       activeRequests += 1
       peak = max(peak, activeRequests)
       guard dropsLeft > 0 else { return false }
@@ -1059,10 +1112,10 @@ private final class RangeHTTPServer: @unchecked Sendable {
     }
     let head = Data("HTTP/1.1 \(status)\r\nContent-Length: \(body.count)\r\n\(extra)\r\n".utf8)
     let sent = drop ? body.prefix(body.count / 2) : body
-    let send = { [weak self] in
+    let send: @Sendable () -> Void = {
       connection.send(
         content: head + sent,
-        completion: .contentProcessed { _ in
+        completion: .contentProcessed { [weak self] _ in
           guard let self else { return }
           self.lock.withLock { self.activeRequests -= 1 }
           if drop {

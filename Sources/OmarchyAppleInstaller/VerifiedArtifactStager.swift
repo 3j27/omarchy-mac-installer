@@ -1040,8 +1040,20 @@ final class RangedArtifactDownloader: NSObject, ArtifactDownloading, URLSessionD
   struct Tuning: Sendable {
     var rangeBytes: UInt64 = 64 * 1_048_576
     var connections = 4
-    var attemptsWithoutProgress = 4
+    var attemptsWithoutProgress = 8
     var retryDelay: Duration = .seconds(1)
+    var maxRetryDelay: Duration = .seconds(30)
+
+    /// Doubles from `retryDelay` up to `maxRetryDelay`, so the defaults ride
+    /// out about a minute and a half of lost network (sleep, Wi-Fi roaming)
+    /// before the partial file is given up.
+    func delay(afterFailures failures: Int) -> Duration {
+      var delay = retryDelay
+      for _ in 1..<max(1, failures) where delay < maxRetryDelay {
+        delay *= 2
+      }
+      return min(delay, maxRetryDelay)
+    }
   }
 
   private enum RangeFailure: Error {
@@ -1092,6 +1104,22 @@ final class RangedArtifactDownloader: NSObject, ArtifactDownloading, URLSessionD
       return try await fallback.download(
         from: sourceURL, expectedSizeBytes: expectedSizeBytes, onBytes: onBytes)
     }
+    do {
+      return try await downloadRanges(
+        from: sourceURL, expectedSizeBytes: expectedSizeBytes, onBytes: onBytes)
+    } catch RangeFailure.ignored {
+      // The ranged file is already closed and removed, so the fallback does
+      // not hold a second copy of the payload on disk.
+      return try await fallback.download(
+        from: sourceURL, expectedSizeBytes: expectedSizeBytes, onBytes: onBytes)
+    }
+  }
+
+  private func downloadRanges(
+    from sourceURL: URL,
+    expectedSizeBytes: UInt64,
+    onBytes: ArtifactByteProgressHandler?
+  ) async throws -> URL {
     try Task.checkCancellation()
 
     let output = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -1119,16 +1147,14 @@ final class RangedArtifactDownloader: NSObject, ArtifactDownloading, URLSessionD
       rangeBytes: max(1, tuning.rangeBytes),
       onBytes: onBytes
     )
-    do {
-      try await withThrowingTaskGroup(of: Void.self) { group in
-        for _ in 0..<min(max(1, tuning.connections), job.rangeCount) {
-          group.addTask { try await self.work(job, url: sourceURL) }
-        }
-        try await group.waitForAll()
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      for _ in 0..<min(max(1, tuning.connections), job.rangeCount) {
+        group.addTask { try await self.work(job, url: sourceURL) }
       }
-    } catch RangeFailure.ignored {
-      return try await fallback.download(
-        from: sourceURL, expectedSizeBytes: expectedSizeBytes, onBytes: onBytes)
+      // Unlike waitForAll(), rethrowing from next() leaves the group body,
+      // which cancels the other connections instead of letting them fetch
+      // the rest of the file first.
+      while try await group.next() != nil {}
     }
     keepOutput = true
     return output
@@ -1155,7 +1181,7 @@ final class RangedArtifactDownloader: NSObject, ArtifactDownloading, URLSessionD
         guard failuresWithoutProgress < tuning.attemptsWithoutProgress else {
           throw failure
         }
-        try await Task.sleep(for: tuning.retryDelay)
+        try await Task.sleep(for: tuning.delay(afterFailures: failuresWithoutProgress))
       }
     }
   }
@@ -1169,6 +1195,8 @@ final class RangedArtifactDownloader: NSObject, ArtifactDownloading, URLSessionD
     var request = URLRequest(url: url)
     request.setValue(
       "bytes=\(range.lowerBound)-\(range.upperBound)", forHTTPHeaderField: "Range")
+    // Range offsets count stored bytes; a content-coded body would not match.
+    request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
     let task = session.dataTask(with: request)
     let key = ObjectIdentifier(task)
 
@@ -1273,6 +1301,11 @@ final class RangedArtifactDownloader: NSObject, ArtifactDownloading, URLSessionD
     guard http.statusCode == 206 else {
       return ArtifactStageError.unexpectedHTTPStatus(http.statusCode)
     }
+    if let encoding = http.value(forHTTPHeaderField: "Content-Encoding"),
+      !encoding.isEmpty, encoding.lowercased() != "identity"
+    {
+      return RangeFailure.ignored
+    }
     // Content-Range: bytes <first>-<last>/<total>
     let fields = (http.value(forHTTPHeaderField: "Content-Range") ?? "")
       .split(whereSeparator: { " -/".contains($0) })
@@ -1301,6 +1334,8 @@ final class RangedArtifactDownloader: NSObject, ArtifactDownloading, URLSessionD
     private var nextRange = 0
     private var receivedBytes: UInt64 = 0
     private var lastReportedAt: Date?
+    private let deliveryLock = NSLock()
+    private var deliveredBytes: UInt64 = 0
 
     init(
       descriptor: Int32,
@@ -1334,6 +1369,9 @@ final class RangedArtifactDownloader: NSObject, ArtifactDownloading, URLSessionD
             descriptor, buffer.baseAddress! + done, buffer.count - done,
             off_t(offset) + off_t(done))
           guard count > 0 else {
+            if count < 0, Darwin.errno == EINTR {
+              continue
+            }
             return POSIXError(POSIXErrorCode(rawValue: Darwin.errno) ?? .EIO)
           }
           done += count
@@ -1359,7 +1397,16 @@ final class RangedArtifactDownloader: NSObject, ArtifactDownloading, URLSessionD
         lastReportedAt = now
         return receivedBytes
       }
-      if let report {
+      guard let report else {
+        return
+      }
+      // Connections report from different queues; deliver in order so a
+      // late, smaller total never follows a larger one.
+      deliveryLock.withLock {
+        guard report > deliveredBytes else {
+          return
+        }
+        deliveredBytes = report
         onBytes(report)
       }
     }
