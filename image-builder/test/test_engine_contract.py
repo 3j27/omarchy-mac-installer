@@ -3,7 +3,8 @@
 installer_data.json build-mac-image writes and mac-image-check expects is the engine's bundled
 Engine/installer_data.json for that payload, and the engine's full-OS package admission
 (omarchy_asahi.AsahiStage1Adapter.preflight) takes the payload mac-image-check passes and refuses
-nothing mac-image-check lets through. A change on either side fails here."""
+nothing mac-image-check lets through. A change on either side that lets the two disagree on a payload
+the builder would publish fails here; the engine admitting more than the builder publishes does not."""
 import importlib.machinery
 import importlib.util
 import json
@@ -13,6 +14,8 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import unittest.mock
+import warnings
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -139,33 +142,106 @@ class EngineContractTest(unittest.TestCase):
                 chosen = engine_admits(metadata, payload)
                 self.assertEqual(chosen, [list(check.expected_metadata(name)["os_list"][0]["supported_fw"])])
 
-    def test_the_builder_refuses_what_the_engine_refuses(self):
-        # Every way a member of the payload build-mac-image packages can fall short; whatever the
-        # engine refuses, the builder's check must refuse before the payload is published.
+    # Whatever the engine refuses, the builder's check must refuse before the payload is published.
+    # The builder may refuse more (it holds the payload to Limine and the UKI too); the engine may
+    # admit more. Each probe runs both on one payload and its metadata.
+    def assert_builder_refuses(self, payload: Path, metadata: Path, what: str) -> bool:
+        metadata.chmod(0o644)
+        try:
+            engine_admits(metadata, payload)
+        except omarchy_asahi.AsahiAdapterError:
+            pass
+        else:
+            return False
+        with self.assertRaises(check.CheckError, msg=f"the engine refuses {what}; the builder must too"):
+            check.check_payload("edge", payload, metadata)
+        return True
+
+    def test_the_builder_refuses_the_payloads_the_engine_refuses(self):
+        # Every way a member of the payload build-mac-image packages can fall short.
         fixtures.write_payload(self.out / "full.zip", check.BOOT_UUID, check.ROOT_UUID)
         with zipfile.ZipFile(self.out / "full.zip") as archive:
             members = sorted(info.filename for info in archive.infolist() if not info.is_dir())
         changes = [{"omit": (member,)} for member in members] + [{"empty": (member,)} for member in members]
-        # Grown by a byte, a sector and a page: off every alignment either side might ask of an image.
-        changes += [{"grow": {member: count}} for member in members for count in (1, 512, 4096)]
+        # Grown by a byte and by each power of two from a sector to two pages: off every alignment
+        # either side might ask of an image, so a looser or stricter one on either side shows.
+        changes += [{"grow": {member: count}} for member in members for count in (1, 512, 1024, 2048, 4096, 8192)]
         metadata = self.out / "installer_data.json"
         written_metadata(NAME, metadata)
-        metadata.chmod(0o644)
         payload = self.out / NAME
-        engine_refused = 0
+        refused = 0
         for change in changes:
             with self.subTest(**{k: str(v) for k, v in change.items()}):
                 fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID, **change)
-                try:
-                    engine_admits(metadata, payload)
-                except omarchy_asahi.AsahiAdapterError:
-                    engine_refused += 1
-                else:
-                    continue
-                with self.assertRaises(check.CheckError, msg=f"the engine refuses {change}; the builder must too"):
-                    check.check_payload("edge", payload, metadata)
-        self.assertGreater(engine_refused, 0, "the engine refuses some short payloads")
+                refused += self.assert_builder_refuses(payload, metadata, str(change))
+        self.assertGreater(refused, 0, "the engine refuses some short payloads")
 
+    def test_the_builder_refuses_the_unsafe_members_the_engine_refuses(self):
+        metadata = self.out / "installer_data.json"
+        written_metadata(NAME, metadata)
+        payload = self.out / NAME
+        symlink = zipfile.ZipInfo("esp/link")
+        symlink.external_attr = (0o120777 << 16)
+        refused = 0
+        # Inside esp/, where the builder takes members, so only its path checks stand between.
+        for name, info in (("esp/../escape", None), ("/esp/absolute", None), ("esp/back\\slash", None),
+                           ("esp/limine.conf", None), ("esp/link", symlink)):
+            with self.subTest(member=name):
+                fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID)
+                with warnings.catch_warnings(), zipfile.ZipFile(payload, "a") as archive:
+                    warnings.simplefilter("ignore")  # a duplicate name is the point
+                    archive.writestr(info or name, b"x")
+                refused += self.assert_builder_refuses(payload, metadata, f"a member {name}")
+        self.assertEqual(refused, 5, "the engine refuses every unsafe member")
+
+    def test_the_builder_refuses_images_over_their_partitions(self):
+        # Both sides read the partition sizes the metadata declares; shrunk below the fixture's images,
+        # each side's capacity check must refuse the same payload.
+        payload = self.out / NAME
+        fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID)
+        metadata = self.out / "installer_data.json"
+        refused = 0
+        for constant, member in (("BOOT_SIZE", "boot.img"), ("ROOT_SIZE", "root.img")):
+            with self.subTest(partition=member):
+                with zipfile.ZipFile(payload) as archive:
+                    size = archive.getinfo(member).file_size
+                with unittest.mock.patch.object(check, constant, size - 4096):
+                    metadata.write_text(json.dumps(check.expected_metadata(NAME)))
+                    refused += self.assert_builder_refuses(payload, metadata, f"{member} over its partition")
+        self.assertEqual(refused, 2, "the engine refuses an image over its partition")
+
+    def test_the_builder_refuses_the_metadata_the_engine_refuses(self):
+        payload = self.out / NAME
+        fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID)
+        metadata = self.out / "installer_data.json"
+
+        def edit(change):
+            data = written_metadata(NAME, metadata)
+            change(data["os_list"][0])
+            metadata.write_text(json.dumps(data))
+
+        changes = {
+            "another package": lambda t: t.update(package="other.zip"),
+            "another boot object": lambda t: t.update(boot_object="m1n1-other.bin"),
+            "another next object": lambda t: t.update(next_object="m1n1/other.bin"),
+            "another icon": lambda t: t.update(icon="other.icns"),
+            "another target": lambda t: t.update(omarchy_target="other"),
+            "no expanding root": lambda t: t["partitions"][2].pop("expand"),
+            "an expanding boot": lambda t: t["partitions"][1].update(expand=True),
+            "partitions reordered": lambda t: t["partitions"].reverse(),
+            "a partition fewer": lambda t: t["partitions"].pop(),
+            "another root image": lambda t: t["partitions"][2].update(image="other.img"),
+            "an ESP without firmware": lambda t: t["partitions"][0].update(copy_firmware=False),
+            "an ESP without installer data": lambda t: t["partitions"][0].update(copy_installer_data=False),
+            "an ESP of another format": lambda t: t["partitions"][0].update(format="exfat"),
+            "a Boot partition too small": lambda t: t["partitions"][1].update(size="4096B"),
+        }
+        refused = 0
+        for what, change in changes.items():
+            with self.subTest(metadata=what):
+                edit(change)
+                refused += self.assert_builder_refuses(payload, metadata, what)
+        self.assertEqual(refused, len(changes), "the engine refuses each of these")
 
 if __name__ == "__main__":
     unittest.main()
