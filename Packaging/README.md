@@ -7,9 +7,9 @@ step.
 
 ## Identity and hosting
 
-`identity.conf` is the one place that sets the app name, bundle, helper and package identifiers, the Apple Developer team and its Developer ID identities, the catalog trust root and its Keychain service, the catalog base the app reads (`https://mac.omarchy.org/v1`), and the hosts the publishing tools write to. `build-app.sh` writes them into `Info.plist` and the helper's launch-daemon property list, the Swift build compiles them in through `OmarchyInstallerIdentityPlugin`, and the package, notarization and release scripts source the same file.
+`identity.conf` is the one place that sets the app name, bundle, helper and package identifiers, the Apple Developer team and its Developer ID identities, the Keychain service of the catalog signing key, the catalog base the app reads (`https://mac.omarchy.org/v1`), and the hosts the publishing tools write to. `build-app.sh` writes them into `Info.plist` and the helper's launch-daemon property list, the Swift build compiles them in through `OmarchyInstallerIdentityPlugin`, and the package, notarization and release scripts source the same file.
 
-Moving to another identity or host is an edit to `identity.conf` followed by `scripts/make-release-descriptor` for a matching `Release/release.json`. `test/all` fails when the descriptor drifts from the configuration or when a configured value is repeated in code, scripts or tests.
+Moving to another identity or host is an edit to `identity.conf` followed by `scripts/make-release-descriptor` for a matching `Release/release.json`. The catalog trust root is the one value kept outside `identity.conf`: it is `Release/trust-root.ed25519.pub`, and swapping it is the same replace-then-regenerate step (see `Release/README.md`). `test/all` fails when the descriptor drifts from the configuration or when a configured value is repeated in code, scripts or tests.
 
 ## Bundle layout
 

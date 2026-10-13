@@ -12,7 +12,15 @@ Production packaging reads this directory and copies its contents into
 
 Both files are the same for every build. The trust root changes only when the
 signing key is rotated; the descriptor also changes when the default channel
-does. The private key lives in the operator's login keychain under the
+does.
+
+`trust-root.ed25519.pub` is the only place the trust root is set. To swap the
+catalog key, replace that file with the new 32-byte public key and run
+`scripts/make-release-descriptor --public-key Release/trust-root.ed25519.pub
+--output Release/release.json` (after removing the old descriptor) to update
+the pinned fingerprint; `test/all` fails until the two agree. A build can also
+take both files from another release directory, `build-app.sh
+RELEASE_DIRECTORY OUTPUT_DIRECTORY`, which checks that they match. The private key lives in the operator's login keychain under the
 service `omarchy-channel-signing-key` and must never appear here or anywhere
 else on disk; see
 [`docs/apple-silicon-distribution-channels.md`](https://github.com/maralcbr/omarchy-mx-mac/blob/92a9054f4565b37739ac3bd4f0fb4fcf8bd48625/docs/apple-silicon-distribution-channels.md).
