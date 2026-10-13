@@ -307,7 +307,6 @@ if [[ -f "$APP_DIR/Release/release.json" ]]; then
 else
   run "$APP_DIR/scripts/make-release-descriptor" \
     --public-key "$APP_DIR/Release/trust-root.ed25519.pub" \
-    --base-url "$PUBLIC_BASE" \
     --output "$APP_DIR/Release/release.json"
 fi
 echo

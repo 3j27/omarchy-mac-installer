@@ -19,7 +19,7 @@ else on disk; see
 
 The default channel is `edge`. The channels match Omarchy's (stable, rc, edge; dev is a developer choice made after installation), and today only edge has a Mac release. Stable and rc serve signed empty catalogs (`scripts/publish-channels empty-catalog`), which the app shows as "No Mac release yet", never as a channel it cannot reach or verify.
 
-The catalog URLs sit under the release stream path (`INSTALLER_STREAM_PATH` in `Packaging/identity.conf`). The MX Mac installer's feeds at the root of the same host are a separate stream: this repository never publishes to, reads or prunes them, and the app keeps its accepted catalog sequences in stream-named state files so the two installers' rollback floors never meet.
+The catalog URLs are `INSTALLER_CATALOG_BASE/catalog-<channel>.signed.json` (`Packaging/identity.conf`): `https://mac.omarchy.org/v1/catalog-stable.signed.json`, `catalog-rc.signed.json` and `catalog-edge.signed.json`. Every signed app keeps reading these addresses, so they never change for a released app. The existing publishing tools (`scripts/publish-channels`) still write their older stream layout to the previous host until publishing moves to `mac.omarchy.org`. The app keeps its accepted catalog sequences in stream-named state files so the MX Mac installer's rollback floors and this one's never meet.
 
 The descriptor names every channel because the app is signed once: a channel absent from the descriptor
 cannot be opened later without shipping another signed app.
@@ -34,4 +34,4 @@ For a private or offline build the directory may also contain a signed
 catalog with the same trust root instead of fetching a channel. Production
 builds omit the pair so the app reads its channel at run time.
 
-The helper identity, team and catalog host in `release.json` come from `Packaging/identity.conf`; `test/all` fails when the descriptor no longer matches it.
+The helper identity, team and catalog base in `release.json` come from `Packaging/identity.conf`; `test/all` fails when the descriptor no longer matches it.
