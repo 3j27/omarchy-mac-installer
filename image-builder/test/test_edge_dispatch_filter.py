@@ -21,19 +21,71 @@ SET_NAMES = [fixtures.CHANNEL_NAMES.get(role, role) for role in fixtures.VERSION
 
 
 def write_repo(path: Path, packages: dict[str, dict]) -> Path:
-    """A repository database at PATH listing PACKAGES {name: {"provides": [...], "depends": [...]}}."""
+    """A repository database at PATH listing PACKAGES {name: {"provides": [...], "depends": [...]}}, in
+    the older layout Arch Linux ARM's databases still use: relations in a depends file beside desc."""
     entries = path.parent / f"{path.stem}-entries"
     entries.mkdir()
+
+    def render(lines):
+        return "".join(f"%{k}%\n" + "".join(v + "\n" for v in values) + "\n" for k, values in lines if values)
+
     for name, fields in packages.items():
         version = fields.get("version", "1.0-1")
-        lines = [("FILENAME", [f"{name}-{version}-aarch64.pkg.tar.zst"]), ("NAME", [name]), ("VERSION", [version]),
-                 ("PROVIDES", fields.get("provides", [])), ("DEPENDS", fields.get("depends", []))]
-        (entries / f"{name}-{version}").mkdir()
-        (entries / f"{name}-{version}" / "desc").write_text(
-            "".join(f"%{k}%\n" + "".join(v + "\n" for v in values) + "\n" for k, values in lines if values))
+        entry = entries / f"{name}-{version}"
+        entry.mkdir()
+        (entry / "desc").write_text(render([("FILENAME", [f"{name}-{version}-aarch64.pkg.tar.xz"]), ("NAME", [name]),
+                                            ("VERSION", [version])]))
+        (entry / "depends").write_text(render([("DEPENDS", fields.get("depends", [])),
+                                               ("PROVIDES", fields.get("provides", []))]))
     subprocess.run(["bsdtar", "-czf", str(path), "-C", str(entries), *sorted(e.name for e in entries.iterdir())],
                    check=True)
     return path
+
+
+EDGE_ORDER = ("omarchy", "asahi-alarm", "core", "extra", "alarm", "aur")
+CANDIDATE_ORDER = ("asahi-alarm", "core", "extra", "alarm", "aur", "omarchy")
+
+
+def template(order) -> bytes:
+    """An Apple pacman template naming ORDER, laid out like the runtime's."""
+    sections = "".join(f"\n[{name}]\nInclude = /etc/pacman.d/mirrorlist\n" for name in order)
+    return f"[options]\nArchitecture = aarch64\n{sections}".encode()
+
+
+def make_edge(directory: Path, order=EDGE_ORDER, template_text=None) -> tuple[Path, Path, Path]:
+    """An edge snapshot whose omarchy-settings-dev ships TEMPLATE_TEXT (default: one naming ORDER) as
+    its pacman-edge.conf. The fixture runtime's lists: base hyprland, aarch64 zram-generator, Apple
+    omarchy-mac and omarchy-mac-boot, x86_64-only obs-studio. omarchy-dev depends on walker>=2, walker
+    on elephant and libthing>=3, omarchy-mac-boot on omarchy (which omarchy-dev provides), elephant on
+    the virtual vulkan-driver; omarchy-mac provides limine-snapper-sync, which the builder still
+    installs as a target. Returns the database, the runtime archive and the settings archive."""
+    extra = [("walker", "2.17.2-1"), ("elephant", "2.0-1"), ("zram-generator", "1.2-1"), ("libthing", "2.0-1"),
+             ("hyprland", "0.56.2-5"), ("obs-studio", "32.2.2-1"), ("claude-code", "2.1.296-1"),
+             ("omarchy", "4.0.4-2"), ("limine-snapper-sync", "1.32.1-2"), ("nvidia-utils", "615.71.09-1")]
+    contents = fixtures.channel_contents()
+    if template_text is not False:
+        contents["omarchy-settings"][edge_filter.TEMPLATE.format(channel="edge")] = (
+            template_text if template_text is not None else template(order))
+
+    def edit(name, text):
+        if name == "omarchy-mac":
+            return text + "%PROVIDES%\nlimine-snapper-sync\n\n"
+        return text.replace("%DEPENDS%\n", "%DEPENDS%\nwalker>=2\n") if name == "omarchy-dev" else text
+
+    database, _ = fixtures.make_channel(directory, None, contents=contents, extra=extra, unsigned=SET_NAMES,
+                                        entry_edit=edit)
+    entries = directory / "entries"
+    for name, addition in (("walker-2.17.2-1", "%DEPENDS%\nelephant\nlibthing>=3\n"),
+                           ("elephant-2.0-1", "%DEPENDS%\nvulkan-driver\n"),
+                           ("nvidia-utils-615.71.09-1", "%PROVIDES%\nvulkan-driver\n")):
+        desc = entries / name / "desc"
+        desc.write_text(desc.read_text() + addition + "\n")
+    subprocess.run(["bsdtar", "-czf", str(database), "-C", str(entries), *sorted(e.name for e in entries.iterdir())],
+                   check=True)
+    version = fixtures.CHANNEL_VERSIONS["omarchy"]
+    packages = directory / "packages"
+    return (database, packages / f"omarchy-dev-{version}-aarch64.pkg.tar.xz",
+            packages / f"omarchy-settings-dev-{version}-aarch64.pkg.tar.xz")
 
 
 class EdgeDispatchFilterTest(unittest.TestCase):
@@ -41,37 +93,15 @@ class EdgeDispatchFilterTest(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.base = Path(cls.tmp.name)
-        edge = cls.base / "edge"
-        # The fixture runtime's lists: base hyprland, aarch64 zram-generator, Apple omarchy-mac and
-        # omarchy-mac-boot, x86_64-only obs-studio. omarchy-dev depends on walker>=2, walker on elephant,
-        # omarchy-mac-boot on omarchy (which omarchy-dev provides), elephant on the virtual vulkan-driver.
-        # omarchy-mac provides limine-snapper-sync, which the builder still installs as a target.
-        extra = [("walker", "2.17.2-1"), ("elephant", "2.0-1"), ("zram-generator", "1.2-1"),
-                 ("hyprland", "0.56.2-5"), ("obs-studio", "32.2.2-1"), ("claude-code", "2.1.296-1"),
-                 ("omarchy", "4.0.4-2"), ("limine-snapper-sync", "1.32.1-2"), ("nvidia-utils", "615.71.09-1")]
-
-        def edit(name, text):
-            if name == "omarchy-mac":
-                return text + "%PROVIDES%\nlimine-snapper-sync\n\n"
-            return text.replace("%DEPENDS%\n", "%DEPENDS%\nwalker>=2\n") if name == "omarchy-dev" else text
-
-        cls.database, _ = fixtures.make_channel(edge, None, extra=extra, unsigned=SET_NAMES, entry_edit=edit)
-        for name, addition in (("walker-2.17.2-1", "%DEPENDS%\nelephant\n"),
-                               ("elephant-2.0-1", "%DEPENDS%\nvulkan-driver\n"),
-                               ("nvidia-utils-615.71.09-1", "%PROVIDES%\nvulkan-driver\n")):
-            desc = edge / "entries" / name / "desc"
-            desc.write_text(desc.read_text() + addition + "\n")
-        entries = edge / "entries"
-        subprocess.run(["bsdtar", "-czf", str(cls.database), "-C", str(entries),
-                        *sorted(e.name for e in entries.iterdir())], check=True)
-        version = fixtures.CHANNEL_VERSIONS["omarchy"]
-        cls.runtime = edge / "packages" / f"omarchy-dev-{version}-aarch64.pkg.tar.xz"
+        # Edge's order, [omarchy] first, and a runtime whose template puts it last.
+        cls.database, cls.runtime, cls.settings = make_edge(cls.base / "edge")
+        cls.last = make_edge(cls.base / "edge-last", CANDIDATE_ORDER)
         # Arch Linux ARM's extra carries hyprland, a vulkan-driver of its own, a walker too old for
-        # omarchy-dev and a provider of zram-generator; the rest are empty.
+        # omarchy-dev, a libthing new enough for walker and a provider of zram-generator.
         cls.repos = cls.base / "repos"
         cls.repos.mkdir()
         write_repo(cls.repos / "extra.db", {"hyprland": {}, "mesa": {"provides": ["vulkan-driver"]},
-                                            "walker": {"version": "1.0-1"},
+                                            "walker": {"version": "1.0-1"}, "libthing": {"version": "3.0-1"},
                                             "zram-tools": {"provides": ["zram-generator"]}})
         for name in ("asahi-alarm", "core", "alarm", "aur"):
             write_repo(cls.repos / f"{name}.db", {f"{name}-placeholder": {}})
@@ -87,8 +117,9 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         path.write_text(json.dumps(body))
         return path
 
-    def decide(self, *names, repos=True, **fields) -> dict:
-        return edge_filter.decide(self.database, self.runtime, self.payload(*names, **fields),
+    def decide(self, *names, repos=True, edge=None, **fields) -> dict:
+        database, runtime, settings = edge or (self.database, self.runtime, self.settings)
+        return edge_filter.decide(database, runtime, settings, self.payload(*names, **fields),
                                   self.repos if repos else None)
 
     def test_a_channel_set_package_is_relevant(self):
@@ -115,10 +146,41 @@ class EdgeDispatchFilterTest(unittest.TestCase):
     def test_a_package_the_runtime_already_provides_is_not(self):
         self.assertFalse(self.decide("omarchy")["relevant"], "omarchy-dev provides omarchy")
 
-    def test_a_name_an_earlier_repository_carries_comes_from_there(self):
-        self.assertFalse(self.decide("hyprland")["relevant"], "the builder installs extra's hyprland")
-        self.assertFalse(self.decide("nvidia-utils")["relevant"], "extra's mesa provides vulkan-driver first")
-        self.assertNotIn("hyprland", self.decide("linux-aurora")["image_packages"])
+    def test_the_runtime_template_orders_the_repositories(self):
+        self.assertEqual(self.decide()["repository_order"], list(EDGE_ORDER))
+        self.assertEqual(self.decide(edge=self.last)["repository_order"], list(CANDIDATE_ORDER))
+
+    def test_a_package_both_omarchy_and_alarm_carry_is_omarchys_on_edge(self):
+        decision = self.decide("hyprland", "nvidia-utils")
+        self.assertEqual(decision["matched"], ["hyprland", "nvidia-utils"],
+                         "[omarchy] comes first: its hyprland, and its vulkan-driver provider")
+        self.assertIn("hyprland", decision["image_packages"])
+
+    def test_an_arch_linux_arm_depends_file_is_read(self):
+        extra = edge_filter.read_repo(self.repos / "extra.db")
+        self.assertEqual(extra["mesa"]["PROVIDES"], ["vulkan-driver"])
+        self.assertEqual(extra["libthing"]["VERSION"], ["3.0-1"])
+
+    def test_with_omarchy_last_an_earlier_repository_wins(self):
+        self.assertFalse(self.decide("hyprland", edge=self.last)["relevant"], "extra's hyprland")
+        self.assertFalse(self.decide("nvidia-utils", edge=self.last)["relevant"], "extra's mesa provides first")
+
+    def test_a_template_that_does_not_name_the_pinned_repositories_is_refused(self):
+        for name, text, message in (
+                ("missing", False, "no Apple pacman template"),
+                ("short", template(EDGE_ORDER[:-1]), "names the repositories omarchy asahi-alarm core extra alarm, not"),
+                ("extra", template(EDGE_ORDER + ("testing",)), "not the pinned")):
+            with self.subTest(name), self.assertRaisesRegex(ValueError, message):
+                self.decide("linux-aurora", edge=make_edge(self.base / f"edge-{name}", template_text=text))
+
+    def test_the_template_is_the_one_build_mac_image_reads(self):
+        builder = (ROOT / "bin/build-mac-image").read_text()
+        self.assertIn("template=usr/share/omarchy/default/pacman/aarch64-apple/pacman-$(field omarchy_channel).conf",
+                      builder)
+        self.assertIn("archive=$candidates/$(candidate_archive omarchy-settings)", builder)
+        self.assertEqual(edge_filter.TEMPLATE,
+                         "usr/share/omarchy/default/pacman/aarch64-apple/pacman-{channel}.conf")
+        self.assertIn("repository_order=(" + " ".join(CANDIDATE_ORDER) + ")", builder)
 
     def test_without_the_other_repositories_it_over_matches(self):
         decision = self.decide("hyprland", "nvidia-utils", "claude-code", repos=False)
@@ -132,8 +194,11 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         self.assertEqual(decision["runtime"], self.runtime.name)
 
     def test_versions_decide_which_repository_a_dependency_comes_from(self):
-        decision = self.decide("walker")
+        decision = self.decide("walker", edge=self.last)
         self.assertEqual(decision["matched"], ["walker"], "extra's walker 1.0 does not meet omarchy-dev's walker>=2")
+        self.assertFalse(self.decide("libthing")["relevant"],
+                         "omarchy comes first, but its libthing 2.0 does not meet walker's libthing>=3")
+        self.assertEqual(self.decide("libthing", edge=self.last)["matched"], [], "nor with omarchy last")
         self.assertEqual(self.decide("zram-generator")["matched"], ["zram-generator"],
                          "a literal name in omarchy wins over an earlier repository's provider")
         self.assertEqual(self.decide("limine-snapper-sync")["matched"], ["limine-snapper-sync"],
@@ -188,13 +253,15 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         broken = self.base / "broken.json"
         broken.write_text("{")
         with self.assertRaisesRegex(ValueError, "unreadable payload"):
-            edge_filter.decide(self.database, self.runtime, broken, self.repos)
+            edge_filter.decide(self.database, self.runtime, self.settings, broken, self.repos)
 
     def test_a_runtime_archive_the_database_does_not_list_is_refused(self):
-        other = self.base / "other-runtime.pkg.tar.xz"
-        other.write_bytes(self.runtime.read_bytes() + b"tampered")
-        with self.assertRaisesRegex(ValueError, "not the runtime archive"):
-            edge_filter.decide(self.database, other, self.payload("linux-aurora"), self.repos)
+        for runtime, settings, name in ((True, False, "omarchy-dev"), (False, True, "omarchy-settings-dev")):
+            other = self.base / f"tampered-{name}.pkg.tar.xz"
+            other.write_bytes((self.runtime if runtime else self.settings).read_bytes() + b"tampered")
+            with self.subTest(name), self.assertRaisesRegex(ValueError, f"not the {name} archive"):
+                edge_filter.decide(self.database, other if runtime else self.runtime,
+                                   other if settings else self.settings, self.payload("linux-aurora"), self.repos)
 
     def test_the_builder_arrays_are_read_from_build_mac_image(self):
         builder = ROOT / "bin/build-mac-image"
@@ -207,15 +274,17 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         result = subprocess.run([sys.executable, str(FILTER), "runtime", "--db", str(self.database)],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.split()[0], self.runtime.name)
-        self.assertEqual(result.stdout.split()[1], fixtures.candidate_set.digest(self.runtime))
+        self.assertEqual(result.stdout.splitlines(), [
+            f"omarchy {self.runtime.name} {fixtures.candidate_set.digest(self.runtime)}",
+            f"omarchy-settings {self.settings.name} {fixtures.candidate_set.digest(self.settings)}"])
         result = subprocess.run([sys.executable, str(FILTER), "decide", "--db", str(self.database), "--runtime",
-                                 str(self.runtime), "--payload", str(self.payload("walker")), "--repos",
-                                 str(self.repos)], capture_output=True, text=True)
+                                 str(self.runtime), "--settings", str(self.settings), "--payload",
+                                 str(self.payload("walker")), "--repos", str(self.repos)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["matched"], ["walker"])
         result = subprocess.run([sys.executable, str(FILTER), "decide", "--db", str(self.database), "--runtime",
-                                 str(self.runtime), "--payload", str(self.payload("walker", channel="rc"))],
+                                 str(self.runtime), "--settings", str(self.settings), "--payload",
+                                 str(self.payload("walker", channel="rc"))],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertIn("edge aarch64", result.stderr)

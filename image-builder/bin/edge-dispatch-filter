@@ -13,12 +13,15 @@ way the builder derives its set rather than from a list kept here:
   - the runtime's base, aarch64 and Apple package lists, read from the edge
     runtime archive itself (omarchy-dev on edge), as the builder reads them;
   - what those pull in through dependencies, resolved like the builder's
-    pacman: the set first, then asahi-alarm, Arch Linux ARM's core, extra,
-    alarm and aur, then omarchy last, versions compared as pacman's vercmp
-    does. A name an earlier repository carries at a version that meets the
-    dependency comes from there, a dependency an included package already
-    meets adds nothing (omarchy-dev provides omarchy), and a virtual
-    dependency takes the providers of the first repository that has any.
+    pacman: the set first, then the repositories in the order the runtime's
+    Apple pacman template for the channel names them (build-mac-image's
+    read_repository_order: default/pacman/aarch64-apple/pacman-edge.conf in
+    the omarchy-settings role's archive, [omarchy] first on edge), versions
+    compared as pacman's vercmp does. A name an earlier repository carries at
+    a version that meets the dependency comes from there, a dependency an
+    included package already meets adds nothing (omarchy-dev provides
+    omarchy), and a virtual dependency takes the providers of the first
+    repository that has any.
 
 Without the other repositories' databases (--repos), every dependency is
 looked up in omarchy.db alone, which can only over-match. When the payload
@@ -27,11 +30,14 @@ counts as relevant. Over-matching costs a build; nothing here publishes
 anything.
 
   edge-dispatch-filter runtime --db FILE
-      prints "<filename> <sha256>" of the edge runtime archive to download
+      prints "<role> <filename> <sha256>" for the runtime archives to download:
+      the omarchy role (its package lists) and the omarchy-settings role (its
+      pacman template)
   edge-dispatch-filter fetch-repos DIR
       downloads asahi-alarm.db, core.db, extra.db, alarm.db and aur.db from
       the servers bin/mac-image-inputs resolves from into the empty DIR
-  edge-dispatch-filter decide --db FILE --runtime ARCHIVE --payload FILE [--repos DIR] [--builder FILE]
+  edge-dispatch-filter decide --db FILE --runtime ARCHIVE --settings ARCHIVE --payload FILE
+                             [--repos DIR] [--builder FILE]
       prints a JSON decision: relevant, matched, published, image_packages
 """
 import argparse
@@ -41,6 +47,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -48,8 +55,13 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILDER_ARRAYS = ('BOOTSTRAP', 'PLATFORM_PACKAGES', 'APPLE_AUDIO')
 APPLE_LISTS = ('omarchy-aarch64-apple', 'omarchy-apple-silicon', 'omarchy-apple')
 LISTS = 'usr/share/omarchy/install/'
-# build-mac-image's repositories(), after the set and before omarchy.
+# The repositories the inputs pin besides omarchy, and build-mac-image's
+# repository_order for a candidate set ([omarchy] last).
 OTHER_REPOS = ('asahi-alarm', 'core', 'extra', 'alarm', 'aur')
+PINNED_ORDER = OTHER_REPOS + ('omarchy',)
+# read_repository_order's template, in the archive filling the omarchy-settings role.
+TEMPLATE = 'usr/share/omarchy/default/pacman/aarch64-apple/pacman-{channel}.conf'
+SECTION = re.compile(r'^[ \t]*\[([^]]*)\][ \t]*$', re.MULTILINE)
 NAME = re.compile(r'[A-Za-z0-9@._+-]+')
 HEX64 = re.compile(r'[0-9a-f]{64}')
 MAX_PACKAGES = 2000
@@ -111,23 +123,27 @@ def fetch_repos(directory, inputs=ROOT / 'bin/mac-image-inputs'):
 
 
 def read_repo(path):
-    """name -> {PROVIDES, DEPENDS} for a repository database, read leniently: only names matter here."""
-    stream = subprocess.run(['bsdtar', '-xOf', str(path), '*/desc'], capture_output=True, text=True,
-                            errors='replace')
-    require(stream.returncode == 0, f'{path.name} is not a repository database')
-    entries, current, key = {}, None, None
-    for line in stream.stdout.splitlines():
-        if line == '%FILENAME%':
-            current, key = {}, None
-        if current is None:
-            continue
-        if line.startswith('%') and line.endswith('%') and len(line) > 2:
-            key = line.strip('%')
-            current.setdefault(key, [])
-        elif line and key:
-            current[key].append(line)
-            if key == 'NAME':
-                entries[line] = current
+    """name -> {VERSION, PROVIDES, DEPENDS, GROUPS, ...} for a repository database, read leniently:
+    only names, versions and relations matter here. An entry's fields are in its desc and, in the
+    older layout Arch Linux ARM still uses, its depends file."""
+    entries = {}
+    with tempfile.TemporaryDirectory(prefix='edge-repo-') as scratch:
+        extracted = subprocess.run(['bsdtar', '-xf', str(path), '-C', scratch], capture_output=True)
+        require(extracted.returncode == 0, f'{path.name} is not a repository database')
+        for directory in sorted(Path(scratch).iterdir()):
+            fields = {}
+            for part in ('desc', 'depends'):
+                file = directory / part
+                if file.is_file() and not file.is_symlink():
+                    key = None
+                    for line in file.read_text(errors='replace').splitlines():
+                        if line.startswith('%') and line.endswith('%') and len(line) > 2:
+                            key = line.strip('%')
+                            fields.setdefault(key, [])
+                        elif line and key:
+                            fields[key].append(line)
+            if fields.get('NAME') and fields.get('VERSION'):
+                entries[fields['NAME'][0]] = fields
     return entries
 
 
@@ -233,12 +249,15 @@ def provisions(name, entry):
 
 
 def resolve(repositories, chosen_first, targets):
-    """(repository, name) pairs pacman installs for TARGETS after the set CHOSEN_FIRST (names in
-    the last repository, omarchy), searching REPOSITORIES [(name, entries)] in order. Each target and
-    unsatisfied dependency takes a literal name that meets its version from the first repository
-    that has one, else a provider that does from the first repository with any (all of them there:
-    pacman keeps one, so this can only over-match), else, for a target, the group of that name."""
-    omarchy = repositories[-1][1]
+    """(repository, name) pairs pacman installs for TARGETS beside the set CHOSEN_FIRST (names in the
+    omarchy repository), searching REPOSITORIES [(name, entries)] in order, the way libalpm's
+    resolvedeps does: every target is resolved first (a literal name from the first repository
+    that has it, else a provider, else the group of that name) and is preferred over any search;
+    then each target's dependencies, depth first and in order, skip what an installed or preferred
+    package already meets at the right version and otherwise take a literal name that meets it from
+    the first repository that has one, else the providers that do from the first repository with
+    any (all of them: pacman keeps one, so this can only over-match)."""
+    omarchy = dict(repositories)['omarchy']
     indexes = []
     for _, entries in repositories:
         index = {}
@@ -247,15 +266,6 @@ def resolve(repositories, chosen_first, targets):
                 if provided != name:
                     index.setdefault(provided, []).append((name, version))
         indexes.append(index)
-    chosen, satisfiers, pending = set(), {}, []
-
-    def choose(repository, name, entry):
-        if (repository, name) in chosen:
-            return
-        chosen.add((repository, name))
-        for provided, version in provisions(name, entry):
-            satisfiers.setdefault(provided, []).append(version)
-        pending.extend(('dependency', d) for d in entry.get('DEPENDS', []))
 
     def find(name, operator, version):
         for repository, entries in repositories:
@@ -268,28 +278,44 @@ def resolve(repositories, chosen_first, targets):
                 return sorted(found, key=lambda f: f[1])
         return []
 
-    for name in chosen_first:
-        choose('omarchy', name, omarchy[name])
-    pending.extend(('target', t) for t in reversed(targets))
-    while pending:
-        kind, text = pending.pop()
-        name, operator, version = parse_dependency(text)
-        if not name:
-            continue
-        if kind == 'dependency' and any(meets(v, operator, version) for v in satisfiers.get(name, [])):
-            continue
-        if kind == 'target' and any((r, name) in chosen for r, _ in repositories):
-            continue
-        found = find(name, operator, version)
-        if not found and kind == 'target':
-            seen = set()
-            for repository, entries in repositories:
-                for member, entry in sorted(entries.items()):
-                    if name in entry.get('GROUPS', []) and member not in seen:
-                        seen.add(member)
-                        found.append((repository, member, entry))
-        for repository, member, entry in found:
-            choose(repository, member, entry)
+    def group(name):
+        found, seen = [], set()
+        for repository, entries in repositories:
+            for member, entry in sorted(entries.items()):
+                if name in entry.get('GROUPS', []) and member not in seen:
+                    seen.add(member)
+                    found.append((repository, member, entry))
+        return found
+
+    preferred = [('omarchy', name, omarchy[name]) for name in chosen_first]
+    for target in targets:
+        name, operator, version = parse_dependency(target)
+        if name and not any(n == name for _, n, _ in preferred):
+            preferred += find(name, operator, version) or group(name)
+    satisfiers = {}
+    for _, name, entry in preferred:
+        for provided, version in provisions(name, entry):
+            satisfiers.setdefault(provided, []).append(version)
+
+    chosen, visiting = set(), set()
+
+    def install(repository, name, entry):
+        if (repository, name) in chosen or (repository, name) in visiting:
+            return
+        visiting.add((repository, name))
+        for dependency in entry.get('DEPENDS', []):
+            wanted, operator, version = parse_dependency(dependency)
+            if not wanted or any(meets(v, operator, version) for v in satisfiers.get(wanted, [])):
+                continue
+            for found in find(wanted, operator, version):
+                for provided, provided_version in provisions(found[1], found[2]):
+                    satisfiers.setdefault(provided, []).append(provided_version)
+                install(*found)
+        visiting.discard((repository, name))
+        chosen.add((repository, name))
+
+    for package in preferred:
+        install(*package)
     return chosen
 
 
@@ -314,25 +340,44 @@ def read_payload(path):
     return payload
 
 
-def runtime_entry(entries, channel):
-    """The edge database entry that fills the omarchy runtime role (omarchy-dev on edge)."""
-    name = channel['runtime_packages']['omarchy']
+def role_entry(entries, channel, role):
+    """The edge database entry that fills runtime ROLE (omarchy-dev for omarchy on edge)."""
+    name = channel['runtime_packages'][role]
     entry = entries.get(name)
     require(entry is not None, f'the edge database does not list the runtime {name}')
     return entry
 
 
-def decide(database, runtime, payload_path, repos=None, builder=ROOT / 'bin/build-mac-image', trust=channel_set.TRUST):
+def check_archive(path, entry):
+    require(path.stat().st_size == int(entry['CSIZE'][0]) and channel_set.digest(path) == entry['SHA256SUM'][0],
+            f"{path.name} is not the {entry['NAME'][0]} archive the edge database lists")
+
+
+def repository_order(settings, channel='edge'):
+    """The repositories in the order the runtime's Apple template for CHANNEL names them, as
+    build-mac-image's read_repository_order reads it: exactly the pinned ones, servers ignored."""
+    template = TEMPLATE.format(channel=channel)
+    text = member(settings, template)
+    require(text is not None, f'the runtime ships no Apple pacman template for the channel ({template})')
+    order = [name for name in SECTION.findall(text) if name != 'options']
+    require(sorted(order) == sorted(PINNED_ORDER),
+            f"the runtime's {template.rsplit('/', 1)[1]} names the repositories {' '.join(order)}, "
+            f"not the pinned {' '.join(PINNED_ORDER)}")
+    return order
+
+
+def decide(database, runtime, settings, payload_path, repos=None, builder=ROOT / 'bin/build-mac-image',
+           trust=channel_set.TRUST):
     payload = read_payload(payload_path)
     policy, channel = channel_set.load_policy(trust)
     entries = channel_set.read_database(database)
-    entry = runtime_entry(entries, channel)
-    require(runtime.stat().st_size == int(entry['CSIZE'][0])
-            and channel_set.digest(runtime) == entry['SHA256SUM'][0],
-            f'{runtime.name} is not the runtime archive the edge database lists')
+    entry = role_entry(entries, channel, 'omarchy')
+    check_archive(runtime, entry)
+    check_archive(settings, role_entry(entries, channel, 'omarchy-settings'))
     chosen = [e['NAME'][0] for _, _, e in channel_set.resolve(entries, policy, channel)]
-    repositories = [(r, read_repo(repos / f'{r}.db')) for r in OTHER_REPOS] if repos else []
-    repositories.append(('omarchy', entries))
+    order = repository_order(settings)
+    repositories = [(r, entries if r == 'omarchy' else read_repo(repos / f'{r}.db')) for r in order] \
+        if repos else [('omarchy', entries)]
     seeds = builder_arrays(builder) + runtime_lists(runtime)
     image = sorted(name for repository, name in resolve(repositories, chosen, seeds) if repository == 'omarchy')
     published = sorted({p['name'] for p in payload['packages']})
@@ -348,6 +393,7 @@ def decide(database, runtime, payload_path, repos=None, builder=ROOT / 'bin/buil
         'matched': matched,
         'published': published,
         'image_packages': image,
+        'repository_order': order,
         'resolved_against': [r for r, _ in repositories],
         'database_sha256': database_sha256,
         'payload_database_sha256': reported,
@@ -365,6 +411,7 @@ def main(argv=None):
     decision = commands.add_parser('decide')
     decision.add_argument('--db', type=Path, required=True)
     decision.add_argument('--runtime', type=Path, required=True)
+    decision.add_argument('--settings', type=Path, required=True)
     decision.add_argument('--payload', type=Path, required=True)
     decision.add_argument('--repos', type=Path)
     decision.add_argument('--builder', type=Path, default=ROOT / 'bin/build-mac-image')
@@ -372,12 +419,15 @@ def main(argv=None):
     try:
         if args.command == 'runtime':
             _, channel = channel_set.load_policy()
-            entry = runtime_entry(channel_set.read_database(args.db), channel)
-            print(entry['FILENAME'][0], entry['SHA256SUM'][0])
+            entries = channel_set.read_database(args.db)
+            for role in ('omarchy', 'omarchy-settings'):
+                entry = role_entry(entries, channel, role)
+                print(role, entry['FILENAME'][0], entry['SHA256SUM'][0])
         elif args.command == 'fetch-repos':
             fetch_repos(args.directory)
         else:
-            print(json.dumps(decide(args.db, args.runtime, args.payload, args.repos, args.builder), indent=2))
+            print(json.dumps(decide(args.db, args.runtime, args.settings, args.payload, args.repos, args.builder),
+                             indent=2))
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         print(f'edge-dispatch-filter: {error}', file=sys.stderr)
         return 1
