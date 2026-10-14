@@ -298,8 +298,12 @@ class Guard:
         if descriptor.get("helper_code_signing_requirement") != helper_requirement:
             self.find(label, "release.json's helper requirement is not the Developer ID team's")
         base = v["INSTALLER_CATALOG_BASE"] + "/"
+        stopgap = f"https://github.com/{v['INSTALLER_CATALOG_STOPGAP_REPO']}/releases/download"
         for channel, entry in sorted(descriptor.get("channels", {}).items()):
             url = entry.get("catalog_url", "") if isinstance(entry, dict) else ""
+            # The stopgap is accepted only as the channel's own catalog asset.
+            if url == f"{stopgap}/catalog-{channel}/catalog-{channel}.signed.json":
+                continue
             if not url.startswith(base):
                 self.find(label, f"the {channel} catalog {url!r} is outside {base}")
         try:

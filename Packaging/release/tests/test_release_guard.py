@@ -225,6 +225,29 @@ class ReleaseGuardTest(unittest.TestCase):
             "edge": {"catalog_url": "https://example.invalid/catalog-edge.signed.json"}})
         self.assertRefused("the edge catalog")
 
+    def test_the_stopgap_catalogs_are_accepted(self) -> None:
+        stopgap = f"https://github.com/{VALUES['INSTALLER_CATALOG_STOPGAP_REPO']}/releases/download"
+        self.set_trust_root(bytes(range(1, 33)), channels={
+            c: {"catalog_url": f"{stopgap}/catalog-{c}/catalog-{c}.signed.json"} for c in ("stable", "rc", "edge")})
+        self.assertEqual(self.findings(), [])
+
+    def test_another_channels_stopgap_catalog_is_refused(self) -> None:
+        stopgap = f"https://github.com/{VALUES['INSTALLER_CATALOG_STOPGAP_REPO']}/releases/download"
+        base = VALUES["INSTALLER_CATALOG_BASE"]
+        self.set_trust_root(bytes(range(1, 33)), channels={
+            "stable": {"catalog_url": f"{stopgap}/catalog-edge/catalog-edge.signed.json"},
+            "rc": {"catalog_url": f"{base}/catalog-rc.signed.json"},
+            "edge": {"catalog_url": f"{base}/catalog-edge.signed.json"}})
+        self.assertRefused("the stable catalog")
+
+    def test_a_catalog_on_another_github_repository_is_refused(self) -> None:
+        base = VALUES["INSTALLER_CATALOG_BASE"]
+        self.set_trust_root(bytes(range(1, 33)), channels={
+            "stable": {"catalog_url": f"{base}/catalog-stable.signed.json"},
+            "rc": {"catalog_url": f"{base}/catalog-rc.signed.json"},
+            "edge": {"catalog_url": "https://github.com/someone/fork/releases/download/catalog-edge/catalog-edge.signed.json"}})
+        self.assertRefused("the edge catalog")
+
     def test_an_unpinned_trust_root_is_refused(self) -> None:
         self.set_trust_root(bytes(range(1, 33)), trust_root_fingerprint="sha256:" + "0" * 64)
         self.assertRefused("does not pin the bundled trust root")

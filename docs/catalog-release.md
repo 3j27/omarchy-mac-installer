@@ -70,7 +70,7 @@ Ticket 06's acceptance job writes it; ticket 07's upload and this workflow consu
 - `scratch:DIR`: a directory, for dry runs and tests.
 - Ticket 13 adds the R2 host at `mac.omarchy.org/v1/` as another host class (`fetch`, `publish`, `describe`) and switches the workflow's `--host`.
 
-The app compiled from `Release/` reads `mac.omarchy.org/v1`, so it does not see the stopgap catalogs; a preview build reads them with its own `release.json` (`build-app.sh RELEASE_DIRECTORY`) naming the stopgap URLs and this trust root.
+The app compiled from `Release/` reads `mac.omarchy.org/v1`, so it does not see the stopgap catalogs. Until ticket 13, `mac-app-release.yml` (`APP_CATALOG_HOST: stopgap`) therefore builds every app with a `release.json` from `scripts/make-release-descriptor --stopgap`, naming each channel's stopgap catalog and the trust root in `Release/`; the release guard accepts exactly those URLs besides the catalog base. Ticket 13 sets `APP_CATALOG_HOST: base`, and apps built before then keep reading the stopgap releases, so those must stay in place until such apps are retired.
 
 ## Running it
 

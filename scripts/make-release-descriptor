@@ -8,13 +8,18 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  make-release-descriptor --public-key FILE --output FILE [--base-url URL]
+  make-release-descriptor --public-key FILE --output FILE
+                          [--base-url URL | --stopgap]
                           [--default-channel stable|rc|edge] [--adhoc]
 
 Writes release.json (schema 3) naming the stable, rc and edge catalogs as
 BASE_URL/catalog-<channel>.signed.json and pinning the SHA-256 fingerprint of
 the public key. BASE_URL defaults to INSTALLER_CATALOG_BASE from
 Packaging/identity.conf; pass another only for probes and private builds.
+--stopgap names instead each channel's stopgap catalog, the asset
+catalog-<channel>.signed.json of the catalog-<channel> release of
+INSTALLER_CATALOG_STOPGAP_REPO, for app releases made before the catalog
+base's host exists.
 
 The helper code-signing requirement must match the build that will consume the
 descriptor. The default is the production Developer ID requirement; --adhoc
@@ -34,6 +39,7 @@ base_url=""
 output=""
 default_channel="edge"
 adhoc=0
+stopgap=0
 
 while (( $# > 0 )); do
   case $1 in
@@ -42,12 +48,14 @@ while (( $# > 0 )); do
     --output) output=${2:-}; shift 2 ;;
     --default-channel) default_channel=${2:-}; shift 2 ;;
     --adhoc) adhoc=1; shift ;;
+    --stopgap) stopgap=1; shift ;;
     *) usage ;;
   esac
 done
 
 # shellcheck source=../Packaging/identity.conf
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../Packaging" && pwd)/identity.conf"
+(( ! stopgap )) || [[ -z $base_url ]] || die "--stopgap and --base-url are exclusive"
 [[ -n $base_url ]] || base_url="$INSTALLER_CATALOG_BASE"
 
 [[ -n $public_key && -n $output ]] || usage
@@ -68,17 +76,28 @@ else
   requirement="anchor apple generic and identifier \"$helper_identifier\" and certificate leaf[subject.OU] = \"$team_id\""
 fi
 
+stopgap_base=""
+(( ! stopgap )) || stopgap_base="https://github.com/$INSTALLER_CATALOG_STOPGAP_REPO/releases/download"
+
 python3 - "$output" "$fingerprint" "$base_url" "$default_channel" \
-  "$helper_identifier" "$requirement" <<'PY'
+  "$helper_identifier" "$requirement" "$stopgap_base" <<'PY'
 import json
 import sys
 
-output, fingerprint, base_url, default_channel, helper, requirement = sys.argv[1:7]
+output, fingerprint, base_url, default_channel, helper, requirement, stopgap = sys.argv[1:8]
+
+
+def catalog_url(channel):
+    if stopgap:
+        return f"{stopgap}/catalog-{channel}/catalog-{channel}.signed.json"
+    return f"{base_url}/catalog-{channel}.signed.json"
+
+
 descriptor = {
     "schema_version": 3,
     "default_channel": default_channel,
     "channels": {
-        channel: {"catalog_url": f"{base_url}/catalog-{channel}.signed.json"}
+        channel: {"catalog_url": catalog_url(channel)}
         for channel in ("stable", "rc", "edge")
     },
     "trust_root_fingerprint": fingerprint,
