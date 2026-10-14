@@ -599,6 +599,9 @@ class ScratchHost:
         path = self.directory / f"catalog-{channel}.signed.json"
         return path.read_bytes() if path.is_file() else None
 
+    def preflight(self, channel: str) -> None:
+        pass
+
     def publish(self, channel: str, envelope: Path) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
         target = self.directory / f"catalog-{channel}.signed.json"
@@ -650,6 +653,15 @@ class GitHubReleaseHost:
         release = self.release(tag)
         return {asset["name"]: asset["id"] for asset in (release or {}).get("assets", [])}
 
+    def preflight(self, channel: str) -> None:
+        """Refuse while an earlier publish left its staged catalog behind: it
+        may be newer than whatever is (or is not) served, so nothing may be
+        published over it until someone resolves it by hand."""
+        staged = f"catalog-{channel}.signed.json.next"
+        if staged in self.asset_ids(f"catalog-{channel}"):
+            raise Refusal(f"an earlier publish left {staged} on the catalog-{channel} release; "
+                          "check it, then rename it into place or delete it by hand")
+
     def publish(self, channel: str, envelope: Path) -> None:
         """Upload under a staging name, then swap it in: the old asset is
         deleted only once the new bytes are on the release, and the window
@@ -666,10 +678,7 @@ class GitHubReleaseHost:
                     "workflow. Not a release: images and engines live in their own immutable releases.")
         elif release.get("draft") or not release.get("prerelease"):
             raise Refusal(f"the {tag} release must be a published prerelease")
-        assets = self.asset_ids(tag)
-        if staged in assets:
-            # A failed earlier publish; its catalog was never served.
-            self.gh("api", "-X", "DELETE", f"repos/{self.repo}/releases/assets/{assets[staged]}")
+        self.preflight(channel)
         with tempfile.TemporaryDirectory() as directory:
             upload = Path(directory) / staged
             shutil.copyfile(envelope, upload)
@@ -831,6 +840,7 @@ def command_publish(arguments) -> None:
         # A retry after a publish whose readback failed: already live.
         print(f"published={host.describe(channel)} (already live)")
         return
+    host.preflight(channel)
     live = live_sequence(host, channel, trust_root, openssl)
     if document["sequence"] <= live:
         raise Refusal(f"sequence {document['sequence']} does not follow the published {live}")

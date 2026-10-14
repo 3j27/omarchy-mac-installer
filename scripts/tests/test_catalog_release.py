@@ -397,6 +397,8 @@ elif arguments[:2] == ["release", "upload"]:
     document["assets"].append({{"id": identifier, "name": source.name}})
     shutil.copyfile(source, state / "assets" / source.name)
     save(document)
+elif arguments[:3] == ["api", "-X", "PATCH"] and (state / "rename-fails").exists():
+    sys.exit(1)
 elif arguments[:3] in (["api", "-X", "DELETE"], ["api", "-X", "PATCH"]):
     identifier = int(arguments[3].rsplit("/", 1)[1])
     document = load()
@@ -474,6 +476,26 @@ else:
         self.assertEqual(status, 0, output)
         self.assertEqual(served.read_bytes(), second.read_bytes())
         self.assertEqual(sorted(p.name for p in (state / "assets").iterdir()), ["catalog-edge.signed.json"])
+
+    def test_a_failed_swap_blocks_every_later_publish(self) -> None:
+        state = self.fake_github()
+        saved_sleep = release.time.sleep
+        release.time.sleep = lambda seconds: None
+        try:
+            self.assertEqual(self.publish_to_fake_github(self.signed_at("2026-10-14T00:00:00Z", "a"), state)[0], 0)
+            newer = self.signed_at("2026-10-16T00:00:00Z", "c")
+            (state / "rename-fails").touch()
+            status, output = self.publish_to_fake_github(newer, state)
+            self.assertEqual(status, 1, output)
+            self.assertIn("rename it by hand", output)
+            (state / "rename-fails").unlink()
+            # The channel now serves nothing; an older envelope must not slip in.
+            status, output = self.publish_to_fake_github(self.signed_at("2026-10-15T00:00:00Z", "b"), state)
+            self.assertEqual(status, 1, output)
+            self.assertIn("left catalog-edge.signed.json.next", output)
+            self.assertEqual((state / "assets" / "catalog-edge.signed.json.next").read_bytes(), newer.read_bytes())
+        finally:
+            release.time.sleep = saved_sleep
 
     def test_the_github_release_host_refuses_a_draft(self) -> None:
         state = self.fake_github()

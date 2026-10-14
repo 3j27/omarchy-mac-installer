@@ -108,6 +108,9 @@ defaults:
 jobs:
   prepare:
     name: Gate and build the catalog
+    # Only this repository's runs (a caller elsewhere would check out its own
+    # code); sign and publish need this job.
+    if: ${{ github.repository == 'omacom/omarchy-mac-installer' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:

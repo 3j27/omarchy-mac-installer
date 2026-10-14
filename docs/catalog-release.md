@@ -22,7 +22,7 @@
 
 ## Callers
 
-Only workflows of omacom/omarchy-mac-installer may call it (`catalog_release.py` refuses another `GITHUB_REPOSITORY`: a caller elsewhere would check out its own code with its own token). Call with `secrets: inherit`: GitHub requires the caller to pass even an environment secret, which otherwise resolves to empty and the signer refuses. The caller must grant `contents: write`. A pipeline in another repository dispatches this workflow instead.
+Only workflows of omacom/omarchy-mac-installer may call it (the `prepare` job runs only there and `catalog_release.py` refuses another `GITHUB_REPOSITORY`: a caller elsewhere would check out its own code with its own token). Call with `secrets: inherit`: GitHub requires the caller to pass even an environment secret, which otherwise resolves to empty and the signer refuses. The caller must grant `contents: write`. A pipeline in another repository dispatches this workflow instead.
 
 ## Inputs
 
@@ -64,7 +64,7 @@ Ticket 06's acceptance job writes it; ticket 07's upload and this workflow consu
 
 `catalog_release.py publish --host` selects where catalogs go. Every host serves `catalog-<channel>.signed.json`, the envelope `publish-channels envelope` writes, and is the only mutable object.
 
-- `github-release` (the stopgap): the asset `catalog-<channel>.signed.json` of the prerelease `catalog-<channel>` of the repository named by `INSTALLER_CATALOG_STOPGAP_REPO`, created on first publish (never marked latest). A publish uploads the new envelope as `catalog-<channel>.signed.json.next`, deletes the old asset only once that upload is on the release, and renames the new one into place, so a failed upload leaves the old catalog served and the only gap is one rename. A retry of an envelope that is already live succeeds without publishing. It is read back from `https://github.com/<repo>/releases/download/catalog-<channel>/catalog-<channel>.signed.json`.
+- `github-release` (the stopgap): the asset `catalog-<channel>.signed.json` of the prerelease `catalog-<channel>` of the repository named by `INSTALLER_CATALOG_STOPGAP_REPO`, created on first publish (never marked latest). A publish uploads the new envelope as `catalog-<channel>.signed.json.next`, deletes the old asset only once that upload is on the release, and renames the new one into place, so a failed upload leaves the old catalog served and the only gap is one rename. If the rename fails, the staged `.next` asset stays and every later publish refuses until someone renames it into place or deletes it by hand, so an older catalog can never slip into the gap. A retry of an envelope that is already live succeeds without publishing. It is read back from `https://github.com/<repo>/releases/download/catalog-<channel>/catalog-<channel>.signed.json`.
 - `scratch:DIR`: a directory, for dry runs and tests.
 - Ticket 13 adds the R2 host at `mac.omarchy.org/v1/` as another host class (`fetch`, `publish`, `describe`) and switches the workflow's `--host`.
 
