@@ -123,7 +123,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -euo pipefail
-          config=.github/mac-release-pipeline.json
+          config=${PIPELINE_CONFIG:-.github/mac-release-pipeline.json}
           # Before the upload, so a real run without an app release publishes
           # nothing. A dry run signs no catalog and only notes it.
           if [[ $(jq -r '.installer | type' "$config") != object && $DRY_RUN == true ]]; then
@@ -132,6 +132,20 @@ jobs:
             echo "::error::$config names no app release (installer); set it to a published app release (mac-app-release.yml) before a catalog can be signed"
             exit 1
           fi
+          # The catalog's own checks, so a malformed block stops here too.
+          python3 -I - "$config" <<'PY'
+          import importlib.util, json, sys
+          spec = importlib.util.spec_from_file_location("catalog_release", "scripts/catalog_release.py")
+          release = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(release)
+          config = json.load(open(sys.argv[1]))
+          try:
+              release.check_engine(config["engine"])
+              if config["installer"] is not None:
+                  release.check_installer(config["installer"], config["engine"]["version"])
+          except (release.Refusal, KeyError, TypeError) as error:
+              sys.exit(f"::error::{sys.argv[1]}: {error}")
+          PY
           echo "engine=$(jq -c .engine "$config")" | tee -a "$GITHUB_OUTPUT"
           echo "installer=$(jq -c .installer "$config")" | tee -a "$GITHUB_OUTPUT"
 

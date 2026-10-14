@@ -425,6 +425,7 @@ class GitHubReleaseDestination:
             ref = self._json("GET", f"/repos/{self.repository}/git/ref/tags/{urllib.parse.quote(self.release)}")
         except urllib.error.HTTPError as error:
             if error.code == 404:
+                error.close()
                 return None
             raise
         target = (ref or {}).get("object") or {}

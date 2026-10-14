@@ -356,5 +356,53 @@ class Config(unittest.TestCase):
             catalog.check_installer(self.config["installer"], self.config["engine"]["version"])
 
 
+
+@unittest.skipIf(shutil.which("jq") is None, "jq is required")
+class CatalogInputs(unittest.TestCase):
+    """The catalog-inputs step: it runs before the upload, so it decides
+    whether a real run may make anything public."""
+
+    def setUp(self) -> None:
+        self.directory = Path(tempfile.mkdtemp(prefix="omarchy-release-pipeline-"))
+        self.addCleanup(shutil.rmtree, self.directory)
+        self.engine = json.loads(CONFIG.read_text())["engine"]
+
+    def run_step(self, installer, dry_run: str, engine=None) -> tuple[int, str]:
+        config = self.directory / "config.json"
+        config.write_text(json.dumps({"engine": engine or self.engine, "installer": installer}))
+        output = self.directory / "output"
+        output.write_text("")
+        env = {"PATH": os.environ["PATH"], "DRY_RUN": dry_run, "PIPELINE_CONFIG": str(config),
+               "GITHUB_OUTPUT": str(output)}
+        result = subprocess.run(["bash", "--noprofile", "--norc", "-c", step_script(PIPELINE, "Read the engine and app blocks")],
+                                cwd=ROOT, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        return result.returncode, output.read_text() + result.stdout + result.stderr
+
+    def installer(self) -> dict:
+        return {"minimumVersion": "2.1.0", "latestVersion": "2.2.0",
+                "downloadURL": f"https://github.com/{catalog.stopgap_repo()}/releases/download/v2.2.0/app.dmg"}
+
+    def test_a_real_run_without_an_app_release_stops_before_the_upload(self):
+        status, output = self.run_step(None, "false")
+        self.assertNotEqual(status, 0)
+        self.assertIn("names no app release", output)
+
+    def test_a_dry_run_without_an_app_release_goes_on(self):
+        self.assertEqual(self.run_step(None, "true")[0], 0)
+
+    def test_a_malformed_block_stops_a_real_run(self):
+        for installer, engine in (({**self.installer(), "minimumVersion": "2.0.0"}, None),
+                                  ({**self.installer(), "downloadURL": "https://example.invalid/app.dmg"}, None),
+                                  (self.installer(), {**self.engine, "sha256": "nope"})):
+            with self.subTest(installer=installer, engine=engine):
+                self.assertNotEqual(self.run_step(installer, "false", engine)[0], 0)
+
+    def test_a_good_block_becomes_the_catalogs_inputs(self):
+        status, output = self.run_step(self.installer(), "false")
+        self.assertEqual(status, 0, output)
+        lines = dict(line.split("=", 1) for line in output.splitlines() if "=" in line and not line.startswith("::"))
+        self.assertEqual(json.loads(lines["engine"]), self.engine)
+        self.assertEqual(json.loads(lines["installer"]), self.installer())
+
 if __name__ == "__main__":
     unittest.main()
