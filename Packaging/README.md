@@ -87,3 +87,28 @@ changes the application bundle.
 
 The script refuses unsafe or mismatched release inputs and will not overwrite an
 existing application bundle.
+
+## Release workflow
+
+`.github/workflows/mac-app-release.yml` builds the public download. Pushing a `v<version>` tag builds the app for the Developer ID team in `identity.conf`, signs it in the `macos-release` environment, notarizes and staples it into `Omarchy-Mac-Installer-<version>.dmg` (the app beside an `/Applications` link) and leaves the `.dmg` and its `.sha256` on a draft prerelease `v<version>`, never marked latest; the owner publishes it. A manual dispatch defaults to an ad hoc dry run that needs no secrets and publishes nothing. `Packaging/release/plan` decides what a run may do and refuses the rest: only a `v*` tag publishes, only a `v*` tag or `main` may use the Developer ID (a signed dry run from `main` tests the secrets), and pull requests never trigger the workflow.
+
+The jobs split the key from the build. `build` runs `build-app.sh` with `OMARCHY_APP_SIGNING_IDENTITY=none` (Developer ID requirements and `SMJobBless` declarations, no signature) and holds no secrets. `sign` alone reads the secrets, after a second maintainer approves; it installs nothing and runs only this commit's `Packaging/release` scripts and Apple's tools on the build job's app, checked by digest:
+
+- `release-guard` refuses an app or `.dmg` with a `get-task-allow` entitlement, the lab catalog key (`release/lab-catalog-key.ed25519.pub`), the test candidate key, SSH keys, passwordless sudo, lab files or host names (inside the bundled engine too), a private profile, a sealed catalog, catalogs outside the catalog base, or code-signing requirements not anchored to the Developer ID team. It runs on the unsigned app and on the finished `.dmg`.
+- `sign-app` signs inside-out (the helper under its own identifier, then the app) with the hardened runtime and a secure timestamp, never `--deep` and with no entitlements, then verifies both designated requirements and the signature's team and timestamp.
+- `sign-and-package` runs the guard, `sign-app`, notarizes and staples the app, builds and signs the `.dmg`, notarizes and staples it, checks both with `spctl`, checks the app inside the finished `.dmg` (signature, requirements, staple, Gatekeeper), guards the `.dmg` and writes the sha256. It fails on any notarization status but Accepted and keeps the notary logs. With `--identity -` it is the dry run: ad hoc, no notarization or Gatekeeper checks.
+- `publish-app` is the only publishing step: target `github-release` today, `r2` (`installer/<version>/` under the catalog base) with the hosting switch. It publishes only when the tag still names the built commit, never replaces a file, and finishes an interrupted upload when the files already there are identical.
+
+A release must be a commit on `main` (which takes only reviewed pull requests that passed the installer checks). A notarized `.dmg` leaves the sign job only for a release, as a one-day artifact for `publish`; a signed dry run keeps only the notary logs and checksum. `publish` attests the `.dmg` (`actions/attest-build-provenance`) and runs `publish-app`. The engine the app embeds comes from the draft release named by `ENGINE_RELEASE`, checked against the digest `build-app.sh` pins.
+
+The `macos-release` environment accepts `v*` tags and `main`, requires one approval from its reviewers (maralcbr, ryanrhughes), blocks self-review and has no admin bypass. Its secrets:
+
+| Secret | What it holds | How to produce it |
+|---|---|---|
+| `DEVELOPER_ID_P12_BASE64` | the Developer ID Application certificate and private key, base64 | Keychain Access › My Certificates › the "Developer ID Application" identity › Export as `.p12` with a strong password, then `base64 -i DeveloperID.p12 \| gh secret set DEVELOPER_ID_P12_BASE64 --env macos-release` |
+| `DEVELOPER_ID_P12_PASSWORD` | the `.p12` export password | `gh secret set DEVELOPER_ID_P12_PASSWORD --env macos-release` |
+| `NOTARY_API_KEY_ID` | the App Store Connect API key ID | App Store Connect › Users and Access › Integrations › Team Keys › generate a key with the Developer role; its Key ID |
+| `NOTARY_API_ISSUER_ID` | the issuer ID shown above the team keys | same page |
+| `NOTARY_API_KEY_P8_BASE64` | the key's `AuthKey_<ID>.p8`, base64 (downloadable once) | `base64 -i AuthKey_<ID>.p8 \| gh secret set NOTARY_API_KEY_P8_BASE64 --env macos-release` |
+
+Switching to Omacom's Developer ID replaces these secrets and `INSTALLER_TEAM_ID`/`INSTALLER_APP_SIGNING_IDENTITY` in `identity.conf` (with a regenerated `Release/release.json`); testers reinstall once because the helper trusts only its own team.
