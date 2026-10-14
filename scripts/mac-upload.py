@@ -43,6 +43,9 @@ Usage:
                         [--part-bytes N] [--target SHA]
                         [--run-url URL] [--report FILE]
   mac-upload.py discard --destination DEST --release NAME
+  mac-upload.py make-public --destination github-release:OWNER/REPO --release NAME
+  mac-upload.py catalog-inputs --report FILE --destination github-release:OWNER/REPO
+                               --release NAME
 """
 from __future__ import annotations
 
@@ -264,9 +267,9 @@ class GitHubReleaseDestination:
     """A draft prerelease on GitHub, named and tagged after the release name.
 
     The release is created as a draft prerelease that is never marked latest;
-    publishing it (and so creating its tag) is the catalog job's or the
-    owner's decision, not this job's. A draft has no tag yet, so it is found
-    by listing releases, which only a token with write access can see.
+    `make_public` publishes it (and so creates its tag) once its upload is
+    verified, when the release pipeline asks. A draft has no tag yet, so it is
+    found by listing releases, which only a token with write access can see.
     """
 
     part_bytes = GITHUB_PART_BYTES
@@ -409,6 +412,42 @@ class GitHubReleaseDestination:
         require(release.get("tag_name") == self.release, "refusing to delete a release with another tag")
         self._json("DELETE", f"/repos/{self.repository}/releases/{release['id']}")
         self._release = None
+
+
+    def download_base(self) -> str:
+        """Where a published release serves its files: the catalog's URLs."""
+        return f"https://github.com/{self.repository}/releases/download/{self.release}/"
+
+    def _tag_commit(self) -> str | None:
+        try:
+            ref = self._json("GET", f"/repos/{self.repository}/git/ref/tags/{urllib.parse.quote(self.release)}")
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
+        target = (ref or {}).get("object") or {}
+        require(target.get("type") == "commit", f"the tag {self.release} is not a lightweight tag of a commit")
+        return target.get("sha")
+
+    def make_public(self) -> None:
+        """Publish the draft as a prerelease, never latest, so the catalog can
+        pin its download URLs. Its files are already verified; once published
+        nothing is ever added (put refuses). Idempotent."""
+        require(not self.release.startswith(DRY_RUN_PREFIX), f"a scratch release is never published: {self.release}")
+        release = self._find()
+        require(release is not None, f"{self.location()} doesn't exist; nothing to publish")
+        require(release.get("tag_name") == self.release, "refusing to publish a release with another tag")
+        commit = release.get("target_commitish")
+        require(isinstance(commit, str) and COMMIT.fullmatch(commit) is not None,
+                f"{self.release} targets {commit!r}, not a commit")
+        tagged = self._tag_commit()
+        require(tagged in (None, commit), f"the tag {self.release} already names {tagged}, not the uploaded commit {commit}")
+        if release.get("draft"):
+            self._release = release = self._json("PATCH", f"/repos/{self.repository}/releases/{release['id']}", {
+                "draft": False, "prerelease": True, "make_latest": "false"})
+        require(release.get("draft") is False and release.get("prerelease") is True,
+                f"{self.release} is not a published prerelease after publishing")
+        require(self._tag_commit() == commit, f"the tag {self.release} does not name the uploaded commit {commit}")
 
 
 def open_destination(spec: str, release: str, *, target: str = "", notes: str = "") -> Destination:
@@ -598,6 +637,42 @@ def release_notes(image: str, sha256: str, run_url: str) -> str:
     )
 
 
+def catalog_inputs(report: dict, base: str) -> dict:
+    """The catalog's payload and installer-data inputs (docs/catalog-release.md)
+    for a real upload's report, its files served under BASE."""
+    require(report.get("dry_run") is False, "a dry run's files are discarded; only a real upload has catalog inputs")
+    require(re.fullmatch(r"https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+/", base) is not None and "/../" not in base,
+            f"invalid download base: {base}")
+    sha256 = report.get("sha256")
+    require(isinstance(sha256, str) and SHA256_HEX.fullmatch(sha256) is not None, "the report has no image sha256")
+    files = {entry["name"]: entry for entry in report.get("files", [])}
+    digests = [name for name in files if name.endswith(".zip.sha256")]
+    require(len(digests) == 1, f"the report names {len(digests)} image digest files, not one")
+    zip_name = digests[0].removesuffix(".sha256")
+    require(PAYLOAD_NAME.fullmatch(zip_name) is not None, f"unexpected image zip name: {zip_name!r}")
+
+    def entry(name: str) -> dict:
+        require(name in files, f"the upload has no {name}")
+        found = files[name]
+        require(isinstance(found.get("size"), int) and found["size"] > 0, f"{name} has no size")
+        require(isinstance(found.get("sha256"), str) and SHA256_HEX.fullmatch(found["sha256"]) is not None,
+                f"{name} has no sha256")
+        return {"url": base + name, "fileName": name, "sizeBytes": found["size"], "sha256": found["sha256"]}
+
+    parts = sorted(name for name in files if re.fullmatch(re.escape(zip_name) + r"\.part[0-9]{2}", name))
+    if parts:
+        require(zip_name not in files, "the upload holds both the whole image and its parts")
+        require(parts == [f"{zip_name}.part{index:02d}" for index in range(len(parts))], "the image parts are not numbered from 00")
+        require(2 <= len(parts) <= MAXIMUM_PART_COUNT, f"{len(parts)} image parts; the catalog takes 2 to {MAXIMUM_PART_COUNT}")
+        pieces = [entry(name) for name in parts]
+        payload = {"url": base + zip_name, "fileName": zip_name, "sizeBytes": sum(piece["sizeBytes"] for piece in pieces),
+                   "sha256": sha256, "parts": pieces}
+    else:
+        payload = entry(zip_name)
+        require(payload["sha256"] == sha256, f"{zip_name} is {payload['sha256']}, not the image sha256 {sha256}")
+    return {"payload": payload, "installer_data": entry("installer_data.json")}
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -633,6 +708,15 @@ def main(argv: list[str]) -> int:
     upload.add_argument("--run-url", default="")
     upload.add_argument("--report", type=Path)
 
+    public = commands.add_parser("make-public")
+    public.add_argument("--destination", required=True)
+    public.add_argument("--release", required=True)
+
+    describe = commands.add_parser("catalog-inputs")
+    describe.add_argument("--report", type=Path, required=True)
+    describe.add_argument("--destination", required=True)
+    describe.add_argument("--release", required=True)
+
     discard = commands.add_parser("discard")
     discard.add_argument("--destination", required=True)
     discard.add_argument("--release", required=True)
@@ -658,6 +742,17 @@ def main(argv: list[str]) -> int:
                 args.report.write_text(json.dumps(report, indent=2) + "\n")
             print(f"{'dry run ' if args.dry_run else ''}upload of {args.image} complete: "
                   f"{len(report['uploaded'])} uploaded, {len(report['files'])} verified")
+        elif args.command in ("make-public", "catalog-inputs"):
+            destination = open_destination(args.destination, args.release)
+            require(isinstance(destination, GitHubReleaseDestination),
+                    f"{args.command} is for the github-release destination (R2 serves uploads as they land)")
+            if args.command == "make-public":
+                destination.make_public()
+                print(f"{args.release} is a published prerelease (never latest)")
+            else:
+                inputs = catalog_inputs(json.loads(args.report.read_text()), destination.download_base())
+                print(f"payload={json.dumps(inputs['payload'], separators=(',', ':'))}")
+                print(f"installer-data={json.dumps(inputs['installer_data'], separators=(',', ':'))}")
         elif args.command == "discard":
             open_destination(args.destination, args.release).discard()
     except Refusal as refusal:
