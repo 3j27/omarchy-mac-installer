@@ -127,11 +127,12 @@ class Ordering(unittest.TestCase):
     def setUp(self) -> None:
         self.jobs = jobs(PIPELINE)
 
-    def test_the_chain_is_build_acceptance_upload_catalog(self):
-        self.assertEqual(list(self.jobs), ["plan", "build", "acceptance", "upload", "catalog-inputs", "catalog"])
+    def test_the_chain_is_build_acceptance_inputs_upload_catalog(self):
+        self.assertEqual(list(self.jobs), ["plan", "build", "acceptance", "catalog-inputs", "upload", "catalog"])
         self.assertEqual(field(self.jobs["build"], "needs"), "plan")
         self.assertEqual(field(self.jobs["acceptance"], "needs"), "build")
-        self.assertEqual(field(self.jobs["upload"], "needs"), "[build, acceptance]")
+        self.assertEqual(field(self.jobs["upload"], "needs"), "[build, acceptance, catalog-inputs]")
+        self.assertEqual(field(self.jobs["catalog-inputs"], "needs"), "acceptance")
         self.assertEqual(field(self.jobs["catalog"], "needs"), "[build, acceptance, upload, catalog-inputs]")
         for job, workflow in (("build", "mac-image"), ("acceptance", "mac-acceptance"), ("upload", "mac-upload"),
                               ("catalog", "mac-catalog")):
@@ -139,13 +140,15 @@ class Ordering(unittest.TestCase):
 
     def test_upload_and_catalog_never_run_without_passing_evidence(self):
         passed = "needs.acceptance.outputs.result == 'pass'"
-        self.assertEqual(field(self.jobs["upload"], "if"), passed)
-        for job in ("catalog-inputs", "catalog"):
-            self.assertEqual(field(self.jobs[job], "if"), f"{passed} && !inputs.dry-run")
+        for job in ("upload", "catalog-inputs"):
+            self.assertEqual(field(self.jobs[job], "if"), passed)
+        self.assertEqual(field(self.jobs["catalog"], "if"), f"{passed} && !inputs.dry-run")
         for job in ("upload", "catalog-inputs", "catalog"):
             condition = field(self.jobs[job], "if")
-            # A status function or an "or" would let a job run after a failed need.
-            self.assertNotRegex(condition, r"always\(\)|failure\(\)|cancelled\(\)|\|\|")
+            # A status function would let a job run after a failed need.
+            self.assertNotRegex(condition, r"always\(\)|failure\(\)|cancelled\(\)|success\(\)")
+        # Nothing becomes public before the catalog's inputs are known good.
+        self.assertIn("catalog-inputs", field(self.jobs["upload"], "needs"))
 
     def test_the_acceptance_result_is_its_gate_not_a_default(self):
         acceptance = jobs(ACCEPTANCE)["acceptance"]
@@ -174,10 +177,15 @@ class Ordering(unittest.TestCase):
 
 
 class Secrets(unittest.TestCase):
-    def test_nothing_inherits_secrets(self):
+    def test_secrets_are_inherited_only_into_the_catalog_signer(self):
+        # The pipeline passes the key by name. A workflow may forward what it
+        # was given with inherit only into the signing workflow (mac-catalog.yml
+        # into mac-catalog-sign.yml, once that split lands).
         for workflow in sorted(WORKFLOWS.glob("*.yml")):
-            with self.subTest(workflow.name):
-                self.assertNotRegex("\n".join(lines(workflow)), r"secrets:\s*inherit")
+            for job, body in jobs(workflow).items():
+                if re.search(r"(?m)^    secrets:\s*inherit", body):
+                    with self.subTest(f"{workflow.name} {job}"):
+                        self.assertEqual(field(body, "uses"), "./.github/workflows/mac-catalog-sign.yml")
 
     def test_the_pipeline_passes_only_the_catalog_key_and_only_to_the_catalog(self):
         pipeline_jobs = jobs(PIPELINE)
@@ -188,12 +196,20 @@ class Secrets(unittest.TestCase):
                 self.assertNotIn("environment:", body)
 
     def test_the_key_is_read_only_in_the_catalog_release_environment(self):
-        for job, body in jobs(WORKFLOWS / "mac-catalog.yml").items():
-            with self.subTest(job):
-                reads = "secrets." in body
-                self.assertEqual(reads, job == "sign")
-                if job == "sign":
-                    self.assertEqual(field(body, "environment"), "catalog-release")
+        # Wherever the signing job lives, only a job in catalog-release reads
+        # the key; other jobs may only pass it on to a called workflow.
+        readers = []
+        for workflow in sorted(WORKFLOWS.glob("*.yml")):
+            for job, body in jobs(workflow).items():
+                if "secrets.CATALOG_SIGNING_KEY" not in body:
+                    continue
+                with self.subTest(f"{workflow.name} {job}"):
+                    if field(body, "uses").startswith("./.github/workflows/"):
+                        self.assertRegex(body, r"(?m)^      CATALOG_SIGNING_KEY: \$\{\{ secrets\.CATALOG_SIGNING_KEY \}\}$")
+                    else:
+                        self.assertEqual(field(body, "environment"), "catalog-release")
+                        readers.append(f"{workflow.name} {job}")
+        self.assertEqual(len(readers), 1, readers)
 
     def test_build_and_acceptance_hold_no_secrets(self):
         for workflow in ("mac-image.yml", "mac-acceptance.yml"):
@@ -223,6 +239,9 @@ class Hardening(unittest.TestCase):
                         self.assertRegex(target, r"^[A-Za-z0-9-]+/[A-Za-z0-9._/-]+@[0-9a-f]{40} # v[0-9]")
 
     def test_permissions_start_from_nothing_and_every_job_names_its_own(self):
+        self.assertIn("\npermissions:\n  contents: read\n", text(WORKFLOWS / "mac-image.yml"))
+        for name in ("mac-upload.yml", "mac-catalog.yml", "edge-dispatch.yml"):
+            self.assertIn("\npermissions: {}\n", text(WORKFLOWS / name))
         for name in ("mac-release-pipeline.yml", "mac-acceptance.yml"):
             with self.subTest(name):
                 self.assertIn("\npermissions: {}\n", text(WORKFLOWS / name))
@@ -297,6 +316,11 @@ class Plan(unittest.TestCase):
         env = {"PATH": os.environ["PATH"], "DRY_RUN": dry_run, "GITHUB_REF": ref, "EVENT": event}
         return subprocess.run(["bash", "--noprofile", "--norc", "-c", step_script(PIPELINE, "Refuse a real run off main")], env=env,
                               stdin=subprocess.DEVNULL, capture_output=True).returncode
+
+    def test_the_plan_reads_the_runs_own_dry_run_input(self):
+        plan = jobs(PIPELINE)["plan"]
+        self.assertIn("DRY_RUN: ${{ inputs.dry-run }}", plan)
+        self.assertIn("EVENT: ${{ github.event_name }}", plan)
 
     def test_a_real_run_starts_only_from_main(self):
         self.assertEqual(self.plan("false", "refs/heads/main"), 0)
