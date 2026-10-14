@@ -38,6 +38,16 @@ fi
 
 case $event in
   push)
+    if [[ $ref == refs/heads/mac-app-release ]]; then
+      # Temporary: this branch's pre-merge run, an ad hoc dry run before the
+      # Omacom catalog key lands. Removed before merge.
+      echo "dry_run=true"
+      echo "signing=ad-hoc"
+      echo "version=0.0.0-dry-run"
+      echo "build_number=$((100 + run_number))"
+      echo "stand_in_trust_root=true"
+      exit 0
+    fi
     [[ -n $tag_version ]] || fail "a push releases only v* tags, not $ref"
     dry_run=false signing=developer-id version=$tag_version stand_in=false
     ;;
