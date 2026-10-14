@@ -546,8 +546,10 @@ else:
 
     def test_the_key_is_read_in_one_approved_step_of_one_workflow(self) -> None:
         texts = {path.name: path.read_text() for path in sorted(WORKFLOWS.glob("*.y*ml"))}
+        # The release pipeline only passes the key on to mac-catalog.yml by name
+        # (test_release_pipeline.py checks it passes nothing else, to nothing else).
         self.assertEqual([name for name, text in texts.items() if "CATALOG_SIGNING_KEY }}" in text],
-                         ["mac-catalog-sign.yml"])
+                         ["mac-catalog-sign.yml", "mac-release-pipeline.yml"])
         self.assertEqual([name for name, text in texts.items() if "environment: catalog-release" in text],
                          ["mac-catalog-sign.yml"])
         text = texts["mac-catalog-sign.yml"]

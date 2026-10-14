@@ -29,7 +29,7 @@ name: Mac release pipeline
 #
 # Secrets: only the catalog's signing key, passed by name to mac-catalog.yml.
 # It exists only in the catalog-release environment, so here it resolves to
-# empty; only the job that declares `environment: catalog-release` (the sign
+# empty; only the job that runs in the catalog-release environment (the sign
 # job, also when mac-catalog.yml forwards the key to a nested signing
 # workflow) sees its value. GitHub delivers an environment secret to a called
 # workflow only when every caller on the way passes it (by name or inherit);
