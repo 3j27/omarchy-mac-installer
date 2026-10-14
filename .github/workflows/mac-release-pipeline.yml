@@ -37,8 +37,6 @@ name: Mac release pipeline
 # default). Never for pull requests.
 
 on:
-  push: # TEMPORARY: dry-run this branch; removed before review
-    branches: [mac-release-pipeline]
   workflow_dispatch:
     inputs:
       dry-run:
@@ -68,7 +66,7 @@ jobs:
     steps:
       - name: Refuse a real run off main
         env:
-          DRY_RUN: ${{ (github.event_name == 'push' || inputs.dry-run) }}
+          DRY_RUN: ${{ inputs.dry-run }}
           EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
@@ -113,14 +111,14 @@ jobs:
     with:
       image-artifact: ${{ needs.build.outputs.name }}
       image-sha256: ${{ needs.build.outputs.sha256 }}
-      dry-run: ${{ (github.event_name == 'push' || inputs.dry-run) }}
+      dry-run: ${{ inputs.dry-run }}
       evidence-artifact: ${{ needs.acceptance.outputs.evidence-artifact }}
-      make-public: ${{ !(github.event_name == 'push' || inputs.dry-run) }}
+      make-public: ${{ !inputs.dry-run }}
 
   catalog-inputs:
     name: Catalog inputs
     needs: acceptance
-    if: needs.acceptance.outputs.result == 'pass' && !(github.event_name == 'push' || inputs.dry-run)
+    if: needs.acceptance.outputs.result == 'pass' && !inputs.dry-run
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -147,7 +145,7 @@ jobs:
   catalog:
     name: Catalog
     needs: [build, acceptance, upload, catalog-inputs]
-    if: needs.acceptance.outputs.result == 'pass' && !(github.event_name == 'push' || inputs.dry-run)
+    if: needs.acceptance.outputs.result == 'pass' && !inputs.dry-run
     uses: ./.github/workflows/mac-catalog.yml
     permissions:
       contents: write # the catalog-edge release
