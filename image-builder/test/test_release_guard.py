@@ -119,6 +119,7 @@ class ImageTreeTest(unittest.TestCase):
     def test_lab_access_however_it_got_there(self):
         cases = {
             "a passwordless sudo grant": ("etc/sudoers.d/10-builder", b"builder ALL=(ALL) NOPASSWD: ALL\n"),
+            "a passwordless sudo grant of a shell": ("etc/sudoers.d/10-lab", b"maralc ALL=(root) NOPASSWD: /usr/bin/bash\n"),
             "an authorized_keys file": ("home/maralc/.ssh/authorized_keys", b"ssh-ed25519 AAAA x\n"),
             "Tailscale state": ("var/lib/tailscale/tailscaled.state", b"{}"),
             "a lab host (omarchy-m2-max)": ("etc/hosts", b"127.0.0.1 localhost\n10.0.0.9 omarchy-m2-max\n"),
@@ -134,6 +135,19 @@ class ImageTreeTest(unittest.TestCase):
                 shutil.copytree(self.good, root / "r", symlinks=True)
                 fixtures.write(root / "r", relative, body)
                 self.assertFinds(what, root / "r")
+
+    def test_a_passwordless_command_that_is_not_a_shell_passes(self):
+        fixtures.write(self.root, "etc/sudoers.d/20-tz", "%wheel ALL=(root) NOPASSWD: /usr/bin/timedatectl set-timezone *\n")
+        self.assertEqual(self.scan(), [])
+
+    def test_configuration_hidden_from_the_scan_is_refused(self):
+        fixtures.write(self.work, "elsewhere", b"maralc ALL=(ALL) NOPASSWD: ALL\n")
+        (self.root / "etc/sudoers.d").mkdir(parents=True, exist_ok=True)
+        (self.root / "etc/sudoers.d/lab").symlink_to(self.work / "elsewhere")
+        fixtures.write(self.root, "etc/ssh/sshd_config", b"#" * (2 << 20) + b"\nAuthorizedKeysFile /lab/keys\n")
+        found = dict(self.scan())
+        self.assertIn("cannot read", found["etc/sudoers.d/lab"])
+        self.assertIn("cannot read", found["etc/ssh/sshd_config"])
 
     def test_the_lab_catalog_key_in_any_form_and_any_file(self):
         cases = {

@@ -20,8 +20,10 @@ build    BUILD_DIR   records, then unpacks the payload, mounts root.img (every
 Findings, wherever they are and whatever they are called:
 - lab access: authorized_keys files and sshd overrides that read other keys,
   passwordless sudo for every command, polkit rules granting every action, sshd
-  enabled, the lab overlay's files (builder/lab_access.py's scan), and
-  Tailscale state (/var/lib/tailscale), which only a lab Mac enrolls
+  enabled, the lab overlay's files (builder/lab_access.py's scan),
+  passwordless sudo for a shell, Tailscale state (/var/lib/tailscale), which
+  only a lab Mac enrolls, and configuration it cannot read whole (a link or a
+  file too large)
 - lab hosts: the lab's host names (omarchy-m1-pro, omarchy-m2-…), its
   Thunderbolt bridge network (10.77.0.x), its bootstrap server, a tailnet
   (*.ts.net) or the lab-thunderbolt profile, in configuration, home and state
@@ -72,6 +74,9 @@ LAB_HOSTS = re.compile(
 HOST_SCAN_DIRS = ("etc", "root", "home", "var/lib", "var/log", "var/spool", "usr/local", "opt", "srv", "boot")
 RUNTIME_PACKAGES = ("omarchy", "omarchy-settings", "omarchy-mac", "omarchy-mac-boot", "omarchy-dev",
                     "omarchy-settings-dev")
+# A command after NOPASSWD that is a shell, or su, sudo or env, which run one.
+PASSWORDLESS_SHELL = re.compile(r"NOPASSWD:.*(?:^|[\s,:/])(?:ba|z|da|fi|c|k|tc)?sh(?:$|[\s,])"
+                                r"|NOPASSWD:.*/(?:su|sudo|env)(?:$|[\s,])")
 TARGET_MANIFESTS = ("var/lib/omarchy/image/target", "var/lib/omarchy/image/target.booted")
 ENTITLEMENTS = (b"<key>get-task-allow</key>", b"<key>com.apple.security.get-task-allow</key>",
                 b"\x0c\x0eget-task-allow", b"\x0c\x21com.apple.security.get-task-allow")
@@ -162,12 +167,10 @@ def test_key_packet() -> bytes:
 
 # ── the scan ───────────────────────────────────────────────────────────────
 def regular_files(root: Path):
-    """Every regular file below ROOT, root-relative, never following links or crossing into /proc and friends."""
+    """Every regular file below ROOT, root-relative, never following links (an image's /proc, /tmp and friends
+    are plain directories, scanned like any other)."""
     for directory, subdirectories, files in os.walk(root):
         relative = os.path.relpath(directory, root)
-        if relative.split(os.sep)[0] in lab_access.SKIPPED:
-            subdirectories[:] = []
-            continue
         subdirectories.sort()
         for name in sorted(files):
             path = Path(directory, name)
@@ -208,8 +211,9 @@ def file_findings(path: Path, patterns: dict[bytes, str]) -> set[str]:
                 found |= {what for pattern, what in patterns.items() if pattern in window}
                 armored = armored or ARMOR_BEGIN in window
                 tail = window[-overlap:]
-        if armored and path.stat().st_size <= TEXT_LIMIT:
-            found |= armored_findings(path.read_bytes())
+        if armored:
+            found |= (armored_findings(path.read_bytes()) if path.stat().st_size <= TEXT_LIMIT
+                      else {"an armored key block in a file too large to read whole"})
     except OSError as error:
         raise GuardError(f"cannot read {path}: {error}") from None
     return found
@@ -217,6 +221,29 @@ def file_findings(path: Path, patterns: dict[bytes, str]) -> set[str]:
 
 def host_findings(data: bytes) -> set[str]:
     return {match.group(0).decode(errors="replace").lower() for match in LAB_HOSTS.finditer(data)}
+
+
+def config_findings(root: Path) -> list[tuple[str, str]]:
+    """Configuration the scans read whole must be a small regular file, so none hides from them
+    (lab_access.read_small reads anything else as empty); and no sudo rule may run a shell without a password."""
+    found = []
+    configs = [root / "etc/sudoers", *sorted((root / "etc/sudoers.d").glob("*")),
+               root / "etc/ssh/sshd_config", *sorted((root / "etc/ssh/sshd_config.d").glob("*")),
+               root / "etc/pacman.conf", *sorted((root / "etc/pacman.d").glob("*.conf")),
+               *(root / manifest for manifest in TARGET_MANIFESTS)]
+    for config in configs:
+        if not (config.exists() or config.is_symlink()):
+            continue
+        where = str(config.relative_to(root))
+        info = config.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size > lab_access.SECRET_SCAN_LIMIT:
+            found.append((where, "configuration the guard cannot read (a link, not a file, or too large)"))
+            continue
+        if where == "etc/sudoers" or where.startswith("etc/sudoers.d/"):
+            for line in lab_access.config_lines(config.read_bytes()):
+                if "NOPASSWD" in line and PASSWORDLESS_SHELL.search(line):
+                    found.append((where, "a passwordless sudo grant of a shell"))
+    return found
 
 
 def pin_findings(root: Path) -> list[tuple[str, str]]:
@@ -253,6 +280,7 @@ def scan_tree(root: Path, patterns: dict[bytes, str] | None = None) -> list[tupl
     tailscale = root / "var/lib/tailscale"
     if tailscale.is_dir() and any(tailscale.iterdir()):
         found.append(("var/lib/tailscale", "Tailscale state"))
+    found += config_findings(root)
     found += pin_findings(root)
     os_root = (root / "etc").is_dir()
     for relative, path in regular_files(root):
