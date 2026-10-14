@@ -27,6 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "catalog_release.py"
 SIGNING_TOOL = ROOT / "scripts" / "catalog-signing.swift"
+WORKFLOW = ROOT / ".github" / "workflows" / "mac-catalog.yml"
 FIXTURE = ROOT / "Tests" / "OmarchyAppleInstallerTrustCoreTests" / "Fixtures" / "ci-signed-catalog"
 
 spec = importlib.util.spec_from_file_location("catalog_release", SCRIPT)
@@ -418,6 +419,21 @@ esac
                 release.verify_remote_artifact(payload_document(), "payload")
         finally:
             release.open_url = saved
+
+    # ── the workflow ─────────────────────────────────────────────────────────
+
+    def test_the_workflow_keeps_the_key_in_one_approved_step(self) -> None:
+        text = WORKFLOW.read_text()
+        self.assertNotIn("pull_request", text)
+        self.assertEqual(text.count("secrets."), 1)
+        self.assertEqual(text.count("environment: catalog-release"), 1)
+        sign_job = text.split("\n  sign:\n")[1].split("\n  publish:\n")[0]
+        self.assertIn("environment: catalog-release", sign_job)
+        self.assertIn("secrets.CATALOG_SIGNING_KEY", sign_job)
+        self.assertIn("contents: read", sign_job)
+        publish_job = text.split("\n  publish:\n")[1]
+        self.assertIn("if: ${{ !inputs.dry-run }}", publish_job)
+        self.assertNotIn("secrets.", publish_job)
 
 
 if __name__ == "__main__":
