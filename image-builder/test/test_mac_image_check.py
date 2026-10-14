@@ -200,6 +200,32 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
         engine["os_list"][0]["package"] = NAME
         self.assertEqual(metadata, engine)
 
+    def test_a_public_image_is_named_for_its_lane_date_and_package_set(self):
+        self.build()
+        set_id = package_set(CHANNEL_PACKAGES)[:12]
+        self.assertEqual(check.image_name("edge", self.out), f"omarchy-mac-edge-2026.09.25-{set_id}")
+        result = subprocess.run([sys.executable, str(ROOT / "bin/mac-image-check"), "name", "edge", str(self.out)],
+                                capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stdout), (0, f"omarchy-mac-edge-2026.09.25-{set_id}\n"))
+
+    def test_any_changed_package_changes_the_name(self):
+        self.build()
+        first = check.image_name("edge", self.out)
+        changed = [*CHANNEL_PACKAGES[:3], ("glibc", "2.43-2", "core", "glibc-2.43-2-aarch64.pkg.tar.xz", "a" * 64)]
+        self.build(packages=changed)
+        self.assertNotEqual(check.image_name("edge", self.out), first)
+
+    def test_only_a_public_image_is_named(self):
+        cases = {
+            "lab profile for a channel image": dict(profile=LAB),
+            "test image pin for a channel image": dict(pin="omarchy omarchy-mac omarchy-settings"),
+        }
+        for message, options in cases.items():
+            with self.subTest(message=message):
+                self.build(**options)
+                with self.assertRaisesRegex(check.CheckError, message):
+                    check.image_name("edge", self.out)
+
 
 class BuildDirectoryTest(unittest.TestCase):
     def setUp(self):
@@ -214,6 +240,11 @@ class BuildDirectoryTest(unittest.TestCase):
         build(self.out)
         check.check_provenance("edge", self.out)
         check.check_descriptor("edge", self.out)
+
+    def test_a_candidate_set_image_is_not_named(self):
+        build(self.out)
+        with self.assertRaisesRegex(check.CheckError, "only a public image"):
+            check.image_name("edge", self.out)
 
     def test_a_candidate_installed_from_another_repository(self):
         packages = [PACKAGES[0], ("uboot-asahi", "2026.07-1", "asahi-alarm", PACKAGES[1][3], PACKAGES[1][4]), PACKAGES[2]]
