@@ -33,10 +33,10 @@ jobs:
     name: Build the edge image
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
-    permissions:
-      contents: read
-      id-token: write # the attestation's Sigstore certificate
-      attestations: write # storing the attestation
+    outputs:
+      name: ${{ steps.stage.outputs.name }}
+      payload: ${{ steps.stage.outputs.payload }}
+      sha256: ${{ steps.stage.outputs.sha256 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -105,6 +105,8 @@ jobs:
           zip=${zip#./}
           mv "$WORK/out/$zip" "$stage/"
           (cd "$stage" && sha256sum "$zip" >"$zip.sha256")
+          sha256=$(cut -d' ' -f1 "$stage/$zip.sha256")
+          [[ $zip =~ ^omarchy-[0-9]{4}\.[0-9]{2}\.[0-9]{2}-aarch64-apple-silicon-mac-edge-os-package\.zip$ && $sha256 =~ ^[0-9a-f]{64}$ ]]
           for file in installer_data.json IMAGE PROVENANCE INSPECTION inputs; do
             cp "$WORK/out/$file" "$stage/"
           done
@@ -113,21 +115,17 @@ jobs:
           {
             echo "name=$name"
             echo "stage=$stage"
-            echo "zip=$stage/$zip"
+            echo "payload=$zip"
+            echo "sha256=$sha256"
           } >>"$GITHUB_OUTPUT"
           {
             echo "### \`$name\`"
             echo '```'
             echo "payload $zip, $(stat -c %s "$stage/$zip") bytes"
-            echo "sha256  $(cut -d' ' -f1 "$stage/$zip.sha256")"
+            echo "sha256  $sha256"
             grep -E '^(channel_set|omarchy_db_sha256|package_set_sha256|built|builder_commit)=' "$stage/IMAGE"
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
-
-      - name: Attest the image
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: ${{ steps.stage.outputs.zip }}
 
       - name: Keep the image
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -157,3 +155,19 @@ jobs:
           path: ${{ runner.temp }}/mac-image/evidence/
           if-no-files-found: warn
           retention-days: 14
+
+  # Apart from the privileged build, so only this job can mint the Sigstore
+  # certificate. It attests the digest the build recorded; nothing is downloaded.
+  attest:
+    name: Attest the image
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      id-token: write # the attestation's Sigstore certificate
+      attestations: write # storing the attestation
+    steps:
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ needs.build.outputs.payload }}
+          subject-digest: sha256:${{ needs.build.outputs.sha256 }}
