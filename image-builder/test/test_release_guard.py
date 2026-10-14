@@ -121,6 +121,7 @@ class ImageTreeTest(unittest.TestCase):
             "a passwordless sudo grant": ("etc/sudoers.d/10-builder", b"builder ALL=(ALL) NOPASSWD: ALL\n"),
             "a passwordless sudo grant of a shell": ("etc/sudoers.d/10-lab", b"maralc ALL=(root) NOPASSWD: /usr/bin/bash\n"),
             "an authorized_keys file": ("home/maralc/.ssh/authorized_keys", b"ssh-ed25519 AAAA x\n"),
+            "a lab file": ("run/omarchy-lab/authorized_keys", b"ssh-ed25519 AAAA x\n"),
             "Tailscale state": ("var/lib/tailscale/tailscaled.state", b"{}"),
             "a lab host (omarchy-m2-max)": ("etc/hosts", b"127.0.0.1 localhost\n10.0.0.9 omarchy-m2-max\n"),
             "a lab host (10.77.0.4)": ("etc/NetworkManager/system-connections/bridge.nmconnection",

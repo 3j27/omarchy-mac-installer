@@ -285,6 +285,12 @@ def scan_tree(root: Path, patterns: dict[bytes, str] | None = None) -> list[tupl
     os_root = (root / "etc").is_dir()
     for relative, path in regular_files(root):
         found += [(relative, what) for what in sorted(file_findings(path, patterns))]
+        # lab_access's scan leaves out tmp, run and friends; here they are plain image directories.
+        if relative.split("/")[0] in lab_access.SKIPPED:
+            if path.name.lower().startswith("authorized_keys"):
+                found.append((relative, "an authorized_keys file"))
+            if "omarchy-lab" in relative.lower() or "lab-thunderbolt" in relative.lower():
+                found.append((relative, "a lab file"))
         if os_root and not any(relative == top or relative.startswith(top + "/") for top in HOST_SCAN_DIRS):
             continue
         if path.stat().st_size <= TEXT_LIMIT:
