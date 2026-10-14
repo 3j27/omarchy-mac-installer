@@ -3,7 +3,7 @@
 # inside-out: the helper under its own identifier, then the app. Never --deep:
 # each piece of code gets exactly its own signature and no entitlements.
 #
-# Usage: sign-app APP IDENTITY [KEYCHAIN]
+# Usage: sign-app [--verify] APP IDENTITY [KEYCHAIN]
 #
 # IDENTITY is a Developer ID Application identity of the configured team (its
 # name or SHA-1 hash), signed with hardened runtime and a secure timestamp,
@@ -11,7 +11,8 @@
 # timestamp. KEYCHAIN restricts codesign to that keychain (the release job's
 # throwaway one). The result is verified with codesign --strict and the
 # helper's and app's designated requirements: the Developer ID team's for a
-# Developer ID, the identifiers for ad hoc.
+# Developer ID, the identifiers for ad hoc. --verify only checks an app
+# already signed that way (the copy inside the .dmg).
 set -euo pipefail
 
 fail() {
@@ -19,7 +20,12 @@ fail() {
   exit 1
 }
 
-(( $# == 2 || $# == 3 )) || fail "usage: sign-app APP IDENTITY [KEYCHAIN]"
+verify_only=0
+if [[ ${1:-} == --verify ]]; then
+  verify_only=1
+  shift
+fi
+(( $# == 2 || $# == 3 )) || fail "usage: sign-app [--verify] APP IDENTITY [KEYCHAIN]"
 app=$1
 identity=$2
 keychain=${3:-}
@@ -47,8 +53,10 @@ else
 fi
 [[ -z $keychain ]] || sign_arguments+=(--keychain "$keychain")
 
-codesign "${sign_arguments[@]}" --identifier "$INSTALLER_HELPER_IDENTIFIER" "$helper"
-codesign "${sign_arguments[@]}" "$app"
+if (( ! verify_only )); then
+  codesign "${sign_arguments[@]}" --identifier "$INSTALLER_HELPER_IDENTIFIER" "$helper"
+  codesign "${sign_arguments[@]}" "$app"
+fi
 
 codesign --verify --strict --deep --verbose=2 "$app"
 codesign --verify --strict -R="$helper_requirement" "$helper"
@@ -68,4 +76,8 @@ for code in "$helper" "$app"; do
     [[ $details == *"Timestamp="* ]] || fail "$code has no secure timestamp"
   fi
 done
-echo "sign-app: signed ${app##*/} (${identity/#-/ad hoc})"
+if (( verify_only )); then
+  echo "sign-app: ${app##*/} is signed (${identity/#-/ad hoc})"
+else
+  echo "sign-app: signed ${app##*/} (${identity/#-/ad hoc})"
+fi

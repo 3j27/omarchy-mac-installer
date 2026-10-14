@@ -9,9 +9,12 @@
 #   github-release  the stopgap: release v<VERSION> on $GITHUB_REPOSITORY
 #                   (gh, GH_TOKEN with contents: write), created as a draft
 #                   prerelease that is never marked latest; the owner
-#                   publishes it. The tag must exist. A release that is no
-#                   longer a draft, or already holds either file, is refused.
-#                   Each file is downloaded back and compared.
+#                   publishes it. The tag must exist and name RELEASE_COMMIT
+#                   (the commit the workflow built). A release that is no
+#                   longer a draft is refused. A file the draft already holds
+#                   is kept when its bytes are identical (a rerun after an
+#                   interrupted upload) and refused when they differ. Each
+#                   file is downloaded back and compared.
 #   r2              <catalog base>/installer/<VERSION>/<file> (identity.conf), immutable
 #                   (ticket 13; not implemented yet, so refused).
 set -euo pipefail
@@ -49,7 +52,10 @@ digest=$(shasum -a 256 "$dmg" | cut -d' ' -f1)
 [[ $(cat "$checksum") == "$digest  ${dmg##*/}" ]] || fail "${checksum##*/} does not match the dmg"
 
 publish_github_release() {
-  local repo=${GITHUB_REPOSITORY:?GITHUB_REPOSITORY names the repository} tag="v$version" state assets file back
+  local repo=${GITHUB_REPOSITORY:?GITHUB_REPOSITORY names the repository} tag="v$version" state assets file
+  local commit=${RELEASE_COMMIT:?RELEASE_COMMIT names the commit that was built} tagged missing=()
+  tagged=$(gh api "repos/$repo/commits/$tag" -q .sha) || fail "cannot resolve $tag on $repo"
+  [[ $tagged == "$commit" ]] || fail "$tag names $tagged, not the built commit $commit"
   if state=$(gh release view "$tag" -R "$repo" --json isDraft -q .isDraft 2>&1); then
     [[ $state == "true" ]] || fail "$tag on $repo is already published; a release is never changed"
   elif [[ $state == *"release not found"* ]]; then
@@ -61,16 +67,23 @@ publish_github_release() {
     fail "cannot read $tag on $repo: $state"
   fi
   assets=$(gh release view "$tag" -R "$repo" --json assets -q '.assets[].name')
-  for file in "$dmg" "$checksum"; do
-    ! grep -qxF "${file##*/}" <<<"$assets" || fail "$tag already holds ${file##*/}; published files are immutable"
-  done
-  gh release upload "$tag" -R "$repo" "$dmg" "$checksum"
   back=$(mktemp -d)
-  gh release download "$tag" -R "$repo" -p "${dmg##*/}" -p "${checksum##*/}" -D "$back"
+  trap 'rm -rf "$back"' EXIT
   for file in "$dmg" "$checksum"; do
-    cmp -s "$file" "$back/${file##*/}" || fail "${file##*/} on $tag differs from what was uploaded"
+    if grep -qxF "${file##*/}" <<<"$assets"; then
+      gh release download "$tag" -R "$repo" -p "${file##*/}" -D "$back/existing"
+      cmp -s "$file" "$back/existing/${file##*/}" ||
+        fail "$tag already holds a different ${file##*/}; published files are never replaced"
+      echo "publish-app: $tag already holds this ${file##*/}"
+    else
+      missing+=("$file")
+    fi
   done
-  rm -rf "$back"
+  (( ${#missing[@]} == 0 )) || gh release upload "$tag" -R "$repo" "${missing[@]}"
+  gh release download "$tag" -R "$repo" -p "${dmg##*/}" -p "${checksum##*/}" -D "$back/check"
+  for file in "$dmg" "$checksum"; do
+    cmp -s "$file" "$back/check/${file##*/}" || fail "${file##*/} on $tag differs from what was uploaded"
+  done
   echo "publish-app: $tag on $repo (draft) holds ${dmg##*/} ($digest)"
 }
 

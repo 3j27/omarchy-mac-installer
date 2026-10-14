@@ -7,12 +7,16 @@
 # (ad-hoc|developer-id), VERSION and STAND_IN_TRUST_ROOT (true|false). Prints
 # the plan as NAME=value lines for $GITHUB_OUTPUT:
 #
-#   dry_run              true: nothing is published
+#   dry_run              true: nothing is published, and a notarized dmg
+#                        never leaves the sign job (only ad hoc dry-run dmgs
+#                        are kept as workflow artifacts)
 #   signing              ad-hoc (no secrets, no environment) or developer-id
 #                        (the macos-release environment: approval, secrets)
 #   version              the app version; a v<version> tag sets it
-#   build_number         CFBundleVersion: 100 + the run number, above every
-#                        earlier hand build and rising with each run
+#   build_number         CFBundleVersion: 100 + the run number, so no two runs
+#                        share a build (the app replaces a helper whose build
+#                        differs from its own) and it never falls below the
+#                        hand builds (27, 28)
 #   stand_in_trust_root  true: a random key replaces the catalog trust root
 #                        (dry runs only; proves the pipeline before the
 #                        Omacom catalog key lands)

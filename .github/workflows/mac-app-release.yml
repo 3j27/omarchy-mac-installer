@@ -74,6 +74,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+          fetch-depth: 0
       - id: plan
         env:
           EVENT: ${{ github.event_name }}
@@ -84,6 +85,12 @@ jobs:
           VERSION: ${{ inputs.version }}
           STAND_IN_TRUST_ROOT: ${{ inputs.stand-in-trust-root }}
         run: bash Packaging/release/plan | tee -a "$GITHUB_OUTPUT"
+      - name: A release is a commit on main
+        if: steps.plan.outputs.dry_run == 'false'
+        run: |
+          # main takes only reviewed pull requests that passed the installer checks.
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
+            { echo "$GITHUB_REF names $GITHUB_SHA, which is not on main" >&2; exit 1; }
       - name: Test the release scripts
         run: |
           python3 -m unittest discover -s Packaging/release/tests -p 'test_*.py'
@@ -144,6 +151,11 @@ jobs:
           sw_vers
           xcodebuild -version
           xcrun swift --version
+      - name: Test the release scripts on macOS
+        run: |
+          # The notarization flow and the archived-binary guard cases run only on macOS.
+          python3 -m unittest discover -s Packaging/release/tests -p 'test_*.py'
+          bash test/shell.d/apple-installer-release-test.sh
       - name: Prepare release inputs
         env:
           STAND_IN: ${{ needs.plan.outputs.stand-in-trust-root }}
@@ -225,7 +237,7 @@ jobs:
     needs: [plan, build]
     if: needs.plan.outputs.signing == 'developer-id'
     runs-on: macos-26
-    timeout-minutes: 120
+    timeout-minutes: 150
     environment: macos-release
     permissions:
       contents: read
@@ -264,7 +276,7 @@ jobs:
           echo "::add-mask::$password"
           printf '%s' "$P12_BASE64" | base64 --decode >"$secrets/developer-id.p12"
           security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings -lut 7200 "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$password" "$keychain"
           security import "$secrets/developer-id.p12" -k "$keychain" -f pkcs12 -P "$P12_PASSWORD" \
             -T /usr/bin/codesign
@@ -306,12 +318,24 @@ jobs:
             security delete-keychain "$keychain" || true
           fi
           rm -rf "$RUNNER_TEMP/signing-secrets"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      # A notarized dmg leaves this job only for a release, and only for the
+      # publish job; a signed dry run keeps the notary logs and checksum.
+      - if: needs.plan.outputs.dry-run == 'false'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: signed-dmg
           path: ${{ runner.temp }}/out/
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: notarization-evidence
+          path: |
+            ${{ runner.temp }}/out/*.json
+            ${{ runner.temp }}/out/*.sha256
+          retention-days: 30
+          if-no-files-found: ignore
 
   publish:
     name: Attest and publish the draft release
@@ -349,4 +373,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.plan.outputs.version }}
+          RELEASE_COMMIT: ${{ github.sha }}
         run: bash Packaging/release/publish-app --target "$APP_PUBLISH_TARGET" --version "$VERSION" "$DMG" "$DMG.sha256"
