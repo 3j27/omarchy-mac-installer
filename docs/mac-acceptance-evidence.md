@@ -12,7 +12,7 @@ A JSON object in a file named `acceptance-evidence.json`, uploaded as its own wo
   "result": "pass",
   "scenarios": [
     {"name": "first-boot", "result": "pass"},
-    {"name": "encrypted-conversion", "result": "pass"},
+    {"name": "conversion", "result": "pass"},
     {"name": "second-boot", "result": "pass"}
   ],
   "harness_commit": "<40-hex commit of the omarchy-mac-pkgs VM harness>",
@@ -23,7 +23,7 @@ A JSON object in a file named `acceptance-evidence.json`, uploaded as its own wo
 
 - `image_sha256`: the digest of the exact zip the harness booted. It must equal the upload's expected sha256.
 - `result`: `pass` or `fail`. A failing run still writes a record, with `fail`.
-- `scenarios`: one entry per scenario run, each `pass` or `fail`. A passing record has every scenario `pass` and includes at least `first-boot`, `encrypted-conversion` and `second-boot`.
+- `scenarios`: one entry per scenario run, each `pass` or `fail`. A passing record has every scenario `pass` and includes at least `first-boot`, `conversion` and `second-boot`.
 - `harness_commit`, `runner`, `run_url`: where and with what the scenarios ran. `run_url` is the GitHub Actions run that uploaded the record's artifact; a real upload refuses a record that names any other run.
 
 Other keys are allowed and ignored, so the harness can add detail (log digests, timings) without a format change.

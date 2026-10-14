@@ -76,7 +76,7 @@ PAYLOAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.zip$")
 RECORDS = ("installer_data.json", "IMAGE", "PROVENANCE", "INSPECTION", "inputs")
 EVIDENCE_NAME = "acceptance-evidence.json"
 SUMS_NAME = "SHA256SUMS"
-REQUIRED_SCENARIOS = ("first-boot", "encrypted-conversion", "second-boot")
+REQUIRED_SCENARIOS = ("first-boot", "conversion", "second-boot")
 DRY_RUN_PREFIX = "dryrun-"
 PULL_REQUEST_EVENTS = ("pull_request", "pull_request_target")
 

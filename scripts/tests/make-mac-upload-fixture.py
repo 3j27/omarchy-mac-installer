@@ -47,7 +47,7 @@ def evidence(sha256: str, run_url: str) -> dict:
         "result": "pass",
         "scenarios": [
             {"name": "first-boot", "result": "pass"},
-            {"name": "encrypted-conversion", "result": "pass"},
+            {"name": "conversion", "result": "pass"},
             {"name": "second-boot", "result": "pass"},
         ],
         "harness_commit": "0" * 40,

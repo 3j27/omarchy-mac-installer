@@ -174,9 +174,9 @@ class UploadTests(unittest.TestCase):
             "image_sha256 is malformed": {"image_sha256": "F" * 64},
             "second-boot is 'fail'": {"scenarios": [
                 {"name": "first-boot", "result": "pass"},
-                {"name": "encrypted-conversion", "result": "pass"},
+                {"name": "conversion", "result": "pass"},
                 {"name": "second-boot", "result": "fail"}]},
-            "missing scenarios: encrypted-conversion": {"scenarios": [
+            "missing scenarios: conversion": {"scenarios": [
                 {"name": "first-boot", "result": "pass"}, {"name": "second-boot", "result": "pass"}]},
             "lists no scenarios": {"scenarios": []},
             "harness_commit is not a commit": {"harness_commit": "main"},
@@ -190,6 +190,20 @@ class UploadTests(unittest.TestCase):
                 destination = self.destination()
                 self.assertRefused(message, self.run_publish, destination, evidence=evidence)
                 self.assertEqual(destination.puts, [])
+
+    def test_the_catalog_takes_the_same_evidence_records(self):
+        # One record goes to both gates; a name only one of them knows would
+        # let no image through (the harness's fresh-install scenarios).
+        catalog = load("catalog_release", SCRIPTS / "catalog_release.py")
+        self.assertEqual(upload.REQUIRED_SCENARIOS, catalog.REQUIRED_SCENARIOS)
+        document = fixture.evidence(self.sha256, RUN_URL)
+        upload.check_evidence(document, self.sha256, RUN_URL)
+        self.assertEqual(catalog.check_evidence(document, self.sha256), document)
+        for change in ({"result": "fail"}, {"scenarios": document["scenarios"][:2]}):
+            with self.subTest(change):
+                failing = {**document, **change}
+                self.assertRaises(upload.Refusal, upload.check_evidence, failing, self.sha256)
+                self.assertRaises(catalog.Refusal, catalog.check_evidence, failing, self.sha256)
 
     def test_evidence_must_name_the_run_it_came_from(self):
         destination = self.destination()
