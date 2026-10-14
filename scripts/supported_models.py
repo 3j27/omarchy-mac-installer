@@ -5,7 +5,9 @@
 pinned engine can inspect. A catalog that offers any Mac offers all of them,
 so a release or preview can never ship a subset by accident. A channel with no
 Mac release yet (an empty catalog) is the only exception. `refused` names each
-board that stays out and why.
+board that stays out and why. `untested` marks the supported Macs that no
+image has been installed on yet (the M3 generation), with the note a catalog
+shows for each.
 
 Usage:
   supported_models.py check-catalog FILE   exit 1 unless FILE covers every Mac
@@ -29,6 +31,21 @@ def load(path: Path = MANIFEST) -> tuple[list[str], dict[str, str]]:
     if set(supported) & set(refused):
         raise SystemExit(f"{path}: a Mac is both supported and refused")
     return supported, refused
+
+
+def untested(path: Path = MANIFEST) -> dict[str, str]:
+    """Supported Macs no Omarchy image has been installed on yet, each with
+    the note a catalog shows for it."""
+    supported, _ = load(path)
+    notes = json.loads(path.read_text()).get("untested", {})
+    if not isinstance(notes, dict) or not all(
+        isinstance(note, str) and note for note in notes.values()
+    ):
+        raise SystemExit(f"{path}: untested maps each Mac to a note")
+    stray = set(notes) - set(supported)
+    if stray:
+        raise SystemExit(f"{path}: untested names unsupported Macs: {', '.join(sorted(stray))}")
+    return notes
 
 
 def coverage_errors(identifiers: list[str]) -> list[str]:

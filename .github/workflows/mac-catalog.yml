@@ -1,0 +1,300 @@
+name: Mac catalog
+
+# Signs and publishes a channel catalog that pins one uploaded image, its
+# engine and its installer_data.json by digest. Three jobs, so the catalog key
+# and a write token never share a job:
+#
+#   prepare  no secrets: refuses unless the VM evidence record passed for the
+#            image's exact sha256, checks every artifact URL serves its pinned
+#            bytes, and builds catalog-<channel>.json enabling every supported
+#            M1, M2 and M3 Mac
+#   sign     the catalog-release environment (main only, the owner approves
+#            each run): signs with CATALOG_SIGNING_KEY and verifies the
+#            envelope against Release/trust-root.ed25519.pub. A dry run then
+#            publishes to a scratch directory and stops.
+#   publish  contents: write, no key: replaces the catalog on the host and
+#            reads it back
+#
+# Inputs and the evidence record are documented in docs/catalog-release.md.
+# A caller (the edge publish trigger) must grant contents: write.
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: Image name, omarchy-mac-<channel>-<YYYY.MM.DD>-<package set id>
+        type: string
+        required: true
+      payload:
+        description: The uploaded image zip as JSON {url, fileName, sizeBytes, sha256, parts?}
+        type: string
+        required: true
+      engine:
+        description: The engine as JSON {version, url, fileName, sizeBytes, sha256, downstreamRevision}
+        type: string
+        required: true
+      installer-data:
+        description: The image's installer_data.json as JSON {url, fileName, sizeBytes, sha256}
+        type: string
+        required: true
+      evidence:
+        description: The VM acceptance evidence record (JSON)
+        type: string
+        required: true
+      installer:
+        description: App compatibility as JSON {minimumVersion, latestVersion, downloadURL}; required for engines from v0.9.2-omarchy.18
+        type: string
+        default: ''
+      channel:
+        description: Channel to publish (edge only until promotion is unparked)
+        type: string
+        default: edge
+      dry-run:
+        description: Sign and publish to a scratch directory only
+        type: boolean
+        default: true
+    secrets:
+      # The sign job reads the catalog-release environment's secret, which a
+      # caller must still pass: call with `secrets: inherit`. Callers must be
+      # workflows of this repository; catalog_release.py refuses others.
+      CATALOG_SIGNING_KEY:
+        required: false
+    outputs:
+      catalog-sha256:
+        description: sha256 of the unsigned catalog
+        value: ${{ jobs.prepare.outputs.catalog-sha256 }}
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Image name, omarchy-mac-<channel>-<YYYY.MM.DD>-<package set id>
+        type: string
+        required: true
+      payload:
+        description: The uploaded image zip as JSON {url, fileName, sizeBytes, sha256, parts?}
+        type: string
+        required: true
+      engine:
+        description: The engine as JSON {version, url, fileName, sizeBytes, sha256, downstreamRevision}
+        type: string
+        required: true
+      installer-data:
+        description: The image's installer_data.json as JSON {url, fileName, sizeBytes, sha256}
+        type: string
+        required: true
+      evidence:
+        description: The VM acceptance evidence record (JSON)
+        type: string
+        required: true
+      installer:
+        description: App compatibility as JSON {minimumVersion, latestVersion, downloadURL}; required for engines from v0.9.2-omarchy.18
+        type: string
+        default: ''
+      channel:
+        description: Channel to publish
+        type: choice
+        options: [edge]
+        default: edge
+      dry-run:
+        description: Sign and publish to a scratch directory only
+        type: boolean
+        default: true
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    name: Gate and build the catalog
+    # Only this repository's runs (a caller elsewhere would check out its own
+    # code); sign and publish need this job.
+    if: ${{ github.repository == 'omacom/omarchy-mac-installer' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      catalog-sha256: ${{ steps.build.outputs.catalog-sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Record the inputs
+        env:
+          IMAGE: ${{ inputs.image }}
+          PAYLOAD: ${{ inputs.payload }}
+          ENGINE: ${{ inputs.engine }}
+          INSTALLER_DATA: ${{ inputs.installer-data }}
+          EVIDENCE: ${{ inputs.evidence }}
+          INSTALLER: ${{ inputs.installer }}
+          CHANNEL: ${{ inputs.channel }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          inputs=$RUNNER_TEMP/catalog-inputs
+          mkdir -p "$inputs"
+          printf '%s\n' "$IMAGE" >"$inputs/image"
+          printf '%s\n' "$CHANNEL" >"$inputs/channel"
+          printf '%s\n' "$PAYLOAD" >"$inputs/payload.json"
+          printf '%s\n' "$ENGINE" >"$inputs/engine.json"
+          printf '%s\n' "$INSTALLER_DATA" >"$inputs/installer-data.json"
+          printf '%s\n' "$EVIDENCE" >"$inputs/evidence.json"
+          [[ -z $INSTALLER ]] || printf '%s\n' "$INSTALLER" >"$inputs/installer.json"
+          {
+            git rev-parse HEAD
+            openssl version
+            python3 --version
+            echo "dry_run=$DRY_RUN"
+          } | tee "$inputs/toolchain.txt"
+
+      - name: Run the catalog checks
+        run: python3 -m unittest discover -s scripts/tests -p 'test_catalog_release.py'
+
+      - name: Build the catalog
+        id: build
+        run: |
+          set -euo pipefail
+          inputs=$RUNNER_TEMP/catalog-inputs
+          installer=()
+          [[ ! -f $inputs/installer.json ]] || installer=(--installer "$inputs/installer.json")
+          python3 scripts/catalog_release.py prepare \
+            --channel "$(<"$inputs/channel")" --image "$(<"$inputs/image")" \
+            --payload "$inputs/payload.json" --engine "$inputs/engine.json" \
+            --installer-data "$inputs/installer-data.json" --evidence "$inputs/evidence.json" \
+            "${installer[@]}" --verify-remote --check-live --host github-release \
+            --out "$inputs" | tee "$inputs/prepare.log"
+          echo "catalog-sha256=$(sed -n 's/^catalog_sha256=//p' "$inputs/prepare.log")" >>"$GITHUB_OUTPUT"
+          {
+            echo "### Catalog for \`$(<"$inputs/image")\`"
+            echo '```'
+            cat "$inputs/prepare.log"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: catalog-unsigned
+          path: ${{ runner.temp }}/catalog-inputs/
+          if-no-files-found: error
+          retention-days: 14
+
+  sign:
+    name: Sign the catalog
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: catalog-release
+    permissions:
+      contents: read
+    concurrency:
+      group: mac-catalog-sign-${{ inputs.channel }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: catalog-unsigned
+          path: ${{ runner.temp }}/catalog-inputs
+
+      - name: Check the catalog is the one prepared and its evidence passed
+        env:
+          EXPECTED: ${{ needs.prepare.outputs.catalog-sha256 }}
+        run: |
+          set -euo pipefail
+          inputs=$RUNNER_TEMP/catalog-inputs
+          catalog=$inputs/catalog-$(<"$inputs/channel").json
+          [[ $(sha256sum "$catalog" | cut -d' ' -f1) == "$EXPECTED" ]]
+          python3 scripts/catalog_release.py check-evidence --catalog "$catalog" --evidence "$inputs/evidence.json"
+
+      - name: Sign
+        env:
+          CATALOG_SIGNING_KEY: ${{ secrets.CATALOG_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          inputs=$RUNNER_TEMP/catalog-inputs
+          catalog=$inputs/catalog-$(<"$inputs/channel").json
+          status=0
+          # No pipe: nothing but the signer starts while the key is set.
+          python3 scripts/catalog_release.py sign --key-env CATALOG_SIGNING_KEY \
+            --catalog "$catalog" --out "$RUNNER_TEMP/catalog-signed" >"$inputs/sign.log" 2>&1 || status=$?
+          unset CATALOG_SIGNING_KEY
+          cat "$inputs/sign.log"
+          exit "$status"
+
+      - name: Publish to a scratch directory (dry run)
+        if: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          inputs=$RUNNER_TEMP/catalog-inputs
+          channel=$(<"$inputs/channel")
+          python3 scripts/catalog_release.py publish --channel "$channel" \
+            --envelope "$RUNNER_TEMP/catalog-signed/catalog-$channel.signed.json" \
+            --host "scratch:$RUNNER_TEMP/catalog-scratch-host" | tee -a "$inputs/sign.log"
+          {
+            echo '### Dry run: nothing was published'
+            echo '```'
+            cat "$inputs/sign.log"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      # A dry run keeps only its log: a catalog signed with the real key for
+      # inputs nobody meant to publish never leaves the runner.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ inputs.dry-run }}
+        with:
+          name: catalog-dry-run-log
+          path: ${{ runner.temp }}/catalog-inputs/sign.log
+          retention-days: 14
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !inputs.dry-run }}
+        with:
+          name: catalog-signed
+          path: ${{ runner.temp }}/catalog-signed/
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    name: Publish the catalog
+    needs: [prepare, sign]
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # replace the catalog asset of the catalog-<channel> release
+    concurrency:
+      group: mac-catalog-publish-${{ inputs.channel }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: catalog-signed
+          path: ${{ runner.temp }}/catalog-signed
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ inputs.channel }}
+          EXPECTED: ${{ needs.prepare.outputs.catalog-sha256 }}
+        run: |
+          set -euo pipefail
+          envelope=$RUNNER_TEMP/catalog-signed/catalog-$CHANNEL.signed.json
+          python3 scripts/catalog_release.py verify-envelope --envelope "$envelope" --expect-sha256 "$EXPECTED"
+          python3 scripts/catalog_release.py publish --channel "$CHANNEL" --envelope "$envelope" \
+            --host github-release | tee "$RUNNER_TEMP/publish.log"
+          {
+            echo '### Published'
+            echo '```'
+            cat "$RUNNER_TEMP/publish.log"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

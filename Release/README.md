@@ -20,10 +20,9 @@ catalog key, replace that file with the new 32-byte public key and run
 --output Release/release.json` (after removing the old descriptor) to update
 the pinned fingerprint; `test/all` fails until the two agree. A build can also
 take both files from another release directory, `build-app.sh
-RELEASE_DIRECTORY OUTPUT_DIRECTORY`, which checks that they match. The private key lives in the operator's login keychain under the
-service `omarchy-channel-signing-key` and must never appear here or anywhere
-else on disk; see
-[`docs/apple-silicon-distribution-channels.md`](https://github.com/maralcbr/omarchy-mx-mac/blob/92a9054f4565b37739ac3bd4f0fb4fcf8bd48625/docs/apple-silicon-distribution-channels.md).
+RELEASE_DIRECTORY OUTPUT_DIRECTORY`, which checks that they match.
+
+The trust root is the Omacom catalog key (`sha256:bb914ffba2a74d05fd8d57013999376654ff9d7489929c76996a7f7716f27ea3`). Its private key is the `CATALOG_SIGNING_KEY` secret of the `catalog-release` environment, used only by `.github/workflows/mac-catalog.yml`, with the owner's backup in the Keychain item `omacom-catalog-signing-key` and 1Password. It must never appear here or anywhere else on disk; see [`docs/catalog-release.md`](../docs/catalog-release.md).
 
 The default channel is `edge`. The channels match Omarchy's (stable, rc, edge; dev is a developer choice made after installation), and today only edge has a Mac release. Stable and rc serve signed empty catalogs (`scripts/publish-channels empty-catalog`), which the app shows as "No Mac release yet", never as a channel it cannot reach or verify.
 
