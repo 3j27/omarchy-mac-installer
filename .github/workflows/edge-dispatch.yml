@@ -7,9 +7,10 @@ name: Edge publish filter
 # the builder's own packages, the edge runtime's package lists and their
 # dependencies, resolved in the repository order the runtime's Apple pacman
 # template gives, as build-mac-image's read_repository_order does) and, only then,
-# starts the Mac image workflow (mac-image.yml) on the default branch. An
-# unrelated publish ends here, successfully. The image workflow builds and
-# publishes nothing on its own; this workflow builds nothing at all.
+# starts the Mac release pipeline (mac-release-pipeline.yml, dry-run=false) on
+# the default branch: build, VM acceptance, upload, and a catalog the owner
+# approves. An unrelated publish ends here, successfully. This workflow builds
+# nothing at all.
 #
 # A repository_dispatch run always uses the default branch's workflow and
 # code, so a payload can never choose what runs. The payload is read only
@@ -23,7 +24,7 @@ permissions: {}
 
 # Deliberately no concurrency group: a group keeps one queued run and drops
 # the rest, which could drop a relevant publish behind an unrelated one.
-# Runs are independent; mac-image.yml serializes the builds.
+# Runs are independent; the pipeline serializes the builds.
 
 defaults:
   run:
@@ -36,7 +37,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      actions: write # gh workflow run mac-image.yml
+      actions: write # gh workflow run mac-release-pipeline.yml
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -108,7 +109,7 @@ jobs:
             echo "- edge omarchy.db: $(jq -r .database_sha256 "$WORK/decision.json") (publish reported $(jq -r '.payload_database_sha256 // "none"' "$WORK/decision.json"))"
           } >>"$GITHUB_STEP_SUMMARY"
 
-      - name: Start the Mac image build
+      - name: Start the Mac release pipeline
         if: steps.decide.outputs.relevant == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -116,15 +117,15 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          # Until the image workflow lands on the default branch there is nothing
-          # to start. Only a 404 means that; any other failure fails this run.
-          if ! error=$(gh api "repos/$REPOSITORY/contents/.github/workflows/mac-image.yml?ref=$DEFAULT_BRANCH" --silent 2>&1); then
+          # Until the pipeline lands on the default branch there is nothing to
+          # start. Only a 404 means that; any other failure fails this run.
+          if ! error=$(gh api "repos/$REPOSITORY/contents/.github/workflows/mac-release-pipeline.yml?ref=$DEFAULT_BRANCH" --silent 2>&1); then
             if [[ $error == *"HTTP 404"* ]]; then
-              echo "::notice::mac-image.yml is not on $DEFAULT_BRANCH yet; no build started"
+              echo "::notice::mac-release-pipeline.yml is not on $DEFAULT_BRANCH yet; nothing started"
               exit 0
             fi
-            echo "::error::could not check for mac-image.yml: $error"
+            echo "::error::could not check for mac-release-pipeline.yml: $error"
             exit 1
           fi
-          gh workflow run mac-image.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH"
-          echo "Started mac-image.yml on $DEFAULT_BRANCH" | tee -a "$GITHUB_STEP_SUMMARY"
+          gh workflow run mac-release-pipeline.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" -f dry-run=false
+          echo "Started mac-release-pipeline.yml (dry-run=false) on $DEFAULT_BRANCH" | tee -a "$GITHUB_STEP_SUMMARY"

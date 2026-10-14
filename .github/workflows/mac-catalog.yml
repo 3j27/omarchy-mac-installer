@@ -16,7 +16,7 @@ name: Mac catalog
 #            reads it back
 #
 # Inputs and the evidence record are documented in docs/catalog-release.md.
-# A caller (the edge publish trigger) must grant contents: write.
+# A caller (mac-release-pipeline.yml) must grant contents: write.
 
 on:
   workflow_call:
@@ -55,8 +55,9 @@ on:
         default: true
     secrets:
       # The sign job reads the catalog-release environment's secret, which a
-      # caller must still pass: call with `secrets: inherit`. Callers must be
-      # workflows of this repository; catalog_release.py refuses others.
+      # caller must still pass by name (as mac-release-pipeline.yml does), or
+      # it resolves to empty. Callers must be workflows of this repository;
+      # catalog_release.py refuses others.
       CATALOG_SIGNING_KEY:
         required: false
     outputs:

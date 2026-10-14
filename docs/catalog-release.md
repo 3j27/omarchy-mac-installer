@@ -22,7 +22,7 @@
 
 ## Callers
 
-Only workflows of omacom/omarchy-mac-installer may call it (the `prepare` job runs only there and `catalog_release.py` refuses another `GITHUB_REPOSITORY`: a caller elsewhere would check out its own code with its own token). Call with `secrets: inherit`: GitHub requires the caller to pass even an environment secret, which otherwise resolves to empty and the signer refuses. The caller must grant `contents: write`. A pipeline in another repository dispatches this workflow instead.
+Only workflows of omacom/omarchy-mac-installer may call it (the `prepare` job runs only there and `catalog_release.py` refuses another `GITHUB_REPOSITORY`: a caller elsewhere would check out its own code with its own token). Pass the key by name, `secrets: CATALOG_SIGNING_KEY: ${{ secrets.CATALOG_SIGNING_KEY }}`, as `mac-release-pipeline.yml` does, rather than `secrets: inherit`. GitHub delivers an environment secret to a called workflow only when the caller passes it, by name or with `inherit`; otherwise it resolves to empty and the signer refuses. The caller has no environment, so on its side the name resolves to empty, and only the `sign` job (environment `catalog-release`) sees the value. A throwaway probe confirmed all three cases (run 38553165283). The caller must grant `contents: write`. A pipeline in another repository dispatches this workflow instead.
 
 ## Inputs
 
@@ -58,7 +58,7 @@ Ticket 06's acceptance job writes it; ticket 07's upload and this workflow consu
 - `result` is `pass` or `fail`; each scenario's `result` is `pass`, `fail` or `skip`. Scenario names are the harness's (`tools/acceptance/mac-image/run --list`).
 - A publish is refused unless `image_sha256` equals the payload's `sha256`, `result` is `pass`, no scenario failed, and `first-boot`, `conversion` and `second-boot` (the harness's `fresh-install`) all passed.
 - Other keys may be added and are ignored here.
-- The record is trusted as passed in: the workflow checks its shape and digest, not its origin. When chained (ticket 09), it must come from the acceptance job of the same run; run by hand, the owner's approval of the `sign` job is the check that it is genuine. Binding it to a verified acceptance run (fetching `run_url`'s artifact) is left to tickets 06 and 09.
+- The record is trusted as passed in: the workflow checks its shape and digest, not its origin. Chained (`mac-release-pipeline.yml`), it is the record the upload job checked, taken from the same run's acceptance artifact; run by hand, the owner's approval of the `sign` job is the check that it is genuine. Attesting the record in the acceptance job is left to ticket 06.
 
 ## Hosts
 
