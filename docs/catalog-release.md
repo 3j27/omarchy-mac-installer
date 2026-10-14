@@ -40,7 +40,7 @@ All JSON inputs are strict: unknown keys are refused. Digests are 64 lowercase h
 
 ## VM evidence record
 
-Ticket 06's acceptance job writes it; ticket 07's upload and this workflow consume it.
+The VM acceptance job (`mac-acceptance.yml`) writes and attests it; the upload (`mac-upload.yml`) and this workflow consume it.
 
 ```json
 {

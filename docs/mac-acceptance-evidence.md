@@ -1,10 +1,10 @@
 # Mac acceptance evidence record
 
-The VM acceptance job writes one evidence record per tested image. The upload job (`mac-upload.yml`) and the catalog job refuse an image unless its record passes. `scripts/mac-upload.py check-evidence --evidence FILE --sha256 HEX` is the upload's check, and the acceptance job's gate uses it too. The catalog checks with `catalog_release.py check-evidence`, which takes every record the upload takes (it also allows `skip` for scenarios outside the required three).
+The VM acceptance job (`.github/workflows/mac-acceptance.yml`) writes one evidence record per tested image: `scripts/mac-acceptance-record.py` turns the harness's `run.txt` and exit status into the record, on every run, passing or not. The upload job (`mac-upload.yml`) and the catalog job refuse an image unless its record passes. `scripts/mac-upload.py check-evidence --evidence FILE --sha256 HEX` is the upload's check, and the acceptance job's gate uses it too. The catalog checks with `catalog_release.py check-evidence`, which takes every record the upload takes (it also allows `skip` for scenarios outside the required three).
 
 ## Format
 
-A JSON object in a file named `acceptance-evidence.json`, uploaded as its own workflow artifact (the upload job's `evidence-artifact` input names it):
+A JSON object in a file named `acceptance-evidence.json`, uploaded as its own workflow artifact, `acceptance-evidence` (the upload job's `evidence-artifact` input names it):
 
 ```json
 {
@@ -28,6 +28,15 @@ A JSON object in a file named `acceptance-evidence.json`, uploaded as its own wo
 
 Other keys are allowed and ignored, so the harness can add detail (log digests, timings) without a format change.
 
+## How the acceptance job fills it in
+
+- `image_sha256` is the job's `image-sha256` input. The job checks the downloaded zip against it, and the zip's build attestation from `mac-image.yml` on `main`, before the harness runs; a mismatch writes a failing record.
+- `scenarios` comes from the harness's `run.txt` (`ok`, `not ok` and `skip` lines, each naming its scenario). A scenario with a `not ok` line, or with no line at all because the run stopped before it, fails; one with only `skip` lines is `skip`. When the harness fails without a `not ok` line for any scenario, the scenario that was running fails.
+- `result` is `pass` only when the harness exited 0, every scenario passed, and the record passes `mac-upload.py check-evidence`. Otherwise it is `fail`, with a `reason`.
+- `harness_commit` is the job's pinned `HARNESS_COMMIT`, checked against the fetched harness.
+- `runner` is the job's `runs-on` labels, the runner's name and its host name, at most 200 characters.
+- Extra keys: `image` (the image name), `harness_status` (the harness's exit status, `null` when it never ran) and `reason`.
+
 ## Where a record is trusted from
 
-A real upload takes the record only from a run of this repository's `main` branch that was not triggered by a pull request and, unless it is the upload's own run, that succeeded (`check-run`). Any such run can upload an artifact, so the acceptance job should also attest the record; binding the record to the acceptance workflow is left to ticket 06. Dry runs accept a record from any run they're given and still check it.
+A real upload takes the record only from a run of this repository's `main` branch that was not triggered by a pull request and, unless it is the upload's own run, that succeeded (`check-run`). Any such run can upload an artifact, so the acceptance workflow's `attest` job (GitHub-hosted, after a passing record) attests the record, and a real upload refuses a record without an attestation whose signer is `mac-acceptance.yml` on `main` from a GitHub-hosted runner. Dry runs accept a record from any run they're given, warn when it has no attestation, and still check it.

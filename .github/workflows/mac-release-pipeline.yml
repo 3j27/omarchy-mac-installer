@@ -4,15 +4,17 @@ name: Mac release pipeline
 #
 #   plan        refuses a real run off main or for a pull request
 #   build       mac-image.yml: builds and attests the image (no secrets)
-#   acceptance  mac-acceptance.yml: VM acceptance of that exact sha256; writes
-#               the evidence record and fails unless it passed. A PLACEHOLDER
-#               until ticket 06 that always fails closed, so today the
-#               pipeline stops here.
+#   acceptance  mac-acceptance.yml: the VM harness's fresh-install scenarios
+#               on that exact sha256, on the VM runner (the `runner` input;
+#               the M2 lab's ephemeral self-hosted runner until Namespace).
+#               Writes the evidence record, attests it when it passed, and
+#               fails unless it passed.
 #   catalog-inputs  the engine and app blocks from .github/mac-release-pipeline.json;
 #               a real run without an app release stops here, before anything
 #               is public
 #   upload      mac-upload.yml, only after passing evidence: in the publish
-#               environment (main only) it re-checks the evidence and the
+#               environment (main only) it re-checks the evidence, the
+#               evidence's attestation by mac-acceptance.yml and the image's
 #               build attestation, uploads, publishes the draft as a
 #               prerelease and outputs the catalog's payload, installer-data
 #               and evidence inputs. A dry run uploads to a scratch release
@@ -22,9 +24,9 @@ name: Mac release pipeline
 #               and signs in catalog-release, which waits for the owner's
 #               approval: the pipeline's only manual step.
 #
-# Data passes as job outputs (image name, sha256, evidence, catalog inputs)
-# and as artifacts of this run (the image, the evidence record), which the
-# called workflows read by name. Every gate stays in the called workflow it
+# Data passes as job outputs (image name, sha256, evidence artifact and run,
+# catalog inputs) and as artifacts of this run (the image, the evidence
+# record), which the called workflows read by name. Every gate stays in the called workflow it
 # belongs to; this file only adds ordering and the skip conditions.
 #
 # Secrets: only the catalog's signing key, passed by name to mac-catalog.yml.
@@ -46,6 +48,10 @@ on:
         description: Upload to a scratch release and delete it; sign no catalog
         type: boolean
         default: true
+      runner:
+        description: The VM acceptance job's runs-on as JSON; empty for mac-acceptance.yml's default (the M2 lab runner until Namespace)
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -98,9 +104,13 @@ jobs:
     uses: ./.github/workflows/mac-acceptance.yml
     permissions:
       contents: read
+      actions: read # the image artifact
+      attestations: write # the evidence record's attestation (attest job only)
+      id-token: write # its Sigstore certificate (attest job only)
     with:
       image-artifact: ${{ needs.build.outputs.name }}
       image-sha256: ${{ needs.build.outputs.sha256 }}
+      runner: ${{ inputs.runner }}
 
   catalog-inputs:
     name: Catalog inputs
@@ -163,6 +173,7 @@ jobs:
       image-sha256: ${{ needs.build.outputs.sha256 }}
       dry-run: ${{ inputs.dry-run }}
       evidence-artifact: ${{ needs.acceptance.outputs.evidence-artifact }}
+      evidence-run-id: ${{ needs.acceptance.outputs.evidence-run-id }}
       make-public: ${{ !inputs.dry-run }}
 
   catalog:
