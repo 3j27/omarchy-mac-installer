@@ -67,7 +67,8 @@
   }
 
   public struct LaunchdHelperSelfUninstaller: HelperSelfUninstalling {
-    private static let logger = Logger(subsystem: "com.omarchy.installer", category: "helper")
+    private static let logger = Logger(
+      subsystem: InstallerProductIdentity.appIdentifier, category: "helper")
 
     private let label: String
     private let jobFile: URL
