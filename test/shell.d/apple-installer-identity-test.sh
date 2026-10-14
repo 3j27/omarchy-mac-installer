@@ -117,7 +117,8 @@ done
 pass "release inputs are derived from identity.conf"
 
 # Values set here must not be repeated in code, scripts or tests. Docs,
-# recorded evidence and the derived release inputs checked above may name them.
+# recorded evidence, the derived release inputs checked above and the
+# pipeline's record of published releases may name them.
 guarded=(
   "$INSTALLER_APP_NAME" "$INSTALLER_LEGACY_APP_NAME" "$INSTALLER_FILE_STEM" "$INSTALLER_APP_IDENTIFIER"
   "$INSTALLER_HELPER_IDENTIFIER" "$INSTALLER_PKG_IDENTIFIER" "$INSTALLER_TEAM_ID"
@@ -132,7 +133,7 @@ for value in "${guarded[@]}"; do
 done
 git -C "$ROOT" ls-files -z >"$test_tmp/tracked" || fail "git lists the tracked files"
 mapfile -d '' -t tracked <"$test_tmp/tracked"
-exempt='^(docs|evidence|Design)/|\.md$|^Packaging/identity\.conf$|^Release/release\.json$|^scripts/release-inputs.*\.template\.json$'
+exempt='^(docs|evidence|Design)/|\.md$|^Packaging/identity\.conf$|^Release/release\.json$|^scripts/release-inputs.*\.template\.json$|^\.github/mac-release-pipeline\.json$'
 scanned=()
 for file in "${tracked[@]}"; do
   # A submodule gitlink is a directory, not a file to scan.

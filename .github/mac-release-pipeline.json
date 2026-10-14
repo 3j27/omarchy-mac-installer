@@ -7,5 +7,9 @@
     "sha256": "0cf1aa87760f90a545298b7cef737c9b497f2cad421d79ac59f557a81f2eb146",
     "downstreamRevision": "dff6311446439e1f29f0f2e6c0cf82a9a190e5bc"
   },
-  "installer": null
+  "installer": {
+    "minimumVersion": "2.2.0",
+    "latestVersion": "2.2.0",
+    "downloadURL": "https://github.com/omacom/omarchy-mac-installer/releases/download/v2.2.0/Omarchy-Mac-Installer-2.2.0.dmg"
+  }
 }
