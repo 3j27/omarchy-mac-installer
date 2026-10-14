@@ -17,8 +17,6 @@ name: Mac app release
 on:
   push:
     tags: ['v*']
-    # Temporary: this branch's pre-merge ad hoc dry run. Removed before merge.
-    branches: [mac-app-release]
   workflow_dispatch:
     inputs:
       dry-run:
