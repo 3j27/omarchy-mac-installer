@@ -169,9 +169,14 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         for name, text, message in (
                 ("missing", False, "no Apple pacman template"),
                 ("short", template(EDGE_ORDER[:-1]), "names the repositories omarchy asahi-alarm core extra alarm, not"),
-                ("extra", template(EDGE_ORDER + ("testing",)), "not the pinned")):
+                ("extra", template(EDGE_ORDER + ("testing",)), "not the pinned"),
+                ("crlf-missing", template(EDGE_ORDER[1:]).replace(b"\n", b"\r\n"), "not the pinned")):
             with self.subTest(name), self.assertRaisesRegex(ValueError, message):
                 self.decide("linux-aurora", edge=make_edge(self.base / f"edge-{name}", template_text=text))
+
+    def test_a_crlf_template_reads_as_sed_reads_it(self):
+        edge = make_edge(self.base / "edge-crlf", template_text=template(EDGE_ORDER).replace(b"\n", b"\r\n"))
+        self.assertEqual(self.decide(edge=edge)["repository_order"], list(EDGE_ORDER))
 
     def test_the_template_is_the_one_build_mac_image_reads(self):
         builder = (ROOT / "bin/build-mac-image").read_text()
@@ -220,6 +225,14 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         self.assertEqual(from_omarchy, ["app", "lib", "member-a", "member-b", "plain", "thing", "virt-new"])
         self.assertNotIn(("extra", "lib"), chosen)
         self.assertNotIn(("extra", "tool"), chosen, "a target's literal name wins over a provider")
+
+    def test_a_package_does_not_meet_dependencies_inside_its_own_subtree(self):
+        def entry(provides=(), depends=()):
+            return {"VERSION": ["1-1"], "PROVIDES": list(provides), "DEPENDS": list(depends), "GROUPS": []}
+        omarchy = {"app": entry(depends=["x"]), "provider": entry(provides=["v"])}
+        extra = {"x": entry(provides=["v"], depends=["y"]), "y": entry(depends=["v"])}
+        chosen = edge_filter.resolve([("omarchy", omarchy), ("extra", extra)], [], ["app"])
+        self.assertIn(("omarchy", "provider"), chosen, "x is not in the transaction yet when y needs v")
 
     def test_vercmp_orders_versions_as_pacman_does(self):
         # vercmp(8)'s example ordering.

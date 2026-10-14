@@ -61,7 +61,7 @@ OTHER_REPOS = ('asahi-alarm', 'core', 'extra', 'alarm', 'aur')
 PINNED_ORDER = OTHER_REPOS + ('omarchy',)
 # read_repository_order's template, in the archive filling the omarchy-settings role.
 TEMPLATE = 'usr/share/omarchy/default/pacman/aarch64-apple/pacman-{channel}.conf'
-SECTION = re.compile(r'^[ \t]*\[([^]]*)\][ \t]*$', re.MULTILINE)
+SECTION = re.compile(r'^[ \t\r\f\v]*\[([^]]*)\][ \t\r\f\v]*$', re.MULTILINE)
 NAME = re.compile(r'[A-Za-z0-9@._+-]+')
 HEX64 = re.compile(r'[0-9a-f]{64}')
 MAX_PACKAGES = 2000
@@ -308,11 +308,14 @@ def resolve(repositories, chosen_first, targets):
             if not wanted or any(meets(v, operator, version) for v in satisfiers.get(wanted, [])):
                 continue
             for found in find(wanted, operator, version):
-                for provided, provided_version in provisions(found[1], found[2]):
-                    satisfiers.setdefault(provided, []).append(provided_version)
                 install(*found)
         visiting.discard((repository, name))
-        chosen.add((repository, name))
+        # Like libalpm, a package joins the transaction (and starts meeting dependencies) only once
+        # its own dependencies are resolved, so its provides never satisfy its own subtree.
+        if (repository, name) not in chosen:
+            chosen.add((repository, name))
+            for provided, provided_version in provisions(name, entry):
+                satisfiers.setdefault(provided, []).append(provided_version)
 
     for package in preferred:
         install(*package)
