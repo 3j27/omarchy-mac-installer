@@ -62,6 +62,9 @@ esac
 
 if [[ $dry_run == false ]]; then
   [[ -n $tag_version ]] || fail "only a v* tag publishes; $ref can only dry-run"
+  # The app and the catalog's installer block compare only X.Y.Z; a suffixed
+  # version would skip the app's minimum-version check.
+  [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "a release version is X.Y.Z, not $version"
   [[ $signing == developer-id ]] || fail "a release is signed with the Developer ID"
 fi
 if [[ $signing == developer-id && -z $tag_version && $ref != refs/heads/main ]]; then
