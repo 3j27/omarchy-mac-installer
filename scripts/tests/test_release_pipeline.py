@@ -287,6 +287,15 @@ class AcceptanceJobs(unittest.TestCase):
     def setUp(self) -> None:
         self.jobs = jobs(ACCEPTANCE)
 
+    def test_the_harness_and_cleanup_steps_turn_off_errexit(self):
+        # The bash shell runs with -e: a failing harness would skip writing its
+        # status, and pkill finding nothing would end the cleanup at once.
+        workflow = text(ACCEPTANCE)
+        for name in ("Run the harness", "Remove the image and the run's disks"):
+            after = workflow[workflow.index(f"- name: {name}"):]
+            first = re.search(r"^\s+set .*$", after, re.M).group(0).strip()
+            self.assertTrue(first.startswith("set +e"), f"{name} starts with {first!r}")
+
     def test_the_jobs_are_guard_vm_attest(self):
         self.assertEqual(list(self.jobs), ["guard", "acceptance", "attest"])
         self.assertEqual(field(self.jobs["acceptance"], "needs"), "guard")
