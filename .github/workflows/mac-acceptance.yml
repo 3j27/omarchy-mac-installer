@@ -270,7 +270,8 @@ jobs:
           OMARCHY_VM_IMAGE_STATE_DIR: ${{ env.ROOT }}/state
           OMARCHY_VM_EVIDENCE_DIR: ${{ env.ROOT }}/evidence
         run: |
-          set -uo pipefail
+          # The bash shell runs with -e; this step must reach its end.
+          set +e -uo pipefail
           "$ROOT/harness/tools/acceptance/mac-image/run" --image "$ROOT/image" --scenario "$SCENARIOS" &
           pid=$!
           # Cleanup removes the udev rule the harness names after its PID.
@@ -361,7 +362,8 @@ jobs:
       - name: Remove the image and the run's disks
         if: always()
         run: |
-          set -uo pipefail
+          # The bash shell runs with -e; this step must reach its end.
+          set +e -uo pipefail
           [[ $ROOT =~ ^/var/tmp/omarchy-mac-acceptance/[0-9]+-[0-9]+$ ]] || { echo "::error::unexpected run directory $ROOT"; exit 1; }
           if [[ -n ${HARNESS_PID:-} ]] && kill -0 "$HARNESS_PID" 2>/dev/null; then
             kill "$HARNESS_PID" 2>/dev/null
