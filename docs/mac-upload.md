@@ -18,13 +18,13 @@ Callers grant `contents: write`, `actions: read` and `attestations: read`.
 
 ## What a real upload does
 
-1. Runs in the `publish` environment, which deploys only from `main`.
-2. Refuses unless the image and evidence runs are this repository's `main` and not pull requests, the zip carries a build attestation from `mac-image.yml` on `main`, the zip's sha256 is the expected one, and the evidence record passes for that sha256.
+1. Runs in the `publish` environment, which deploys only from `main`, and refuses any other ref itself too.
+2. Refuses unless the image and evidence runs are this repository's `main`, not pull requests and (if they are other runs) successful, the evidence names the run it came from, the zip carries a build attestation from `mac-image.yml` on `main`, the zip's sha256 is the expected one, and the evidence record passes for that sha256.
 3. Stages the files: the zip in `<zip>.partNN` files of at most 1992294400 bytes (2 to 16 parts, the convention the app's catalog parser and `publish-m1-release` share; a zip that fits in one part is uploaded whole), `<zip>.sha256`, `installer_data.json`, `IMAGE`, `PROVENANCE`, `INSPECTION`, `inputs`, `acceptance-evidence.json`, and `SHA256SUMS` over all of them and the whole zip, uploaded last.
 4. Lists the destination before writing anything. A file already there with the same bytes is skipped, so an identical re-upload (or a resumed one) is a no-op; a file with different bytes, or a file this upload doesn't have, refuses the whole upload.
 5. Uploads the missing files, downloads every file back and checks its sha256.
 
-The stopgap destination is a draft prerelease on omacom/omarchy-mac-installer, named and tagged after the image, never marked latest. Publishing the draft is not this job's decision.
+The stopgap destination is a draft prerelease on omacom/omarchy-mac-installer, named and tagged after the image, never marked latest. Publishing the draft is not this job's decision, and once it is published the job never adds to it. Only the zip is attested by the image build; the records beside it are trusted as part of the same artifact.
 
 ## Dry run
 
