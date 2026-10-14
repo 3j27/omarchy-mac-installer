@@ -21,6 +21,10 @@ descriptor  a build directory whose IMAGE names the lane, platform, builder
             commit, candidate set, package set digest, each payload member's
             sha256 and the inputs digest, matching the bytes and records
             beside it.
+name        a public build directory (descriptor, from a channel set): prints
+            the image's name, omarchy-mac-<lane>-<YYYY.MM.DD>-<package set id>,
+            the date its inputs were resolved (the payload's date) and the
+            first 12 hex digits of IMAGE's package_set_sha256.
 
 A channel build (its inputs record names channel_set=, builder/channel_set.py)
 names its channel set, signer and manifest and the channel database's sha256
@@ -842,11 +846,33 @@ def check_descriptor(lane: str, directory: Path) -> None:
     require(recorded == digests, "IMAGE does not name each payload member's sha256")
 
 
+# A public image's name: its lane, the date its inputs were resolved, and its
+# package set id, the first 12 hex digits of package_set_sha256 (every installed
+# package's name, version and archive sha256), so a rebuild of the same package
+# set on the same day has the same name and any changed package changes it.
+PACKAGE_SET_ID_LENGTH = 12
+IMAGE_NAME = re.compile(r"^omarchy-mac-(edge|rc|stable)-\d{4}\.\d{2}\.\d{2}-[0-9a-f]{12}$")
+
+
+def image_name(lane: str, directory: Path) -> str:
+    check_descriptor(lane, directory)
+    fields = parse_fields(directory / "IMAGE")
+    require(is_channel(fields), "only a public image built from a channel set is named")
+    require(check_recorded_profile(lane, fields, "IMAGE") == "release", "a lab image is not named")
+    digest = once(fields, "package_set_sha256", "IMAGE")
+    require(re.fullmatch(r"[0-9a-f]{64}", digest) is not None, "IMAGE's package_set_sha256 is malformed")
+    date = re.match(r"^omarchy-(\d{4}\.\d{2}\.\d{2})-", payload_in(directory, lane).name).group(1)
+    name = f"omarchy-mac-{lane}-{date}-{digest[:PACKAGE_SET_ID_LENGTH]}"
+    require(IMAGE_NAME.fullmatch(name) is not None, f"{name} is not an image name")
+    return name
+
+
 USAGE = """Usage: mac-image-check payload <edge|rc|stable> PAYLOAD.zip INSTALLER_DATA.json [--profile lab]
        mac-image-check image <edge|rc|stable> ROOT.img BOOT.img ESP_DIR --candidates DIR [--report FILE] [--profile lab]
        mac-image-check tree <edge|rc|stable> ROOT_TREE [FACTORY_TREE] --candidates DIR [--report FILE] [--profile lab]
        mac-image-check provenance <edge|rc|stable> BUILD_DIR
-       mac-image-check descriptor <edge|rc|stable> BUILD_DIR"""
+       mac-image-check descriptor <edge|rc|stable> BUILD_DIR
+       mac-image-check name <edge|rc|stable> BUILD_DIR"""
 
 
 def main(argv: list[str]) -> int:
@@ -866,7 +892,7 @@ def main(argv: list[str]) -> int:
                 options[arg[2:]] = Path(value)
         else:
             rest.append(arg)
-    arity = {"payload": 2, "image": 3, "tree": None, "provenance": 1, "descriptor": 1}
+    arity = {"payload": 2, "image": 3, "tree": None, "provenance": 1, "descriptor": 1, "name": 1}
     if len(rest) < 3 or rest[0] not in arity or rest[1] not in LANES:
         print(USAGE, file=sys.stderr)
         return 64
@@ -894,6 +920,9 @@ def main(argv: list[str]) -> int:
             inspect_tree(lane, Path(paths[0]), factory, options["candidates"], options.get("report"), digest, profile)
         elif mode == "provenance":
             check_provenance(lane, Path(paths[0]))
+        elif mode == "name":
+            print(image_name(lane, Path(paths[0])))
+            return 0
         else:
             check_descriptor(lane, Path(paths[0]))
     except CheckError as error:

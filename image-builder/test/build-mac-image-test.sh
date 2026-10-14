@@ -747,3 +747,107 @@ for options in "--candidates $channel|takes no --candidates" "--lab-access $scra
 done
 [[ ! -e $scratch/out ]] || fail "a refused channel build writes nothing"
 pass "a channel record refuses --candidates and --lab-access"
+
+# ── repository order ───────────────────────────────────────────────────────
+# A channel image searches the repositories in the order of the Apple template
+# its runtime settings package ships (omarchy-settings-dev on edge), which
+# becomes the installed /etc/pacman.conf: [omarchy] first.
+# (A test above replaced repositories; take the builder's back.)
+# shellcheck source=/dev/null
+source <(sed -n '/^repositories() {/,/^}/p' "$here/bin/build-mac-image")
+runtime_template() {
+  local tree=$scratch/runtime-tree
+  rm -rf "$tree"
+  mkdir -p "$tree/usr/share/omarchy/default/pacman/aarch64-apple"
+  [[ -z $1 ]] || printf '%s' "$1" >"$tree/usr/share/omarchy/default/pacman/aarch64-apple/pacman-edge.conf"
+  touch "$tree/usr/share/omarchy/.keep"
+  bsdtar -cf "$channel/candidates/s.pkg.tar.zst" -C "$tree" usr
+}
+RUNTIME_TEMPLATE='[options]
+SigLevel = Required DatabaseOptional
+# [core-testing]
+[omarchy]
+Server = https://pkgs.omarchy.org/edge/$arch
+[asahi-alarm]
+Server = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64
+[core]
+Include = /etc/pacman.d/mirrorlist
+[extra]
+Include = /etc/pacman.d/mirrorlist
+[alarm]
+Include = /etc/pacman.d/mirrorlist
+[aur]
+Include = /etc/pacman.d/mirrorlist
+'
+runtime_template "$RUNTIME_TEMPLATE"
+(
+  candidates=$channel/candidates
+  field() { sed -n "s/^$1=//p" "$channel/inputs"; }
+  fail() { builder_fail "$@"; }
+  read_repository_order
+  sections=$(render_config /repos /cache | sed -n 's/^\[\(.*\)\]$/\1/p' | paste -sd' ' -)
+  [[ $sections == "options omarchy-candidates omarchy asahi-alarm core extra alarm aur omarchy-aarch64" ]] ||
+    fail "a channel image searches its runtime's Apple template's order: $sections"
+  [[ $(repositories | sed -n 2p) == "omarchy $db_sha https://pkgs.omarchy.org/edge/\$arch" ]] ||
+    fail "[omarchy] keeps the record's database and server"
+)
+(
+  candidates=$candidates
+  fail() { builder_fail "$@"; }
+  read_repository_order
+  [[ ${repository_order[*]} == "asahi-alarm core extra alarm aur omarchy" ]] ||
+    fail "a candidate set keeps the Apple profile's order: ${repository_order[*]}"
+)
+pass "a channel image searches [omarchy] first, as its runtime's Apple template does; a candidate set keeps [omarchy] last"
+
+refused_order() {
+  local expected=$1 what=$2 refusal
+  refusal=$( (candidates=$channel/candidates; field() { sed -n "s/^$1=//p" "$channel/inputs"; }
+    fail() { builder_fail "$@"; }; read_repository_order) 2>&1 >/dev/null) && fail "$what is refused"
+  [[ $refusal == *"$expected"* ]] || fail "$what is refused: $refusal"
+}
+runtime_template "$(sed '/^\[aur\]/,$d' <<<"$RUNTIME_TEMPLATE")"
+refused_order "names the repositories omarchy asahi-alarm core extra alarm, not the pinned" "a template missing a pinned repository"
+runtime_template "$RUNTIME_TEMPLATE"$'[omarchy-aarch64]\nServer = https://example.invalid\n'
+refused_order "not the pinned" "a template with a repository the record does not pin"
+runtime_template ""
+refused_order "the runtime ships no Apple pacman template for the channel" "a runtime without the template"
+runtime_template "$RUNTIME_TEMPLATE"
+pass "a runtime template that names other repositories than the pinned ones, or none, stops the build"
+
+# The resolution itself, where pacman exists (the Arch Linux ARM source-check
+# container): a package both [omarchy] and Arch Linux ARM carry comes from
+# [omarchy] in a channel image, as on the installed Mac.
+if command -v pacman >/dev/null 2>&1; then
+  sync_db() {
+    local repository=$1 version=$2 tree=$scratch/db-$1
+    mkdir -p "$tree/hyprland-$version" "$scratch/repos/$repository"
+    printf '%%FILENAME%%\nhyprland-%s-aarch64.pkg.tar.zst\n\n%%NAME%%\nhyprland\n\n%%VERSION%%\n%s\n\n%%ARCH%%\naarch64\n\n%%CSIZE%%\n1\n' \
+      "$version" "$version" >"$tree/hyprland-$version/desc"
+    bsdtar -czf "$scratch/dbpath/sync/$repository.db" -C "$tree" "hyprland-$version"
+  }
+  mkdir -p "$scratch/dbpath/sync"
+  sync_db omarchy 0.52.0-1
+  sync_db extra 0.51.1-2
+  for repository in omarchy-candidates asahi-alarm core alarm aur omarchy-aarch64; do
+    bsdtar -czf "$scratch/dbpath/sync/$repository.db" --files-from /dev/null
+  done
+  resolved() {
+    pacman --config "$1" --dbpath "$scratch/dbpath" --noconfirm -Sp --print-format '%r %v' hyprland 2>/dev/null
+  }
+  (
+    candidates=$channel/candidates
+    field() { sed -n "s/^$1=//p" "$channel/inputs"; }
+    fail() { builder_fail "$@"; }
+    read_repository_order
+    render_config "$scratch/repos" "$scratch/cache" | sed 's/^Architecture = .*/Architecture = auto/' >"$scratch/channel.conf"
+    [[ $(resolved "$scratch/channel.conf") == "omarchy 0.52.0-1" ]] ||
+      fail "a channel image takes hyprland from [omarchy]: $(resolved "$scratch/channel.conf")"
+  )
+  render_config "$scratch/repos" "$scratch/cache" | sed 's/^Architecture = .*/Architecture = auto/' >"$scratch/candidate.conf"
+  [[ $(resolved "$scratch/candidate.conf") == "extra 0.51.1-2" ]] ||
+    fail "a candidate set's order still takes it from Arch Linux ARM: $(resolved "$scratch/candidate.conf")"
+  pass "pacman takes a package both [omarchy] and Arch Linux ARM carry from [omarchy] in a channel image"
+else
+  echo "skip - pacman resolution of the repository order (no pacman on this host)"
+fi
