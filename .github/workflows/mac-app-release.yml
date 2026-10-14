@@ -54,6 +54,10 @@ env:
   ENGINE_RELEASE: engine-v0.9.2-omarchy.28
   # Packaging/release/publish-app target; ticket 13 switches it to r2.
   APP_PUBLISH_TARGET: github-release
+  # Catalogs the app reads: stopgap (this repository's catalog-<channel>
+  # releases) until ticket 13 switches it to base (Release/release.json, the
+  # catalog base in identity.conf).
+  APP_CATALOG_HOST: stopgap
 
 jobs:
   plan:
@@ -163,13 +167,22 @@ jobs:
           if [[ $STAND_IN == true ]]; then
             # Dry run only (plan enforces it): a throwaway key nobody holds.
             head -c 32 /dev/urandom >"$release/trust-root.ed25519.pub"
-            default_channel=$(plutil -extract default_channel raw -o - Release/release.json)
-            bash scripts/make-release-descriptor --public-key "$release/trust-root.ed25519.pub" \
-              --default-channel "$default_channel" --output "$release/release.json"
             echo "::warning::Dry run with a stand-in catalog trust root, not Release/trust-root.ed25519.pub"
           else
-            cp Release/release.json Release/trust-root.ed25519.pub "$release/"
+            cp Release/trust-root.ed25519.pub "$release/"
           fi
+          case $APP_CATALOG_HOST in
+            base)
+              if [[ $STAND_IN == true ]]; then host=(); else cp Release/release.json "$release/"; fi ;;
+            stopgap) host=(--stopgap) ;;
+            *) echo "::error::APP_CATALOG_HOST must be base or stopgap"; exit 1 ;;
+          esac
+          if [[ ! -e $release/release.json ]]; then
+            default_channel=$(plutil -extract default_channel raw -o - Release/release.json)
+            bash scripts/make-release-descriptor --public-key "$release/trust-root.ed25519.pub" \
+              --default-channel "$default_channel" --output "$release/release.json" "${host[@]}"
+          fi
+          plutil -p "$release/release.json"
       - name: Build
         env:
           OMARCHY_APP_VERSION: ${{ needs.plan.outputs.version }}

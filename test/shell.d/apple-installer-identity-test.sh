@@ -83,6 +83,25 @@ for channel in ("stable", "rc", "edge"):
         sys.exit(f"{channel}: {channels[channel]['catalog_url']} is not {expected}")
 PY
   fail "the shipped descriptor reads every channel's catalog from the catalog base"
+bash "$ROOT/scripts/make-release-descriptor" --public-key "$trust_root" --stopgap \
+  --default-channel "$default_channel" --output "$test_tmp/stopgap.json" >/dev/null
+python3 - "$test_tmp/stopgap.json" "$descriptor" "$INSTALLER_CATALOG_STOPGAP_REPO" <<'PY' ||
+import json, sys
+stopgap, shipped = (json.load(open(p)) for p in sys.argv[1:3])
+repo = sys.argv[3]
+for channel in ("stable", "rc", "edge"):
+    expected = f"https://github.com/{repo}/releases/download/catalog-{channel}/catalog-{channel}.signed.json"
+    if stopgap["channels"][channel]["catalog_url"] != expected:
+        sys.exit(f"{channel}: {stopgap['channels'][channel]['catalog_url']} is not {expected}")
+del stopgap["channels"], shipped["channels"]
+if stopgap != shipped:
+    sys.exit("the stopgap descriptor differs from the shipped one beyond its catalog URLs")
+PY
+  fail "make-release-descriptor --stopgap names each channel's stopgap catalog and changes nothing else"
+if bash "$ROOT/scripts/make-release-descriptor" --public-key "$trust_root" --stopgap \
+  --base-url https://probe.invalid --output "$test_tmp/both.json" >/dev/null 2>&1; then
+  fail "make-release-descriptor refuses --stopgap with --base-url"
+fi
 for template in "$ROOT"/scripts/release-inputs*.template.json; do
   python3 - "$template" "$INSTALLER_PUBLIC_BASE/$INSTALLER_STREAM_PATH" "$INSTALLER_FILE_STEM" <<'PY' ||
 import json, sys
