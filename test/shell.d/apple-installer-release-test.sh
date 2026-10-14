@@ -139,7 +139,7 @@ dmg_dir=$test_tmp/out
 mkdir -p "$dmg_dir"
 dmg=$dmg_dir/$INSTALLER_FILE_STEM-2.2.0.dmg
 printf 'dmg bytes' >"$dmg"
-(cd "$dmg_dir" && sha256sum "${dmg##*/}" >"${dmg##*/}.sha256")
+(cd "$dmg_dir" && shasum -a 256 "${dmg##*/}" >"${dmg##*/}.sha256")
 # A stateful stand-in for gh: GH_SERVER holds the draft's assets, GH_STATE is
 # missing, draft or published, GH_TAGGED is the commit the tag names.
 cat >"$stubs/gh" <<'STUB'
@@ -318,7 +318,8 @@ fi
 # ── the workflow's security invariants ─────────────────────────────────────
 triggers=$(awk '/^on:/{on=1; next} on && /^[^ ]/{exit} on && /^  [a-z_]+:/{sub(/:.*/, ""); print $1}' "$workflow")
 [[ $triggers == $'push\nworkflow_dispatch' ]] || fail "the workflow runs only for pushes (v* tags) and dispatches" "$triggers"
-grep -A2 '^  push:' "$workflow" | grep -q "tags: \['v\*'\]" || fail "pushes run only for v* tags"
+push=$(awk '/^  push:/{p=1; next} p && /^  [a-z_]+:/{exit} p && !/^ *#/' "$workflow")
+[[ $push == "    tags: ['v*']" ]] || fail "pushes run only for v* tags" "$push"
 pass "pull requests cannot trigger the release workflow"
 
 # Each job's lines, keyed by job id.
