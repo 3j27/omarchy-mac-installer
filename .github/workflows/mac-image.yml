@@ -12,8 +12,6 @@ name: Mac image (edge)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [mac-image-workflow]
 
 permissions:
   contents: read
