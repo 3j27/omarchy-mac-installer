@@ -1,0 +1,108 @@
+name: Mac image acceptance
+
+# PLACEHOLDER until ticket 06 (VM acceptance on Namespace Linux-on-Apple).
+# The release pipeline (mac-release-pipeline.yml) calls this after the image
+# build. No VM runs yet: every image gets a failing evidence record,
+# "acceptance not implemented", and the job fails, so nothing is uploaded or
+# published.
+#
+# The contract ticket 06 keeps (the pipeline depends on it):
+#   inputs   image-artifact, the image build's artifact in this run (the
+#            image name), and image-sha256, its zip's sha256
+#   artifact mac-acceptance-evidence: acceptance-evidence.json for that
+#            sha256 (docs/mac-acceptance-evidence.md), passing or failing,
+#            whose run_url is this run
+#   outputs  result, pass only when the record passes the shared check
+#            (mac-upload.py check-evidence), and evidence-artifact
+#   failure  the job fails unless the record passes, so the pipeline stops
+#
+# Ticket 06 replaces the "Write the evidence record" step with the harness run
+# on the downloaded image (checked against image-sha256) in the main-only
+# acceptance environment, attests the record, and deletes
+# scripts/mac-acceptance-placeholder.py. It never runs for pull requests.
+
+on:
+  workflow_call:
+    inputs:
+      image-artifact:
+        description: The image build's artifact in this run, which is the image name
+        type: string
+        required: true
+      image-sha256:
+        description: The image zip's sha256
+        type: string
+        required: true
+    outputs:
+      result:
+        description: pass or fail
+        value: ${{ jobs.acceptance.outputs.result }}
+      evidence-artifact:
+        description: The artifact holding acceptance-evidence.json
+        value: ${{ jobs.acceptance.outputs.evidence-artifact }}
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  acceptance:
+    name: VM acceptance (not implemented)
+    if: >-
+      github.repository == 'omacom/omarchy-mac-installer' &&
+      github.event_name != 'pull_request' &&
+      github.event_name != 'pull_request_target'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.gate.outputs.result }}
+      evidence-artifact: mac-acceptance-evidence
+    env:
+      IMAGE: ${{ inputs.image-artifact }}
+      IMAGE_SHA256: ${{ inputs.image-sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Check the inputs
+        run: |
+          set -euo pipefail
+          python3 -I scripts/mac-upload.py check-inputs --image "$IMAGE" --sha256 "$IMAGE_SHA256"
+          echo "RECORD=$RUNNER_TEMP/acceptance/acceptance-evidence.json" >>"$GITHUB_ENV"
+
+      # Ticket 06: the harness's fresh-install scenarios on the image go here.
+      - name: Write the evidence record (acceptance not implemented)
+        run: |
+          set -euo pipefail
+          python3 -I scripts/mac-acceptance-placeholder.py --sha256 "$IMAGE_SHA256" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --out "$RECORD"
+
+      - name: Keep the evidence record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mac-acceptance-evidence
+          path: ${{ runner.temp }}/acceptance/acceptance-evidence.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Stop unless the image passed
+        id: gate
+        run: |
+          set -euo pipefail
+          {
+            echo "### Acceptance of \`$IMAGE\`"
+            echo '```'
+            jq -r '"result  \(.result)", "reason  \(.reason // "-")", "image   \(.image_sha256)"' "$RECORD"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          if python3 -I scripts/mac-upload.py check-evidence --evidence "$RECORD" --sha256 "$IMAGE_SHA256"; then
+            echo "result=pass" >>"$GITHUB_OUTPUT"
+          else
+            echo "result=fail" >>"$GITHUB_OUTPUT"
+            echo "::error::$IMAGE did not pass acceptance; nothing is uploaded or published"
+            exit 1
+          fi

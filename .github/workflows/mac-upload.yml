@@ -13,6 +13,10 @@ name: Mac image upload
 # from mac-image.yml on main. A dry run (the default) writes only to a
 # `dryrun-` scratch draft release that it deletes afterwards.
 #
+# With make-public, a real upload then publishes the draft as a prerelease
+# (never latest) so the catalog can pin its download URLs, and outputs the
+# catalog's payload and installer-data inputs and the evidence it checked.
+#
 # Callers grant contents: write, actions: read and attestations: read. Never
 # call this from a pull_request workflow; the job refuses to run for one.
 
@@ -52,10 +56,24 @@ on:
         type: string
         required: false
         default: ''
+      make-public:
+        description: After a real upload, publish the draft as a prerelease (never latest) so the catalog can pin its URLs
+        type: boolean
+        required: false
+        default: false
     outputs:
       release:
         description: The release the image was uploaded to (deleted again after a dry run)
         value: ${{ jobs.upload.outputs.release }}
+      payload:
+        description: Real upload only, the catalog's payload input {url, fileName, sizeBytes, sha256, parts?}
+        value: ${{ jobs.upload.outputs.payload }}
+      installer-data:
+        description: Real upload only, the catalog's installer-data input {url, fileName, sizeBytes, sha256}
+        value: ${{ jobs.upload.outputs.installer-data }}
+      evidence:
+        description: Real upload only, the acceptance evidence record the upload checked (compact JSON)
+        value: ${{ jobs.upload.outputs.evidence }}
   workflow_dispatch:
     inputs:
       image-artifact:
@@ -86,6 +104,10 @@ on:
         description: Dry run only, a smaller part size
         type: string
         default: ''
+      make-public:
+        description: After a real upload, publish the draft as a prerelease (never latest)
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -114,6 +136,9 @@ jobs:
       attestations: read # verify the image's build attestation
     outputs:
       release: ${{ steps.inputs.outputs.release }}
+      payload: ${{ steps.describe.outputs.payload }}
+      installer-data: ${{ steps.describe.outputs.installer-data }}
+      evidence: ${{ steps.describe.outputs.evidence }}
     env:
       IMAGE: ${{ inputs.image-artifact }}
       IMAGE_SHA256: ${{ inputs.image-sha256 }}
@@ -230,6 +255,27 @@ jobs:
             jq -r '"destination \(.destination)", "uploaded    \(.uploaded | length) of \(.files | length) files", (.files[] | "\(.sha256)  \(.name) (\(.size) bytes)")' "$WORK/report.json"
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the draft as a prerelease
+        if: inputs.dry-run == false && inputs.make-public
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ steps.inputs.outputs.release }}
+        run: python3 -I scripts/mac-upload.py make-public --destination "github-release:$GITHUB_REPOSITORY" --release "$RELEASE"
+
+      # The catalog's inputs, from what this job uploaded and verified, and the
+      # evidence record it checked. Only meaningful once the files are public.
+      - name: Describe the upload for the catalog
+        id: describe
+        if: inputs.dry-run == false
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ steps.inputs.outputs.release }}
+        run: |
+          set -euo pipefail
+          python3 -I scripts/mac-upload.py catalog-inputs --report "$WORK/report.json" \
+            --destination "github-release:$GITHUB_REPOSITORY" --release "$RELEASE" | tee -a "$GITHUB_OUTPUT"
+          echo "evidence=$(jq -c . "$WORK/evidence/acceptance-evidence.json")" | tee -a "$GITHUB_OUTPUT"
 
       - name: Delete the scratch release
         if: always() && inputs.dry-run && steps.inputs.outputs.release != ''

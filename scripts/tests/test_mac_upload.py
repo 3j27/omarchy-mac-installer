@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -174,9 +175,9 @@ class UploadTests(unittest.TestCase):
             "image_sha256 is malformed": {"image_sha256": "F" * 64},
             "second-boot is 'fail'": {"scenarios": [
                 {"name": "first-boot", "result": "pass"},
-                {"name": "encrypted-conversion", "result": "pass"},
+                {"name": "conversion", "result": "pass"},
                 {"name": "second-boot", "result": "fail"}]},
-            "missing scenarios: encrypted-conversion": {"scenarios": [
+            "missing scenarios: conversion": {"scenarios": [
                 {"name": "first-boot", "result": "pass"}, {"name": "second-boot", "result": "pass"}]},
             "lists no scenarios": {"scenarios": []},
             "harness_commit is not a commit": {"harness_commit": "main"},
@@ -190,6 +191,22 @@ class UploadTests(unittest.TestCase):
                 destination = self.destination()
                 self.assertRefused(message, self.run_publish, destination, evidence=evidence)
                 self.assertEqual(destination.puts, [])
+
+    def test_the_catalog_takes_the_same_evidence_records(self):
+        # One record goes to both gates; a name only one of them knows would
+        # let no image through (the harness's fresh-install scenarios).
+        catalog = load("catalog_release", SCRIPTS / "catalog_release.py")
+        self.assertEqual(upload.REQUIRED_SCENARIOS, catalog.REQUIRED_SCENARIOS)
+        document = fixture.evidence(self.sha256, RUN_URL)
+        upload.check_evidence(document, self.sha256, RUN_URL)
+        self.assertEqual(catalog.check_evidence(document, self.sha256), document)
+        for change in ({"result": "fail"}, {"scenarios": document["scenarios"][:2]}, {"runner": "x" * 201},
+                       {"harness_commit": "main"}, {"image_sha256": "f" * 64},
+                       {"scenarios": document["scenarios"] + [{"name": "update", "result": "fail"}]}):
+            with self.subTest(change):
+                failing = {**document, **change}
+                self.assertRaises(upload.Refusal, upload.check_evidence, failing, self.sha256)
+                self.assertRaises(catalog.Refusal, catalog.check_evidence, failing, self.sha256)
 
     def test_evidence_must_name_the_run_it_came_from(self):
         destination = self.destination()
@@ -305,6 +322,57 @@ class UploadTests(unittest.TestCase):
         self.assertEqual(json.loads(report.read_text())["evidence"]["result"], "pass")
 
 
+class CatalogInputTests(unittest.TestCase):
+    """What the upload hands the catalog: its pinned URLs, sizes and digests."""
+
+    setUp = UploadTests.setUp
+    write_evidence = UploadTests.write_evidence
+    destination = UploadTests.destination
+    run_publish = UploadTests.run_publish
+    assertRefused = UploadTests.assertRefused
+
+    BASE = "https://github.com/omacom/omarchy-mac-installer/releases/download/{}/"
+
+    def report(self, part_bytes=PART):
+        destination = self.destination(part_bytes=part_bytes)
+        return self.run_publish(destination), self.BASE.format(self.image)
+
+    def test_a_split_image_becomes_a_payload_with_parts_the_catalog_accepts(self):
+        report, base = self.report()
+        inputs = upload.catalog_inputs(report, base)
+        payload = inputs["payload"]
+        self.assertEqual(payload["sha256"], self.sha256)
+        self.assertEqual(payload["fileName"], next(self.artifact.glob("*.zip")).name)
+        self.assertEqual(payload["sizeBytes"], 3 * PART + 77)
+        self.assertEqual([part["fileName"] for part in payload["parts"]],
+                         [f"{payload['fileName']}.part{index:02d}" for index in range(4)])
+        joined = b"".join((self.published / self.image / part["fileName"]).read_bytes() for part in payload["parts"])
+        self.assertEqual(hashlib.sha256(joined).hexdigest(), self.sha256)
+        for part in payload["parts"]:
+            self.assertEqual(part["url"], base + part["fileName"])
+        self.assertEqual(inputs["installer_data"]["url"], base + "installer_data.json")
+        catalog = load("catalog_release", SCRIPTS / "catalog_release.py")
+        engine = json.loads((SCRIPTS.parent / ".github" / "mac-release-pipeline.json").read_text())["engine"]
+        installer = {"minimumVersion": "2.1.0", "latestVersion": "2.1.0", "downloadURL": self.BASE.format("v2.1.0") + "app.dmg"}
+        document = catalog.build_catalog("edge", self.image, payload, engine, inputs["installer_data"],
+                                         fixture.evidence(self.sha256, RUN_URL), installer,
+                                         catalog.datetime.datetime(2026, 10, 14, tzinfo=catalog.datetime.timezone.utc))
+        self.assertIn(self.sha256, json.dumps(document))
+
+    def test_a_whole_image_becomes_a_payload_without_parts(self):
+        report, base = self.report(part_bytes=None)
+        payload = upload.catalog_inputs(report, base)["payload"]
+        self.assertNotIn("parts", payload)
+        self.assertEqual((payload["sha256"], payload["url"]), (self.sha256, base + payload["fileName"]))
+
+    def test_a_dry_run_or_a_bad_base_has_no_catalog_inputs(self):
+        report, base = self.report()
+        self.assertRefused("only a real upload", upload.catalog_inputs, {**report, "dry_run": True}, base)
+        self.assertRefused("invalid download base", upload.catalog_inputs, report, "http://example.invalid/x/")
+        files = [entry for entry in report["files"] if not entry["name"].endswith(".part01")]
+        self.assertRefused("not numbered from 00", upload.catalog_inputs, {**report, "files": files}, base)
+
+
 class FakeGitHub(upload.GitHubReleaseDestination):
     """The GitHub destination over canned API answers, no network."""
 
@@ -375,6 +443,74 @@ class GitHubDestinationTests(unittest.TestCase):
         github._json = create_then_race
         with self.assertRaisesRegex(upload.Refusal, "another release tagged"):
             github.put("IMAGE", Path(__file__))
+
+
+
+class PublishingGitHub(FakeGitHub):
+    """Answers the tag and publish calls make_public makes."""
+
+    def __init__(self, release: dict, tag: str | None) -> None:
+        super().__init__([release])
+        self.tag = tag
+
+    def _json(self, method, url, document=None):
+        self.calls.append((method, url))
+        if "/git/ref/tags/" in url:
+            if self.tag is None:
+                raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+            return {"object": {"type": "commit", "sha": self.tag}}
+        if method == "PATCH":
+            self.patched = document
+            self.tag = self.tag or self.releases[0]["target_commitish"]
+            self.releases[0] = {**self.releases[0], **document}
+            return self.releases[0]
+        raise AssertionError(f"unexpected call {method} {url}")
+
+
+class MakePublicTests(unittest.TestCase):
+    TAG = GitHubDestinationTests.TAG
+    COMMIT = "c" * 40
+
+    def release(self, **change):
+        return {"id": 1, "tag_name": self.TAG, "draft": True, "prerelease": True, "target_commitish": self.COMMIT, **change}
+
+    def test_a_draft_becomes_a_prerelease_never_latest_tagged_at_its_commit(self):
+        github = PublishingGitHub(self.release(), None)
+        github.make_public()
+        self.assertEqual(github.patched, {"draft": False, "prerelease": True, "make_latest": "false"})
+        self.assertEqual(github.tag, self.COMMIT)
+        self.assertEqual(github.download_base(),
+                         f"https://github.com/omacom/omarchy-mac-installer/releases/download/{self.TAG}/")
+
+    def test_publishing_again_changes_nothing(self):
+        github = PublishingGitHub(self.release(draft=False), self.COMMIT)
+        github.make_public()
+        self.assertNotIn("PATCH", [method for method, _ in github.calls])
+
+    def test_a_tag_naming_another_commit_is_refused_before_publishing(self):
+        github = PublishingGitHub(self.release(), "d" * 40)
+        with self.assertRaisesRegex(upload.Refusal, "already names"):
+            github.make_public()
+        self.assertNotIn("PATCH", [method for method, _ in github.calls])
+
+    def test_scratch_missing_or_branch_targeted_releases_are_refused(self):
+        scratch = PublishingGitHub(self.release(tag_name=f"dryrun-{self.TAG}"), None)
+        scratch.release = f"dryrun-{self.TAG}"
+        with self.assertRaisesRegex(upload.Refusal, "never published"):
+            scratch.make_public()
+        missing = PublishingGitHub(self.release(), None)
+        missing.releases = []
+        with self.assertRaisesRegex(upload.Refusal, "doesn't exist"):
+            missing.make_public()
+        with self.assertRaisesRegex(upload.Refusal, "not a commit"):
+            PublishingGitHub(self.release(target_commitish="main"), None).make_public()
+
+    def test_the_command_line_takes_only_the_github_destination(self):
+        result = subprocess.run(
+            [sys.executable, "-I", str(SCRIPTS / "mac-upload.py"), "make-public", "--destination", "dir:/nonexistent",
+             "--release", self.TAG], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("is for the github-release destination", result.stderr)
 
 
 if __name__ == "__main__":

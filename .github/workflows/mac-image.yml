@@ -7,10 +7,24 @@ name: Mac image (edge)
 # artifacts. It publishes nothing: no release, no catalog, no upload. It uses
 # no secrets, takes no inputs, and never runs for pull requests.
 #
-# Started by hand, or by edge-dispatch.yml (gh workflow run) when an edge
-# publish changes a package the image installs.
+# Started by hand, or called by the release pipeline (mac-release-pipeline.yml,
+# which edge-dispatch.yml starts when an edge publish changes a package the
+# image installs). A caller grants contents: read, id-token: write and
+# attestations: write; the attestation's signer workflow is this file either
+# way, which is what the upload checks.
 
 on:
+  workflow_call:
+    outputs:
+      name:
+        description: The image name and artifact name, omarchy-mac-edge-<YYYY.MM.DD>-<set id>
+        value: ${{ jobs.build.outputs.name }}
+      payload:
+        description: The image zip's file name
+        value: ${{ jobs.build.outputs.payload }}
+      sha256:
+        description: The image zip's sha256
+        value: ${{ jobs.build.outputs.sha256 }}
   workflow_dispatch:
 
 permissions:

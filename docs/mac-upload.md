@@ -13,6 +13,7 @@
 | `evidence-artifact` | the artifact holding `acceptance-evidence.json` ([format](mac-acceptance-evidence.md)); required unless dry-run |
 | `evidence-run-id` | the run that uploaded the evidence (empty: this run) |
 | `part-bytes` | dry run only: a smaller part size, to split a small test image |
+| `make-public` | real upload only: publish the draft afterwards and output the catalog's inputs (below) |
 
 Callers grant `contents: write`, `actions: read` and `attestations: read`.
 
@@ -24,7 +25,16 @@ Callers grant `contents: write`, `actions: read` and `attestations: read`.
 4. Lists the destination before writing anything. A file already there with the same bytes is skipped, so an identical re-upload (or a resumed one) is a no-op; a file with different bytes, or a file this upload doesn't have, refuses the whole upload.
 5. Uploads the missing files, downloads every file back and checks its sha256.
 
-The stopgap destination is a draft prerelease on omacom/omarchy-mac-installer, named and tagged after the image, never marked latest. Publishing the draft is not this job's decision, and once it is published the job never adds to it. Only the zip is attested by the image build; the records beside it are trusted as part of the same artifact.
+The stopgap destination is a draft prerelease on omacom/omarchy-mac-installer, named and tagged after the image, never marked latest. Once it is published the job never adds to it. Only the zip is attested by the image build; the records beside it are trusted as part of the same artifact.
+
+## Handing the image to the catalog
+
+A draft's files can't be downloaded by the app or by the catalog job's remote checks. With `make-public` (the release pipeline, `mac-release-pipeline.yml`, sets it), a real upload then:
+
+6. Publishes the draft as a prerelease, never latest (`mac-upload.py make-public`). The tag is created at the commit the draft was made from; a tag of that name naming another commit refuses before anything is published. Publishing again is a no-op.
+7. Outputs the catalog's `payload` and `installer-data` inputs ([format](catalog-release.md#inputs)), built from the files it uploaded and verified (`mac-upload.py catalog-inputs`), and `evidence`, the record it checked.
+
+So an image is downloadable from its release once it passes acceptance, before the owner approves a catalog that names it, as it will be on R2 (`v1/releases/<image>/` is public as soon as it is written). No catalog points at it until the owner approves.
 
 ## Dry run
 
