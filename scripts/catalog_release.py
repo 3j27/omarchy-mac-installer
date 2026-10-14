@@ -16,6 +16,12 @@ as its own job, so the job that holds the catalog key does nothing but sign:
   verify-envelope verify a signed envelope against the trust root
   verify          `verify PUBLIC_KEY CATALOG SIGNATURE`, the portable form of
                   `catalog-signing.swift verify`
+  promote         build an rc or stable catalog from a published (or named)
+                  channel's signed catalog: verify its signature, keep every
+                  pinned artifact and digest, bump only the sequence. Real
+                  promotion is parked and needs --real --confirm
+  check-promotion re-check a promoted catalog against its signed source (the
+                  signing job runs it again)
   publish         publish a verified envelope to the catalog host, refusing a
                   sequence that does not move forward
   public-key      write the public key of a signing key (a setup check)
@@ -64,8 +70,17 @@ SOURCE_LOCK = ROOT / "Engine" / "source-lock.json"
 PUBLISH_CHANNELS = ROOT / "scripts" / "publish-channels"
 
 SCHEMA_VERSION = 4
-# rc and stable get their catalogs through promotion, which is parked.
+# Channels a catalog is built for from an image and its VM evidence. rc and
+# stable get their catalogs only through promotion (parked until the kernel
+# work lands), which re-signs a published catalog's exact pins.
 CHANNELS = ("edge",)
+PROMOTED_CHANNELS = ("rc", "stable")
+SIGNED_CHANNELS = CHANNELS + PROMOTED_CHANNELS
+# A catalog is promoted only forward along this order: edge to rc or
+# stable, rc to stable.
+CHANNEL_ORDER = ("edge", "rc", "stable")
+# The only catalog keys a promotion changes.
+PROMOTION_FIELDS = ("sequence", "issuedAt")
 # The harness's fresh-install scenarios (omarchy-mac-pkgs
 # tools/acceptance/mac-image): every one must pass for the image's sha256.
 REQUIRED_SCENARIOS = ("first-boot", "conversion", "second-boot")
@@ -252,6 +267,20 @@ def check_channel(channel: str) -> str:
     return channel
 
 
+def check_signed_channel(channel: str) -> str:
+    if channel not in SIGNED_CHANNELS:
+        raise Refusal(f"channel must be one of {', '.join(SIGNED_CHANNELS)}: {channel}")
+    return channel
+
+
+def check_promotion_channels(source: str, channel: str) -> tuple[str, str]:
+    if channel not in PROMOTED_CHANNELS:
+        raise Refusal(f"a promotion writes {' or '.join(PROMOTED_CHANNELS)}, not {channel}")
+    if source not in CHANNEL_ORDER or CHANNEL_ORDER.index(source) >= CHANNEL_ORDER.index(channel):
+        raise Refusal(f"{channel} cannot be promoted from {source}: promotion goes edge to rc or stable, rc to stable")
+    return source, channel
+
+
 def check_evidence(document: object, image_sha256: str) -> dict:
     """Refuse unless the VM evidence record passed for exactly IMAGE_SHA256."""
     if document is None:
@@ -394,6 +423,108 @@ def catalog_payload_digest(catalog: dict) -> str:
     if not isinstance(digest, str) or not digest.startswith("sha256:") or not SHA256.match(digest[7:]):
         raise Refusal(f"the catalog's payload digest is malformed: {digest}")
     return digest[7:]
+
+
+# ── promotion ────────────────────────────────────────────────────────────────
+
+
+def promotion_artifacts(catalog: dict) -> list[tuple[str, dict]]:
+    """The payload, engine and installer_data a signed catalog pins, as
+    check_artifact documents, refusing a catalog whose models disagree on
+    them or point outside the immutable release locations."""
+    models = catalog.get("models")
+    if not isinstance(models, list) or not models:
+        raise Refusal("the source catalog lists no models")
+    pins = set()
+    for model in models:
+        if not isinstance(model, dict):
+            raise Refusal("the source catalog has a model that is not an object")
+        try:
+            pins.add(json.dumps({key: model[key] for key in (
+                "payloadDigest", "engineDigest", "metadataDigest",
+                "payloadArtifact", "engineArtifact", "metadataArtifact",
+            )}, sort_keys=True))
+        except KeyError as error:
+            raise Refusal(f"model {model.get('deviceIdentifier')} pins no {error.args[0]}") from None
+    if len(pins) != 1:
+        raise Refusal("the source catalog's models pin different artifacts; a promotion needs exactly one image")
+    pin = json.loads(pins.pop())
+    return [
+        ("payload", check_artifact(
+            from_catalog("payload", pin["payloadArtifact"], pin["payloadDigest"], True), "payload", True)),
+        ("engine", check_artifact(from_catalog("engine", pin["engineArtifact"], pin["engineDigest"]), "engine")),
+        ("installer_data", check_artifact(
+            from_catalog("installer_data", pin["metadataArtifact"], pin["metadataDigest"]), "installer_data")),
+    ]
+
+
+def from_catalog(field: str, artifact: object, digest: object, allow_parts: bool = False) -> dict:
+    """A catalog artifact ({sourceURL, fileName, sizeBytes, parts?}) and its
+    sha256:<hex> digest as the input document check_artifact takes."""
+    if not isinstance(artifact, dict) or not isinstance(digest, str) or not digest.startswith("sha256:"):
+        raise Refusal(f"the source catalog's {field} pin is malformed")
+    unknown = set(artifact) - {"sourceURL", "fileName", "sizeBytes"} - ({"parts"} if allow_parts else set())
+    if unknown:
+        raise Refusal(f"the source catalog's {field} has unknown keys {', '.join(sorted(unknown))}")
+    document = {"url": artifact.get("sourceURL"), "fileName": artifact.get("fileName"),
+                "sizeBytes": artifact.get("sizeBytes"), "sha256": digest[7:]}
+    if "parts" in artifact:
+        parts = artifact["parts"]
+        if not isinstance(parts, list) or not all(isinstance(part, dict) for part in parts):
+            raise Refusal(f"the source catalog's {field}.parts must be a list of objects")
+        document["parts"] = [
+            from_catalog(f"{field}.parts[{index}]", {k: v for k, v in part.items() if k != "sha256"},
+                         part.get("sha256"))
+            for index, part in enumerate(parts)
+        ]
+    return document
+
+
+def promote_catalog(source: dict, now: datetime.datetime) -> dict:
+    """SOURCE with only its sequence and issue time replaced: every model,
+    pin, digest and the installer block keep exactly the source's values."""
+    if source.get("schemaVersion") != SCHEMA_VERSION:
+        raise Refusal("the source catalog is not a schema 4 catalog")
+    promotion_artifacts(source)
+    errors = supported_models.catalog_errors(source)
+    if errors:
+        raise Refusal("the source catalog does not cover every supported Mac: " + "; ".join(errors))
+    sequence = int(now.timestamp())
+    if sequence <= source["sequence"]:
+        raise Refusal(f"sequence {sequence} does not follow the source catalog's {source['sequence']}")
+    promoted = json.loads(json.dumps(source))
+    promoted["sequence"] = sequence
+    promoted["issuedAt"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    check_same_pins(source, promoted)
+    return promoted
+
+
+def check_same_pins(source: dict, promoted: dict) -> None:
+    """Refuse unless PROMOTED differs from SOURCE only in its sequence and
+    issue time."""
+    def rest(document: dict) -> dict:
+        return {key: value for key, value in document.items() if key not in PROMOTION_FIELDS}
+
+    if not isinstance(promoted, dict):
+        raise Refusal("the promoted catalog is not a JSON object")
+    before, after = rest(source), rest(promoted)
+    if before != after:
+        changed = sorted(key for key in before.keys() | after.keys() if before.get(key) != after.get(key))
+        raise Refusal(f"the promoted catalog changes more than {' and '.join(PROMOTION_FIELDS)}: {', '.join(changed)}")
+    if not isinstance(promoted.get("sequence"), int) or promoted["sequence"] <= source["sequence"]:
+        raise Refusal("the promoted catalog's sequence does not follow its source's")
+
+
+def check_promotion_mode(channel: str, real: bool, confirm: str | None, source_sha256: str | None) -> None:
+    """Promotion is parked: a real run needs the owner to type the channel and
+    pin the exact source catalog. A dry run needs neither."""
+    if not real:
+        return
+    if confirm != f"promote-{channel}":
+        raise Refusal(f"promotion is parked until the kernel work lands; a real promotion needs "
+                      f"--confirm promote-{channel} (the workflow's confirm input) and the owner's approval")
+    if not source_sha256:
+        raise Refusal("a real promotion must pin the source catalog's sha256 (--source-sha256)")
 
 
 # ── remote verification ──────────────────────────────────────────────────────
@@ -767,6 +898,8 @@ def command_prepare(arguments) -> None:
 
 
 def command_check_evidence(arguments) -> None:
+    # Evidence gates only the catalogs built from an image: edge.
+    check_channel(arguments.catalog.name.removeprefix("catalog-").removesuffix(".json"))
     catalog = load_json(arguments.catalog, "catalog")
     digest = catalog_payload_digest(catalog)
     check_evidence(load_json(arguments.evidence, "evidence") if arguments.evidence else None, digest)
@@ -791,7 +924,7 @@ def command_sign(arguments) -> None:
     if not openssl_verify(openssl, trust_root, catalog, signature):
         raise Refusal("the new signature does not verify against the trust root")
     channel = catalog_path.name.removeprefix("catalog-").removesuffix(".json")
-    check_channel(channel)
+    check_signed_channel(channel)
     arguments.out.mkdir(parents=True, exist_ok=True)
     signature_path = arguments.out / f"catalog-{channel}.json.sig"
     signature_path.write_bytes(signature)
@@ -828,9 +961,91 @@ def command_verify_envelope(arguments) -> None:
     print("catalog_signature=passed")
 
 
+def read_source(host, source: str, trust_root: bytes, openssl: str) -> tuple[bytes, bytes, dict]:
+    """The source channel's published envelope, its signed catalog bytes and
+    the catalog, refusing anything the trust root did not sign."""
+    data = host.fetch(source)
+    if data is None:
+        raise Refusal(f"no {source} catalog is published at {host.describe(source)}; nothing to promote")
+    try:
+        document = verify_envelope(data, trust_root, openssl)
+    except Refusal as error:
+        raise Refusal(f"the {source} catalog at {host.describe(source)} is refused: {error}") from None
+    catalog, _ = decode_envelope(data)
+    return data, catalog, document
+
+
+def command_promote(arguments) -> None:
+    check_repository()
+    source_channel, channel = check_promotion_channels(arguments.source, arguments.channel)
+    expected = arguments.source_sha256 or None
+    if expected is not None and not SHA256.match(expected):
+        raise Refusal("--source-sha256 must be 64 lowercase hex digits")
+    check_promotion_mode(channel, arguments.real, arguments.confirm, expected)
+    now = (
+        datetime.datetime.strptime(arguments.now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+        if arguments.now
+        else datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+    )
+    openssl = find_openssl()
+    trust_root = read_trust_root(arguments.trust_root)
+    host = catalog_host(arguments.host)
+    envelope, source_bytes, source = read_source(host, source_channel, trust_root, openssl)
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    if expected is not None and source_sha256 != expected:
+        raise Refusal(f"the published {source_channel} catalog is sha256 {source_sha256}, not the pinned {expected}")
+    promoted = promote_catalog(source, now)
+    artifacts = promotion_artifacts(promoted)
+    if arguments.verify_remote:
+        # Read back what the catalog pins; nothing is built or uploaded.
+        for field, artifact in artifacts:
+            verify_remote_artifact(artifact, field)
+    if arguments.check_live:
+        live = live_sequence(host, channel, trust_root, openssl)
+        if promoted["sequence"] <= live:
+            raise Refusal(f"sequence {promoted['sequence']} does not follow the published {channel} {live}")
+    data = catalog_bytes(promoted)
+    arguments.out.mkdir(parents=True, exist_ok=True)
+    (arguments.out / "channel").write_text(f"{channel}\n")
+    (arguments.out / "source-channel").write_text(f"{source_channel}\n")
+    (arguments.out / "source.signed.json").write_bytes(envelope)
+    output = arguments.out / f"catalog-{channel}.json"
+    output.write_bytes(data)
+    payload = dict(artifacts)["payload"]
+    print(f"mode={'real' if arguments.real else 'dry-run'}")
+    print(f"source={host.describe(source_channel)}")
+    print(f"source_catalog_sha256={source_sha256}")
+    print(f"source_sequence={source['sequence']}")
+    print(f"catalog={output}")
+    print(f"catalog_sha256={hashlib.sha256(data).hexdigest()}")
+    print(f"sequence={promoted['sequence']}")
+    print(f"image={promoted['models'][0].get('evidenceRevision')}")
+    print(f"payload_sha256={payload['sha256']}")
+    print(f"engine_sha256={dict(artifacts)['engine']['sha256']}")
+    print(f"installer_data_sha256={dict(artifacts)['installer_data']['sha256']}")
+    print(f"models={len(promoted['models'])}")
+
+
+def command_check_promotion(arguments) -> None:
+    source_channel, channel = check_promotion_channels(arguments.source_channel, arguments.channel)
+    if arguments.catalog.name != f"catalog-{channel}.json":
+        raise Refusal(f"the promoted catalog must be catalog-{channel}.json, not {arguments.catalog.name}")
+    trust_root = read_trust_root(arguments.trust_root)
+    envelope = arguments.source.read_bytes()
+    source = verify_envelope(envelope, trust_root)
+    if arguments.source_sha256:
+        source_sha256 = hashlib.sha256(decode_envelope(envelope)[0]).hexdigest()
+        if source_sha256 != arguments.source_sha256:
+            raise Refusal(f"the source catalog is sha256 {source_sha256}, not the pinned {arguments.source_sha256}")
+    promoted = load_json(arguments.catalog, "catalog")
+    check_same_pins(source, promoted)
+    promotion_artifacts(promoted)
+    print(f"promotion=checked {source_channel} to {channel}, sequence {source['sequence']} to {promoted['sequence']}")
+
+
 def command_publish(arguments) -> None:
     check_repository()
-    channel = check_channel(arguments.channel)
+    channel = check_signed_channel(arguments.channel)
     openssl = find_openssl()
     trust_root = read_trust_root(arguments.trust_root)
     data = arguments.envelope.read_bytes()
@@ -888,6 +1103,27 @@ def parse_arguments(argv: list[str]):
     prepare.add_argument("--now", help="YYYY-MM-DDTHH:MM:SSZ (tests only)")
     prepare.add_argument("--out", type=Path, required=True)
 
+    promote = commands.add_parser("promote")
+    promote.add_argument("--channel", required=True)
+    promote.add_argument("--source", required=True, help="the channel whose published catalog is promoted")
+    promote.add_argument("--source-sha256", default="", help="sha256 of the source's signed catalog")
+    promote.add_argument("--real", action="store_true", help="a real promotion (parked: needs --confirm)")
+    promote.add_argument("--confirm", default="", help="promote-<channel> for a real promotion")
+    promote.add_argument("--verify-remote", action="store_true")
+    promote.add_argument("--check-live", action="store_true")
+    promote.add_argument("--host", default="github-release")
+    promote.add_argument("--trust-root", type=Path, default=DEFAULT_TRUST_ROOT)
+    promote.add_argument("--now", help="YYYY-MM-DDTHH:MM:SSZ (tests only)")
+    promote.add_argument("--out", type=Path, required=True)
+
+    check_promotion = commands.add_parser("check-promotion")
+    check_promotion.add_argument("--channel", required=True)
+    check_promotion.add_argument("--source-channel", required=True)
+    check_promotion.add_argument("--catalog", type=Path, required=True)
+    check_promotion.add_argument("--source", type=Path, required=True)
+    check_promotion.add_argument("--source-sha256", default="")
+    check_promotion.add_argument("--trust-root", type=Path, default=DEFAULT_TRUST_ROOT)
+
     evidence = commands.add_parser("check-evidence")
     evidence.add_argument("--catalog", type=Path, required=True)
     evidence.add_argument("--evidence", type=Path)
@@ -926,6 +1162,8 @@ def main(argv: list[str]) -> int:
     handler = {
         "prepare": command_prepare,
         "check-evidence": command_check_evidence,
+        "promote": command_promote,
+        "check-promotion": command_check_promotion,
         "sign": command_sign,
         "verify": command_verify,
         "verify-envelope": command_verify_envelope,

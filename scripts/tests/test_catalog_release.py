@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The Mac catalog release: build, evidence gate, CI signing, hosts, dry run.
+"""The Mac catalog release: build, evidence gate, CI signing, hosts, dry run,
+and promotion to rc and stable.
 
 Driven through scripts/catalog_release.py's command line, as the workflow
 runs it, with a throwaway Ed25519 key. Signing needs OpenSSL 3; on a Mac the
@@ -113,8 +114,9 @@ def generate_key(directory: Path) -> tuple[str, Path]:
     return base64.b64encode(seed).decode(), trust_root
 
 
-@unittest.skipIf(OPENSSL is None, "OpenSSL 3 is required")
-class CatalogReleaseTests(unittest.TestCase):
+class ReleaseTestCase(unittest.TestCase):
+    """A throwaway key, host tools that record and fail, and the CLI."""
+
     def setUp(self) -> None:
         self.directory = Path(tempfile.mkdtemp(prefix="omarchy-catalog-release-"))
         self.addCleanup(shutil.rmtree, self.directory)
@@ -177,6 +179,15 @@ class CatalogReleaseTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return self.directory / "out" / "catalog-edge.json"
 
+    def signed_at(self, now: str, out: str) -> Path:
+        result = self.prepare("default", None, out, "--now", now)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.sign(self.directory / out / "catalog-edge.json", out=f"{out}-signed").returncode, 0)
+        return self.directory / f"{out}-signed" / "catalog-edge.signed.json"
+
+
+@unittest.skipIf(OPENSSL is None, "OpenSSL 3 is required")
+class CatalogReleaseTests(ReleaseTestCase):
     # ── build, sign, verify ──────────────────────────────────────────────────
 
     def test_round_trip_enables_every_mac_and_pins_the_digests(self) -> None:
@@ -275,6 +286,11 @@ class CatalogReleaseTests(unittest.TestCase):
                               "--evidence", str(self.write("e.json", evidence_document("e" * 64))))
         self.assert_refused(other, "not " + sha(PAYLOAD))
         self.assert_refused(self.run_tool("check-evidence", "--catalog", str(catalog)), "no VM evidence")
+        renamed = self.directory / "catalog-rc.json"
+        shutil.copyfile(catalog, renamed)
+        self.assert_refused(self.run_tool("check-evidence", "--catalog", str(renamed),
+                                          "--evidence", str(self.write("e.json", evidence_document()))),
+                            "rc and stable come from promotion")
 
     # ── inputs ───────────────────────────────────────────────────────────────
 
@@ -442,12 +458,6 @@ else:
             os.environ.clear()
             os.environ.update(saved[1])
 
-    def signed_at(self, now: str, out: str) -> Path:
-        result = self.prepare("default", None, out, "--now", now)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.sign(self.directory / out / "catalog-edge.json", out=f"{out}-signed").returncode, 0)
-        return self.directory / f"{out}-signed" / "catalog-edge.signed.json"
-
     def test_the_github_release_host_swaps_the_catalog_in(self) -> None:
         state = self.fake_github()
         served = state / "assets" / "catalog-edge.signed.json"
@@ -543,6 +553,212 @@ else:
         publish_job = text.split("\n  publish:\n")[1]
         self.assertIn("if: ${{ !inputs.dry-run }}", publish_job)
         self.assertNotIn("secrets.", publish_job)
+
+
+LATER = "2026-10-20T00:00:00Z"
+LATEST = "2026-10-21T00:00:00Z"
+
+
+@unittest.skipIf(OPENSSL is None, "OpenSSL 3 is required")
+class PromotionTests(ReleaseTestCase):
+    """Promotion re-signs a published catalog's pins for rc or stable."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.host = self.directory / "scratch-host"
+
+    def publish(self, channel: str, envelope: Path) -> subprocess.CompletedProcess:
+        return self.run_tool("publish", "--channel", channel, "--envelope", str(envelope),
+                             "--host", f"scratch:{self.host}", "--trust-root", str(self.trust_root))
+
+    def published_edge(self) -> Path:
+        envelope = self.signed_at(NOW, "edge")
+        self.assertEqual(self.publish("edge", envelope).returncode, 0)
+        return envelope
+
+    def promote(self, channel: str = "rc", source: str = "edge", now: str = LATER, out: str = "promoted",
+                *extra: str) -> subprocess.CompletedProcess:
+        return self.run_tool("promote", "--channel", channel, "--source", source, "--host", f"scratch:{self.host}",
+                             "--trust-root", str(self.trust_root), "--check-live", "--now", now,
+                             "--out", str(self.directory / out), *extra)
+
+    def signed_catalog(self, envelope: Path) -> tuple[bytes, dict]:
+        catalog, _ = release.decode_envelope(envelope.read_bytes())
+        return catalog, json.loads(catalog)
+
+    def test_a_dry_run_promotes_the_edge_bytes_to_rc_then_stable(self) -> None:
+        edge = self.published_edge()
+        edge_bytes, edge_catalog = self.signed_catalog(edge)
+        envelopes = {}
+        for channel, source, now in (("rc", "edge", LATER), ("stable", "rc", LATEST)):
+            result = self.promote(channel, source, now, f"{channel}-unsigned")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("mode=dry-run", result.stdout)
+            catalog = self.directory / f"{channel}-unsigned" / f"catalog-{channel}.json"
+            self.assertEqual((self.directory / f"{channel}-unsigned" / "channel").read_text(), f"{channel}\n")
+            checked = self.run_tool("check-promotion", "--channel", channel, "--source-channel", source,
+                                    "--catalog", str(catalog), "--trust-root", str(self.trust_root),
+                                    "--source", str(self.directory / f"{channel}-unsigned" / "source.signed.json"))
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            self.assertEqual(self.sign(catalog, out=f"{channel}-signed").returncode, 0)
+            envelopes[channel] = self.directory / f"{channel}-signed" / f"catalog-{channel}.signed.json"
+            published = self.publish(channel, envelopes[channel])
+            self.assertEqual(published.returncode, 0, published.stderr)
+
+        sequences = [edge_catalog["sequence"]]
+        for channel, now in (("rc", LATER), ("stable", LATEST)):
+            verified = self.run_tool("verify-envelope", "--envelope", str(envelopes[channel]),
+                                     "--trust-root", str(self.trust_root))
+            self.assertIn("catalog_signature=passed", verified.stdout)
+            _, catalog = self.signed_catalog(envelopes[channel])
+            sequences.append(catalog["sequence"])
+            self.assertEqual(catalog["issuedAt"], now)
+            # The same models, pins, digests and installer block as edge.
+            for key in set(edge_catalog) | set(catalog):
+                if key not in ("sequence", "issuedAt"):
+                    self.assertEqual(catalog.get(key), edge_catalog.get(key), key)
+            for model in catalog["models"]:
+                self.assertEqual(model["payloadDigest"], f"sha256:{sha(PAYLOAD)}")
+                self.assertEqual(model["engineDigest"], f"sha256:{sha(ENGINE)}")
+                self.assertEqual(model["metadataDigest"], f"sha256:{sha(METADATA)}")
+                self.assertEqual(model["evidenceRevision"], IMAGE)
+        self.assertEqual(sequences, sorted(set(sequences)))
+        # Edge is untouched and nothing reached a real host.
+        self.assertEqual((self.host / "catalog-edge.signed.json").read_bytes(), edge.read_bytes())
+        self.assertEqual(sorted(path.name for path in self.host.iterdir()),
+                         ["catalog-edge.signed.json", "catalog-rc.signed.json", "catalog-stable.signed.json"])
+        self.assertEqual(self.calls.read_text(), "", "a dry run must not call any host tool")
+
+    def test_promotion_rereads_every_pinned_artifact_and_uploads_nothing(self) -> None:
+        self.published_edge()
+        served = {part["url"]: data for part, data in zip(payload_document()["parts"], PAYLOAD_PARTS)}
+        served[engine_document()["url"]] = ENGINE
+        served[artifact(IMAGE, "installer_data.json", METADATA)["url"]] = METADATA
+        requested = []
+
+        def fake_open(url, timeout=60):
+            requested.append(url)
+            return contextlib.closing(io.BytesIO(served[url]))
+
+        arguments = ["promote", "--channel", "rc", "--source", "edge", "--host", f"scratch:{self.host}",
+                     "--trust-root", str(self.trust_root), "--verify-remote", "--now", LATER,
+                     "--out", str(self.directory / "remote")]
+        saved = release.open_url, dict(os.environ)
+        release.open_url = fake_open
+        os.environ.update(PATH=self.environment["PATH"], OMARCHY_OPENSSL=OPENSSL)
+        os.environ.pop("GITHUB_REPOSITORY", None)
+        try:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                self.assertEqual(release.main(arguments), 0, output.getvalue())
+            self.assertEqual(sorted(requested), sorted(served))
+            first = payload_document()["parts"][0]["url"]
+            served[first] = served[first][:-1] + b"X"
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                self.assertEqual(release.main(arguments), 1)
+            self.assertIn("not the pinned", output.getvalue())
+        finally:
+            release.open_url = saved[0]
+            os.environ.clear()
+            os.environ.update(saved[1])
+        self.assertEqual(self.calls.read_text(), "")
+
+    def test_a_tampered_source_catalog_is_refused(self) -> None:
+        self.assert_refused(self.promote(), "no edge catalog is published")
+        edge = self.published_edge()
+        served = self.host / "catalog-edge.signed.json"
+
+        document = json.loads(edge.read_text())
+        catalog = base64.b64decode(document["catalog"]).replace(
+            f"sha256:{sha(PAYLOAD)}".encode(), f"sha256:{'f' * 64}".encode())
+        document["catalog"] = base64.b64encode(catalog).decode()
+        served.write_text(json.dumps(document))
+        self.assert_refused(self.promote(), "does not verify")
+
+        other = self.directory / "other"
+        other.mkdir()
+        other_key, _ = generate_key(other)
+        result = self.prepare("default", None, "foreign")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.sign(self.directory / "foreign" / "catalog-edge.json", key=other_key,
+                                   trust_root=other / "trust-root.ed25519.pub", out="foreign-signed").returncode, 0)
+        shutil.copyfile(self.directory / "foreign-signed" / "catalog-edge.signed.json", served)
+        self.assert_refused(self.promote(), "does not verify")
+
+        shutil.copyfile(edge, served)
+        edge_sha256 = sha(self.signed_catalog(edge)[0])
+        self.assert_refused(self.promote("rc", "edge", LATER, "promoted", "--source-sha256", "e" * 64),
+                            f"sha256 {edge_sha256}, not the pinned")
+        self.assertFalse((self.directory / "promoted").exists())
+        self.assertEqual(self.promote("rc", "edge", LATER, "promoted", "--source-sha256", edge_sha256).returncode, 0)
+
+    def test_real_promotion_is_parked_without_the_explicit_input(self) -> None:
+        edge = self.published_edge()
+        edge_sha256 = sha(self.signed_catalog(edge)[0])
+        pin = ("--source-sha256", edge_sha256)
+        self.assert_refused(self.promote("rc", "edge", LATER, "real", "--real", *pin), "promotion is parked")
+        self.assert_refused(self.promote("rc", "edge", LATER, "real", "--real", "--confirm", "promote-stable", *pin),
+                            "--confirm promote-rc")
+        self.assert_refused(self.promote("rc", "edge", LATER, "real", "--real", "--confirm", "promote-rc"),
+                            "must pin the source catalog")
+        self.assertFalse((self.directory / "real").exists())
+        result = self.promote("rc", "edge", LATER, "real", "--real", "--confirm", "promote-rc", *pin)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("mode=real", result.stdout)
+
+    def test_the_signing_job_rechecks_the_promotion(self) -> None:
+        self.published_edge()
+        self.assertEqual(self.promote().returncode, 0)
+        out = self.directory / "promoted"
+        catalog_path = out / "catalog-rc.json"
+        original = json.loads(catalog_path.read_text())
+
+        def check(document: dict | None = None, source: Path = out / "source.signed.json",
+                  name: str = "catalog-rc.json") -> subprocess.CompletedProcess:
+            path = catalog_path if document is None else self.write(name, document)
+            return self.run_tool("check-promotion", "--channel", "rc", "--source-channel", "edge",
+                                 "--catalog", str(path), "--source", str(source), "--trust-root", str(self.trust_root))
+
+        self.assertEqual(check().returncode, 0)
+        source_sha256 = sha(release.decode_envelope((out / "source.signed.json").read_bytes())[0])
+        pinned = self.run_tool("check-promotion", "--channel", "rc", "--source-channel", "edge",
+                               "--catalog", str(catalog_path), "--source", str(out / "source.signed.json"),
+                               "--trust-root", str(self.trust_root), "--source-sha256", source_sha256)
+        self.assertEqual(pinned.returncode, 0, pinned.stderr)
+        mispinned = self.run_tool("check-promotion", "--channel", "rc", "--source-channel", "edge",
+                                  "--catalog", str(catalog_path), "--source", str(out / "source.signed.json"),
+                                  "--trust-root", str(self.trust_root), "--source-sha256", "d" * 64)
+        self.assert_refused(mispinned, "not the pinned")
+        changed = json.loads(json.dumps(original))
+        changed["models"][0]["engineDigest"] = f"sha256:{'a' * 64}"
+        self.assert_refused(check(changed, name="catalog-rc.json"), "changes more than sequence and issuedAt: models")
+        changed = json.loads(json.dumps(original))
+        changed["models"][0]["payloadArtifact"]["parts"][0]["sourceURL"] = f"{release_base('other')}/{ZIP}.part00"
+        self.assert_refused(check(changed, name="catalog-rc.json"), "models")
+        changed = dict(original, installer=dict(original["installer"], minimumVersion="2.0.0"))
+        self.assert_refused(check(changed, name="catalog-rc.json"), "installer")
+        changed = dict(original, models=original["models"][1:])
+        self.assert_refused(check(changed, name="catalog-rc.json"), "models")
+        changed = dict(original, sequence=SEQUENCE)
+        self.assert_refused(check(changed, name="catalog-rc.json"), "does not follow")
+        self.assert_refused(check(original, name="catalog-stable.json"), "must be catalog-rc.json")
+        tampered = json.loads((out / "source.signed.json").read_text())
+        tampered["signature"] = base64.b64encode(b"\0" * 64).decode()
+        self.assert_refused(check(source=self.write("source.signed.json", tampered)), "does not verify")
+
+    def test_promotion_only_moves_forward(self) -> None:
+        for channel, source in (("rc", "rc"), ("rc", "stable"), ("edge", "edge"), ("stable", "stable"),
+                                ("beta", "edge"), ("rc", "nightly")):
+            result = self.promote(channel, source)
+            self.assertEqual(result.returncode, 1, (channel, source))
+            self.assertIn("refused", result.stderr)
+
+    def test_a_promotion_must_follow_the_published_target(self) -> None:
+        self.published_edge()
+        self.assertEqual(self.promote("rc", "edge", LATEST, "newer").returncode, 0)
+        self.assertEqual(self.sign(self.directory / "newer" / "catalog-rc.json", out="newer-signed").returncode, 0)
+        self.assertEqual(self.publish("rc", self.directory / "newer-signed" / "catalog-rc.signed.json").returncode, 0)
+        self.assert_refused(self.promote("rc", "edge", LATER, "older"), "does not follow the published rc")
 
 
 if __name__ == "__main__":
