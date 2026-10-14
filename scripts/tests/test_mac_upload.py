@@ -200,7 +200,9 @@ class UploadTests(unittest.TestCase):
         document = fixture.evidence(self.sha256, RUN_URL)
         upload.check_evidence(document, self.sha256, RUN_URL)
         self.assertEqual(catalog.check_evidence(document, self.sha256), document)
-        for change in ({"result": "fail"}, {"scenarios": document["scenarios"][:2]}):
+        for change in ({"result": "fail"}, {"scenarios": document["scenarios"][:2]}, {"runner": "x" * 201},
+                       {"harness_commit": "main"}, {"image_sha256": "f" * 64},
+                       {"scenarios": document["scenarios"] + [{"name": "update", "result": "fail"}]}):
             with self.subTest(change):
                 failing = {**document, **change}
                 self.assertRaises(upload.Refusal, upload.check_evidence, failing, self.sha256)
@@ -350,8 +352,12 @@ class CatalogInputTests(unittest.TestCase):
             self.assertEqual(part["url"], base + part["fileName"])
         self.assertEqual(inputs["installer_data"]["url"], base + "installer_data.json")
         catalog = load("catalog_release", SCRIPTS / "catalog_release.py")
-        catalog.check_artifact(payload, "payload", True)
-        catalog.check_artifact(inputs["installer_data"], "installer_data")
+        engine = json.loads((SCRIPTS.parent / ".github" / "mac-release-pipeline.json").read_text())["engine"]
+        installer = {"minimumVersion": "2.1.0", "latestVersion": "2.1.0", "downloadURL": self.BASE.format("v2.1.0") + "app.dmg"}
+        document = catalog.build_catalog("edge", self.image, payload, engine, inputs["installer_data"],
+                                         fixture.evidence(self.sha256, RUN_URL), installer,
+                                         catalog.datetime.datetime(2026, 10, 14, tzinfo=catalog.datetime.timezone.utc))
+        self.assertIn(self.sha256, json.dumps(document))
 
     def test_a_whole_image_becomes_a_payload_without_parts(self):
         report, base = self.report(part_bytes=None)
@@ -454,6 +460,7 @@ class PublishingGitHub(FakeGitHub):
                 raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
             return {"object": {"type": "commit", "sha": self.tag}}
         if method == "PATCH":
+            self.patched = document
             self.tag = self.tag or self.releases[0]["target_commitish"]
             self.releases[0] = {**self.releases[0], **document}
             return self.releases[0]
@@ -470,8 +477,7 @@ class MakePublicTests(unittest.TestCase):
     def test_a_draft_becomes_a_prerelease_never_latest_tagged_at_its_commit(self):
         github = PublishingGitHub(self.release(), None)
         github.make_public()
-        self.assertEqual(github.releases[0]["draft"], False)
-        self.assertEqual(github.releases[0]["make_latest"], "false")
+        self.assertEqual(github.patched, {"draft": False, "prerelease": True, "make_latest": "false"})
         self.assertEqual(github.tag, self.COMMIT)
         self.assertEqual(github.download_base(),
                          f"https://github.com/omacom/omarchy-mac-installer/releases/download/{self.TAG}/")

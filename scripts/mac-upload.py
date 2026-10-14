@@ -154,6 +154,8 @@ def check_evidence(document: object, expected_sha256: str, expected_run_url: str
     require(isinstance(commit, str) and COMMIT.fullmatch(commit) is not None, "the evidence record's harness_commit is not a commit")
     runner = document.get("runner")
     require(isinstance(runner, str) and runner.strip() != "", "the evidence record names no runner")
+    # The catalog's limit: whatever the upload takes, the catalog must take too.
+    require(len(runner) <= 200, "the evidence record's runner is longer than 200 characters")
     run_url = document.get("run_url")
     require(isinstance(run_url, str) and run_url.startswith("https://"), "the evidence record's run_url is not an https URL")
     require(not expected_run_url or run_url == expected_run_url,

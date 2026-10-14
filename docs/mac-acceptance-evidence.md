@@ -1,6 +1,6 @@
 # Mac acceptance evidence record
 
-The VM acceptance job writes one evidence record per tested image. The upload job (`mac-upload.yml`) and the catalog job refuse an image unless its record passes. `scripts/mac-upload.py check-evidence --evidence FILE --sha256 HEX` is the check; both jobs use it.
+The VM acceptance job writes one evidence record per tested image. The upload job (`mac-upload.yml`) and the catalog job refuse an image unless its record passes. `scripts/mac-upload.py check-evidence --evidence FILE --sha256 HEX` is the upload's check, and the acceptance job's gate uses it too. The catalog checks with `catalog_release.py check-evidence`, which takes every record the upload takes (it also allows `skip` for scenarios outside the required three).
 
 ## Format
 
