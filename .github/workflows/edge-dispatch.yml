@@ -1,0 +1,107 @@
+name: Edge publish filter
+
+# omacom/omarchy-pkgs' publish job sends repository_dispatch edge-mac-changed
+# after it publishes aarch64 packages into edge, naming them in
+# client_payload.packages. This decides whether any of them is a package the
+# Mac image installs (image-builder/bin/edge-dispatch-filter: the channel set,
+# the builder's own packages, the edge runtime's package lists and their
+# dependencies, resolved in the builder's repository order) and, only then,
+# starts the Mac image workflow (mac-image.yml) on the default branch. An
+# unrelated publish ends here, successfully. The image workflow builds and
+# publishes nothing on its own; this workflow builds nothing at all.
+#
+# A repository_dispatch run always uses the default branch's workflow and
+# code, so a payload can never choose what runs. The payload is read only
+# from the event file, never interpolated into a script.
+
+on:
+  repository_dispatch:
+    types: [edge-mac-changed]
+
+permissions: {}
+
+# No concurrency group: a queued run may be replaced by a newer one, and a
+# relevant publish must not be dropped behind an unrelated one. Runs are
+# independent; mac-image.yml serializes the builds.
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  filter:
+    name: Decide whether the image changed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write # gh workflow run mac-image.yml
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install host tools
+        run: |
+          set -euo pipefail
+          command -v bsdtar >/dev/null || { sudo apt-get update -q && sudo apt-get install --yes -q libarchive-tools; }
+
+      - name: Read the payload
+        run: |
+          set -euo pipefail
+          WORK=$RUNNER_TEMP/edge-filter
+          echo "WORK=$WORK" >>"$GITHUB_ENV"
+          mkdir -p "$WORK"
+          jq '.client_payload' "$GITHUB_EVENT_PATH" >"$WORK/payload.json"
+          jq -c '{packages: [.packages[]? | "\(.name) \(.version)"], database_sha256, source}' "$WORK/payload.json"
+
+      - name: Fetch the edge database, the runtime and the other repositories
+        run: |
+          set -euo pipefail
+          filter=image-builder/bin/edge-dispatch-filter
+          curl -fsSL --proto '=https' --retry 3 -o "$WORK/omarchy.db" https://pkgs.omarchy.org/edge/aarch64/omarchy.db
+          described=$(python3 "$filter" runtime --db "$WORK/omarchy.db")
+          read -r runtime sha <<<"$described"
+          curl -fsSL --proto '=https' --retry 3 -o "$WORK/$runtime" "https://pkgs.omarchy.org/edge/aarch64/$runtime"
+          echo "$sha  $WORK/$runtime" | sha256sum -c -
+          echo "RUNTIME=$WORK/$runtime" >>"$GITHUB_ENV"
+          # Without them every dependency resolves in omarchy.db, which only over-matches.
+          if python3 "$filter" fetch-repos "$WORK/repos"; then
+            echo "REPOS=--repos=$WORK/repos" >>"$GITHUB_ENV"
+          else
+            echo "::warning::could not fetch the other repositories' databases; matching against omarchy.db alone"
+          fi
+
+      - name: Decide
+        id: decide
+        run: |
+          set -euo pipefail
+          python3 image-builder/bin/edge-dispatch-filter decide --db "$WORK/omarchy.db" --runtime "$RUNTIME" \
+            --payload "$WORK/payload.json" ${REPOS:-} >"$WORK/decision.json"
+          jq 'del(.image_packages)' "$WORK/decision.json"
+          relevant=$(jq -r .relevant "$WORK/decision.json")
+          echo "relevant=$relevant" >>"$GITHUB_OUTPUT"
+          {
+            echo "### Edge publish: $( [[ $relevant == true ]] && echo 'the Mac image changed' || echo 'nothing the Mac image installs')"
+            echo
+            echo "- published: $(jq -r '.published | join(", ")' "$WORK/decision.json")"
+            echo "- matched: $(jq -r '.matched | if length == 0 then "none" else join(", ") end' "$WORK/decision.json")"
+            echo "- image packages from omarchy.db: $(jq -r '.image_packages | length' "$WORK/decision.json") (resolved against $(jq -r '.resolved_against | join(", ")' "$WORK/decision.json"))"
+            echo "- edge omarchy.db: $(jq -r .database_sha256 "$WORK/decision.json") (publish reported $(jq -r '.payload_database_sha256 // "none"' "$WORK/decision.json"))"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Start the Mac image build
+        if: steps.decide.outputs.relevant == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # Until the image workflow lands on the default branch there is nothing to start.
+          if ! gh api "repos/$REPOSITORY/contents/.github/workflows/mac-image.yml?ref=$DEFAULT_BRANCH" --silent 2>/dev/null; then
+            echo "::notice::mac-image.yml is not on $DEFAULT_BRANCH yet; no build started"
+            exit 0
+          fi
+          gh workflow run mac-image.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH"
+          echo "Started mac-image.yml on $DEFAULT_BRANCH" | tee -a "$GITHUB_STEP_SUMMARY"
