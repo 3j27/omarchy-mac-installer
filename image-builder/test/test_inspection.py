@@ -689,6 +689,88 @@ class RuntimeLayoutInspectionTest(unittest.TestCase):
                         path.chmod(0o700)
 
 
+class ChannelImageInspectionTest(unittest.TestCase):
+    """A public image built from an edge channel set (builder/channel_set.py)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.base = Path(cls.tmp.name)
+        cls.candidate = fixtures.Signer(cls.base / "candidate")
+        cls.channel = fixtures.Signer(cls.base / "channel", "Omarchy fixture <pkgs@example.invalid>")
+        cls.trust = fixtures.channel_trust(cls.base, cls.candidate, cls.channel)
+        database, sha256 = fixtures.make_channel(cls.base / "edge", cls.channel)
+        channel_set = fixtures.load("channel_set", "builder/channel_set.py")
+        cls.set = cls.base / "set"
+        cls.summary = channel_set.snapshot(database, sha256, "edge", cls.base / "edge/packages", cls.set, cls.trust)
+        cls.good = cls.base / "root"
+        fixtures.make_root(cls.good, cls.set, "e1b0e5e9b")
+
+    @classmethod
+    def tearDownClass(cls):
+        for signer in (cls.candidate, cls.channel):
+            signer.close()
+        for path in cls.base.rglob("*"):
+            if path.is_dir() and not path.is_symlink():
+                path.chmod(0o700)
+        cls.tmp.cleanup()
+
+    def setUp(self):
+        work = Path(tempfile.mkdtemp(dir=self.base))
+        self.root = work / "root"
+        shutil.copytree(self.good, self.root, symlinks=True)
+        self.factory = work / "factory"
+        fixtures.make_factory(self.factory, self.root, self.summary)
+        SUBVOLUMES.clear()
+        SUBVOLUMES.add(self.root / ".snapshots")
+
+    def inspect(self):
+        return inspection.inspect(self.root, self.set, "edge", self.factory, trust=self.trust)
+
+    def assertFails(self, check, pattern):
+        report = self.inspect()
+        self.assertEqual(report["checks"][check]["result"], "failed", report["checks"][check])
+        self.assertRegex(report["checks"][check]["detail"], pattern)
+
+    def test_a_channel_image_passes_as_a_public_image(self):
+        report = self.inspect()
+        failed = {name: check for name, check in report["checks"].items() if check["result"] != "passed"}
+        self.assertEqual(report["result"], "passed", failed)
+        self.assertEqual(report["set_kind"], "channel")
+        self.assertEqual(report["database_sha256"], self.summary["database_sha256"])
+        self.assertEqual(report["image_target"]["image_profile"], "release")
+        self.assertEqual(report["image_target"]["channel_db_sha256"], self.summary["database_sha256"])
+        self.assertNotIn("candidate_set", report["image_target"])
+        self.assertEqual(report["runtime_sources"], {"omarchy-mac": fixtures.SOURCE, "omarchy-mac-boot": fixtures.SOURCE})
+        self.assertNotIn("test image pin", report["checks"]["pacman-config"]["detail"])
+        self.assertEqual(report["installed_versions"]["omarchy-dev"], fixtures.CHANNEL_VERSIONS["omarchy"])
+
+    def test_the_image_target_must_name_the_channel_set_as_a_public_image(self):
+        target = self.root / "var/lib/omarchy/image/target"
+        for text, pattern in ((fixtures.image_target(self.summary, "test"), "does not record the release profile"),
+                              (fixtures.image_target(self.summary).replace(self.summary["database_sha256"], "0" * 64),
+                               "records another channel set"),
+                              (fixtures.image_target(self.summary) + "candidate_set=apple-test-fixture\n",
+                               "names a candidate set")):
+            with self.subTest(pattern=pattern):
+                target.write_text(text)
+                self.assertFails("image-target", pattern)
+
+    def test_a_test_image_pin_fails_a_channel_image(self):
+        conf = self.root / "etc/pacman.conf"
+        conf.write_bytes(fixtures.test_image_pin.render(conf.read_bytes(), ["omarchy", "omarchy-settings"]))
+        self.assertFails("pacman-config", "configuration$")
+
+    def test_the_dev_runtime_must_provide_its_roles(self):
+        desc = next((self.root / "var/lib/pacman/local").glob("omarchy-dev-*/desc"))
+        desc.write_text(desc.read_text().replace("%PROVIDES%\nomarchy\n", ""))
+        self.assertFails("installed-system", "packages-required-present")
+
+    def test_the_factory_must_be_sealed_for_the_channel_set(self):
+        fixtures.write(self.factory, "var/lib/omarchy/factory-sealed", "format=2\ncandidate_set=x\ncandidate_source_commit=y\n")
+        self.assertFails("factory", "records another channel set")
+
+
 class TestImagePinTest(unittest.TestCase):
     TEMPLATE = b"# pacman\n\n[options]\nArchitecture = auto\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n"
 
