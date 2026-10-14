@@ -52,6 +52,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -62,6 +63,7 @@ from typing import BinaryIO, Protocol
 GITHUB_PART_BYTES = 1992294400
 MAXIMUM_PART_COUNT = 16
 READ_BLOCK_BYTES = 8 * 1024 * 1024
+LISTING_ATTEMPTS = 6
 IMAGE_NAME = re.compile(r"^omarchy-mac-(edge|rc|stable)-\d{4}\.\d{2}\.\d{2}-[0-9a-f]{12}$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
@@ -267,6 +269,7 @@ class GitHubReleaseDestination:
         self.target = target
         self.notes = notes
         self._release: dict | None = None
+        self._assets: dict[str, dict] = {}
 
     def location(self) -> str:
         return f"github.com/{self.repository} release {self.release} (draft)"
@@ -334,11 +337,16 @@ class GitHubReleaseDestination:
         if self.target:
             document["target_commitish"] = self.target
         created = self._json("POST", f"/repos/{self.repository}/releases", document)
-        # Drafts have no tag yet, so two jobs could each create one: list again.
-        self._release = None
-        found = self._find()
-        require(found is not None and found["id"] == created["id"], f"another release tagged {self.release} appeared")
-        return found
+        self._release = created
+        # Drafts have no tag yet, so two jobs could each create one. The
+        # listing can lag behind the create, so wait for ours to show.
+        for attempt in range(LISTING_ATTEMPTS):
+            tagged = [item for item in self._paged(f"/repos/{self.repository}/releases") if item.get("tag_name") == self.release]
+            require(all(item["id"] == created["id"] for item in tagged), f"another release tagged {self.release} exists")
+            if tagged:
+                break
+            time.sleep(attempt + 1)
+        return created
 
     def put(self, name: str, path: Path) -> None:
         release = self._find() or self._create()
@@ -354,14 +362,17 @@ class GitHubReleaseDestination:
                     raise Refusal(f"{name} already exists on {self.location()}") from error
                 raise
         require(asset.get("name") == name, f"GitHub stored {name} as {asset.get('name')}")
+        self._assets[name] = asset
         require(int(asset.get("size", -1)) == size, f"GitHub stored {name} with {asset.get('size')} bytes, not {size}")
 
     def fetch(self, name: str, sink: BinaryIO) -> None:
-        release = self._find()
-        require(release is not None, f"{self.location()} doesn't exist")
-        assets = {asset["name"]: asset for asset in self._paged(f"/repos/{self.repository}/releases/{release['id']}/assets")}
-        require(name in assets, f"{name} is missing from {self.location()}")
-        with self._request("GET", f"/repos/{self.repository}/releases/assets/{assets[name]['id']}",
+        if name not in self._assets:
+            release = self._find()
+            require(release is not None, f"{self.location()} doesn't exist")
+            for asset in self._paged(f"/repos/{self.repository}/releases/{release['id']}/assets"):
+                self._assets.setdefault(asset["name"], asset)
+        require(name in self._assets, f"{name} is missing from {self.location()}")
+        with self._request("GET", f"/repos/{self.repository}/releases/assets/{self._assets[name]['id']}",
                            accept="application/octet-stream") as response:
             while block := response.read(READ_BLOCK_BYTES):
                 sink.write(block)
@@ -489,12 +500,18 @@ def verify(files: list[Path], destination: Destination) -> None:
 
 def probe_refusals(files: list[Path], destination: Destination, staging: Path) -> None:
     """Dry run only: check the destination's listing drives both decisions."""
-    require(plan(files, destination.listing(), destination) == [], "a second identical upload would write again")
+    names = {path.name for path in files}
+    for attempt in range(LISTING_ATTEMPTS):
+        remote = destination.listing()
+        if names <= set(remote):
+            break
+        time.sleep(attempt + 1)  # a listing can lag behind the uploads
+    require(plan(files, remote, destination) == [], "a second identical upload would write again")
     changed = staging / "probe" / SUMS_NAME
     changed.parent.mkdir()
     changed.write_bytes((files[-1].read_bytes() + b"# changed\n"))
     try:
-        plan(files[:-1] + [changed], destination.listing(), destination)
+        plan(files[:-1] + [changed], remote, destination)
     except Refusal as refusal:
         print(f"  refused as expected: {refusal}")
     else:
