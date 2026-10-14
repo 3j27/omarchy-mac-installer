@@ -509,7 +509,9 @@ def probe_refusals(files: list[Path], destination: Destination, staging: Path) -
     require(plan(files, remote, destination) == [], "a second identical upload would write again")
     changed = staging / "probe" / SUMS_NAME
     changed.parent.mkdir()
-    changed.write_bytes((files[-1].read_bytes() + b"# changed\n"))
+    data = bytearray(files[-1].read_bytes())
+    data[0] ^= 1  # same size, so only the digest can tell
+    changed.write_bytes(bytes(data))
     try:
         plan(files[:-1] + [changed], remote, destination)
     except Refusal as refusal:
