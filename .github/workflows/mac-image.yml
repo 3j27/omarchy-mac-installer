@@ -7,13 +7,11 @@ name: Mac image (edge)
 # artifacts. It publishes nothing: no release, no catalog, no upload. It uses
 # no secrets, takes no inputs, and never runs for pull requests.
 #
-# repository_dispatch edge-mac-changed is for omarchy-pkgs' edge publish when a
-# Mac-relevant package changes; its payload is never read.
+# Started by hand, or by edge-dispatch.yml (gh workflow run) when an edge
+# publish changes a package the image installs.
 
 on:
   workflow_dispatch:
-  repository_dispatch:
-    types: [edge-mac-changed]
   push:
     branches: [mac-image-workflow]
 

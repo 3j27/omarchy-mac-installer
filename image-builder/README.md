@@ -40,7 +40,7 @@ The image is named `omarchy-mac-<lane>-<YYYY.MM.DD>-<package set id>` (`mac-imag
 
 ### In CI
 
-`.github/workflows/mac-image.yml` builds this image on GitHub's `ubuntu-24.04-arm` runner, started by hand (`workflow_dispatch`) or by omarchy-pkgs' edge publish (`repository_dispatch` `edge-mac-changed`, payload unread). It resolves the edge inputs, builds, checks the records, runs the release guard, and keeps the image as a workflow artifact named for it. A separate job attests the zip's digest (build provenance), so the privileged build never holds the token that mints the attestation's certificate. It publishes nothing and uses no secrets. The artifact holds the zip and its `.sha256`, `installer_data.json`, `IMAGE`, `PROVENANCE`, `INSPECTION`, the inputs record, the build log, the release guard's log and the build's `logs/`.
+`.github/workflows/mac-image.yml` builds this image on GitHub's `ubuntu-24.04-arm` runner, started by hand (`workflow_dispatch`), or by `edge-dispatch.yml` when an edge publish changes a package the image installs. It resolves the edge inputs, builds, checks the records, runs the release guard, and keeps the image as a workflow artifact named for it. A separate job attests the zip's digest (build provenance), so the privileged build never holds the token that mints the attestation's certificate. It publishes nothing and uses no secrets. The artifact holds the zip and its `.sha256`, `installer_data.json`, `IMAGE`, `PROVENANCE`, `INSPECTION`, the inputs record, the build log, the release guard's log and the build's `logs/`.
 
 ## What a build does
 
