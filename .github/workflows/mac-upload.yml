@@ -9,8 +9,8 @@ name: Mac image upload
 #
 # A real upload runs only on main, in the `publish` environment, and refuses
 # without a passing acceptance evidence record for the image's sha256
-# (docs/mac-acceptance-evidence.md) and without the image's build attestation
-# from mac-image.yml on main. A dry run (the default) writes only to a
+# (docs/mac-acceptance-evidence.md) attested by mac-acceptance.yml on main,
+# and without the image's build attestation from mac-image.yml on main. A dry run (the default) writes only to a
 # `dryrun-` scratch draft release that it deletes afterwards.
 #
 # With make-public, a real upload then publishes the draft as a prerelease
@@ -229,6 +229,27 @@ jobs:
           else
             cat "$WORK/attestation.log"
             echo "::error::refusing to upload: the image has no build attestation from mac-image.yml on main"
+            exit 1
+          fi
+
+      - name: Verify the evidence's attestation
+        if: inputs.evidence-artifact != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          record=$WORK/evidence/acceptance-evidence.json
+          [[ -f $record ]] || { echo "::error::$EVIDENCE_ARTIFACT holds no acceptance-evidence.json"; exit 1; }
+          if gh attestation verify "$record" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/mac-acceptance.yml" \
+            --source-ref refs/heads/main --deny-self-hosted-runners >"$WORK/evidence-attestation.log" 2>&1; then
+            echo "the evidence record was attested by mac-acceptance.yml on main"
+          elif [[ $DRY_RUN == "true" ]]; then
+            cat "$WORK/evidence-attestation.log"
+            echo "::warning::the evidence record has no attestation from mac-acceptance.yml on main; a real upload would refuse it"
+          else
+            cat "$WORK/evidence-attestation.log"
+            echo "::error::refusing to upload: the evidence record has no attestation from mac-acceptance.yml on main"
             exit 1
           fi
 
