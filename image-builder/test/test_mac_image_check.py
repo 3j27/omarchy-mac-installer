@@ -6,11 +6,13 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
-import struct
 import subprocess
+import sys
 import tempfile
 import unittest
-import uuid
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fixtures  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 loader = importlib.machinery.SourceFileLoader("mac_image_check", str(ROOT / "bin/mac-image-check"))
@@ -41,15 +43,6 @@ def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def pe(extra: bytes) -> bytes:
-    data = bytearray(0x200)
-    data[:2] = b"MZ"
-    struct.pack_into("<I", data, 0x3C, 0x80)
-    data[0x80:0x84] = b"PE\0\0"
-    struct.pack_into("<H", data, 0x84, 0xAA64)
-    return bytes(data) + extra
-
-
 def package_set(packages) -> str:
     lines = sorted((f"{n}|{v}|{s}\n" for n, v, _, _, s in packages), key=str.encode)
     return hashlib.sha256("".join(lines).encode()).hexdigest()
@@ -61,28 +54,8 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
     """A build directory as build-mac-image writes it; LEGACY, as a build before builds recorded their identity."""
     lab = "profile=lab" in profile
     name = name or (LAB_NAME if lab else NAME)
-    payload = out / "payload"
-    for directory in ("esp/EFI/BOOT", "esp/EFI/Linux", "esp/m1n1", "esp/omarchy"):
-        (payload / directory).mkdir(parents=True)
-    boot = bytearray(1 << 16)
-    boot[0x438:0x43A] = b"\x53\xef"
-    boot[0x468:0x478] = uuid.UUID(check.BOOT_UUID).bytes
-    boot[0x478:0x484] = b"OMARCHY_BOOT"
-    (payload / "boot.img").write_bytes(boot)
-    root = bytearray(1 << 17)
-    root[0x10020:0x10030] = uuid.UUID(check.ROOT_UUID).bytes
-    root[0x10040:0x10048] = b"_BHRfS_M"
-    root[0x1012B:0x1012B + 12] = b"OMARCHY_ROOT"
-    (payload / "root.img").write_bytes(root)
-    (payload / "esp/EFI/BOOT/BOOTAA64.EFI").write_bytes(pe(b"Limine 12.9.0\n"))
-    (payload / "esp/EFI/Linux/omarchy_linux-aurora.efi").write_bytes(pe(b".linux\0.initrd\0"))
-    (payload / "esp/limine.conf").write_text("interface_branding: Omarchy Bootloader\n//linux-aurora\n"
-                                             "  protocol: efi\n  path: boot():/EFI/Linux/omarchy_linux-aurora.efi\n")
-    (payload / "esp/m1n1/boot.bin").write_bytes(b"m1n1" * 64)
-    shutil.copy(ROOT / "builder/omarchy-volume.icns", payload / "omarchy-volume.icns")
     zip_path = out / name
-    subprocess.run(["bsdtar", "--format", "zip", "-cf", str(zip_path), "esp", "boot.img", "root.img",
-                    "omarchy-volume.icns"], cwd=payload, check=True)
+    fixtures.write_payload(zip_path, check.BOOT_UUID, check.ROOT_UUID)
     (out / "installer_data.json").write_text(json.dumps(check.expected_metadata(name)))
     target = {"candidate_set": INPUTS["candidate_set"], "candidate_source_commit": INPUTS["candidate_source_commit"],
               "builder_commit": "c" * 40, "builder_tree_clean": "true", "image_profile": "lab" if lab else "test",
@@ -122,7 +95,6 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
     if image_edit:
         image = image_edit(image)
     (out / "IMAGE").write_text("\n".join(image) + "\n")
-    shutil.rmtree(payload)
 
 
 class BuildDirectoryTest(unittest.TestCase):
@@ -339,7 +311,7 @@ class BuildDirectoryTest(unittest.TestCase):
         payload = self.out / "unpacked"
         payload.mkdir()
         subprocess.run(["bsdtar", "-xf", str(self.out / NAME), "-C", str(payload)], check=True)
-        (payload / "esp/EFI/BOOT/BOOTAA64.EFI").write_bytes(pe(b"GRUB 2.12\n"))
+        (payload / "esp/EFI/BOOT/BOOTAA64.EFI").write_bytes(fixtures.payload_pe(b"GRUB 2.12\n"))
         (self.out / NAME).unlink()
         subprocess.run(["bsdtar", "--format", "zip", "-cf", str(self.out / NAME), "esp", "boot.img", "root.img",
                         "omarchy-volume.icns"], cwd=payload, check=True)

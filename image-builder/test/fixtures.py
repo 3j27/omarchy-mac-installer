@@ -220,6 +220,56 @@ def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, n
     return candidate_set.digest(directory / "signing.json")
 
 
+# ── payload ───────────────────────────────────────────────────────────────
+PAYLOAD_MEMBERS = ("esp", "boot.img", "root.img", "omarchy-volume.icns")
+
+
+def payload_pe(extra: bytes) -> bytes:
+    """The start of an ARM64 PE image, as far as the payload check reads it."""
+    data = bytearray(0x200)
+    data[:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3C, 0x80)
+    data[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<H", data, 0x84, 0xAA64)
+    return bytes(data) + extra
+
+
+def write_payload(zip_path: Path, boot_uuid: str, root_uuid: str, omit: tuple[str, ...] = (),
+                  empty: tuple[str, ...] = (), grow: dict[str, int] | None = None) -> None:
+    """The payload zip build-mac-image packages, with small stand-ins for its images. OMIT drops members,
+    EMPTY truncates them and GROW appends that many zero bytes to each member it names."""
+    with tempfile.TemporaryDirectory() as temporary:
+        payload = Path(temporary)
+        for directory in ("esp/EFI/BOOT", "esp/EFI/Linux", "esp/m1n1", "esp/omarchy"):
+            (payload / directory).mkdir(parents=True)
+        boot = bytearray(1 << 16)
+        boot[0x438:0x43A] = b"\x53\xef"
+        boot[0x468:0x478] = bytes.fromhex(boot_uuid.replace("-", ""))
+        boot[0x478:0x484] = b"OMARCHY_BOOT"
+        (payload / "boot.img").write_bytes(boot)
+        root = bytearray(1 << 17)
+        root[0x10020:0x10030] = bytes.fromhex(root_uuid.replace("-", ""))
+        root[0x10040:0x10048] = b"_BHRfS_M"
+        root[0x1012B:0x1012B + 12] = b"OMARCHY_ROOT"
+        (payload / "root.img").write_bytes(root)
+        (payload / "esp/EFI/BOOT/BOOTAA64.EFI").write_bytes(payload_pe(b"Limine 12.9.0\n"))
+        (payload / "esp/EFI/Linux/omarchy_linux-aurora.efi").write_bytes(payload_pe(b".linux\0.initrd\0"))
+        (payload / "esp/limine.conf").write_text("interface_branding: Omarchy Bootloader\n//linux-aurora\n"
+                                                 "  protocol: efi\n  path: boot():/EFI/Linux/omarchy_linux-aurora.efi\n")
+        (payload / "esp/m1n1/boot.bin").write_bytes(b"m1n1" * 64)
+        shutil.copy(ROOT / "builder/omarchy-volume.icns", payload / "omarchy-volume.icns")
+        for member in omit:
+            (payload / member).unlink()
+        for member in empty:
+            (payload / member).write_bytes(b"")
+        for member, count in (grow or {}).items():
+            with (payload / member).open("ab") as stream:
+                stream.write(bytes(count))
+        zip_path.unlink(missing_ok=True)
+        members = [member for member in PAYLOAD_MEMBERS if (payload / member).exists()]
+        subprocess.run(["bsdtar", "--format", "zip", "-cf", str(zip_path), *members], cwd=payload, check=True)
+
+
 # ── image root ────────────────────────────────────────────────────────────
 def pe_image(sections: dict[str, bytes]) -> bytes:
     """A minimal PE32+ ARM64 image holding SECTIONS, as a UKI lays them out."""

@@ -6,6 +6,8 @@ payload     the zip and its installer_data.json: what the engine checks
             (omarchy_asahi.py _validate_full_os_package), the declared sizes,
             the fixed UUIDs, labels and ESP volume id, Limine in the U-Boot
             slot booting its UKI, and an empty esp/omarchy/ directory.
+            test/test_engine_contract.py holds this copy of the contract to
+            the engine's, from this repository.
 image       root.img, boot.img and the ESP tree: filesystems, UUIDs, the five
             subvolumes including a sealed @factory, the tree checks, then the
             boot inspection against the imported candidate set (--candidates),
