@@ -43,13 +43,16 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         cls.base = Path(cls.tmp.name)
         edge = cls.base / "edge"
         # The fixture runtime's lists: base hyprland, aarch64 zram-generator, Apple omarchy-mac and
-        # omarchy-mac-boot, x86_64-only obs-studio. omarchy-dev depends on walker, walker on elephant,
+        # omarchy-mac-boot, x86_64-only obs-studio. omarchy-dev depends on walker>=2, walker on elephant,
         # omarchy-mac-boot on omarchy (which omarchy-dev provides), elephant on the virtual vulkan-driver.
+        # omarchy-mac provides limine-snapper-sync, which the builder still installs as a target.
         extra = [("walker", "2.17.2-1"), ("elephant", "2.0-1"), ("zram-generator", "1.2-1"),
                  ("hyprland", "0.56.2-5"), ("obs-studio", "32.2.2-1"), ("claude-code", "2.1.296-1"),
                  ("omarchy", "4.0.4-2"), ("limine-snapper-sync", "1.32.1-2"), ("nvidia-utils", "615.71.09-1")]
 
         def edit(name, text):
+            if name == "omarchy-mac":
+                return text + "%PROVIDES%\nlimine-snapper-sync\n\n"
             return text.replace("%DEPENDS%\n", "%DEPENDS%\nwalker>=2\n") if name == "omarchy-dev" else text
 
         cls.database, _ = fixtures.make_channel(edge, None, extra=extra, unsigned=SET_NAMES, entry_edit=edit)
@@ -63,10 +66,13 @@ class EdgeDispatchFilterTest(unittest.TestCase):
                         *sorted(e.name for e in entries.iterdir())], check=True)
         version = fixtures.CHANNEL_VERSIONS["omarchy"]
         cls.runtime = edge / "packages" / f"omarchy-dev-{version}-aarch64.pkg.tar.xz"
-        # Arch Linux ARM's extra carries hyprland and a vulkan-driver of its own; the rest are empty.
+        # Arch Linux ARM's extra carries hyprland, a vulkan-driver of its own, a walker too old for
+        # omarchy-dev and a provider of zram-generator; the rest are empty.
         cls.repos = cls.base / "repos"
         cls.repos.mkdir()
-        write_repo(cls.repos / "extra.db", {"hyprland": {}, "mesa": {"provides": ["vulkan-driver"]}})
+        write_repo(cls.repos / "extra.db", {"hyprland": {}, "mesa": {"provides": ["vulkan-driver"]},
+                                            "walker": {"version": "1.0-1"},
+                                            "zram-tools": {"provides": ["zram-generator"]}})
         for name in ("asahi-alarm", "core", "alarm", "aur"):
             write_repo(cls.repos / f"{name}.db", {f"{name}-placeholder": {}})
 
@@ -125,12 +131,58 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         self.assertEqual(decision["payload_database_sha256"], "0" * 64)
         self.assertEqual(decision["runtime"], self.runtime.name)
 
+    def test_versions_decide_which_repository_a_dependency_comes_from(self):
+        decision = self.decide("walker")
+        self.assertEqual(decision["matched"], ["walker"], "extra's walker 1.0 does not meet omarchy-dev's walker>=2")
+        self.assertEqual(self.decide("zram-generator")["matched"], ["zram-generator"],
+                         "a literal name in omarchy wins over an earlier repository's provider")
+        self.assertEqual(self.decide("limine-snapper-sync")["matched"], ["limine-snapper-sync"],
+                         "a target is installed even when a chosen package provides its name")
+
+    def test_the_resolver_follows_pacman(self):
+        def entry(version, provides=(), depends=(), groups=()):
+            return {"VERSION": [version], "PROVIDES": list(provides), "DEPENDS": list(depends),
+                    "GROUPS": list(groups)}
+        early = {"lib": entry("1.0-1"), "virt-old": entry("1-1", provides=["virt=1.0"]),
+                 "tool": entry("1-1", provides=["thing"])}
+        omarchy = {"app": entry("1-1", depends=["lib>=2", "virt>=2", "unversioned-virt"]),
+                   "lib": entry("2.1-1"), "virt-new": entry("1-1", provides=["virt=2.5"]),
+                   "plain": entry("1-1", provides=["unversioned-virt"]),
+                   "member-a": entry("1-1", groups=["grp"]), "member-b": entry("1-1", groups=["grp"]),
+                   "thing": entry("1-1")}
+        chosen = edge_filter.resolve([("extra", early), ("omarchy", omarchy)], [], ["app", "grp", "thing"])
+        from_omarchy = sorted(n for r, n in chosen if r == "omarchy")
+        self.assertEqual(from_omarchy, ["app", "lib", "member-a", "member-b", "plain", "thing", "virt-new"])
+        self.assertNotIn(("extra", "lib"), chosen)
+        self.assertNotIn(("extra", "tool"), chosen, "a target's literal name wins over a provider")
+
+    def test_vercmp_orders_versions_as_pacman_does(self):
+        # vercmp(8)'s example ordering.
+        order = "1.0a 1.0b 1.0beta 1.0p 1.0pre 1.0rc 1.0 1.0.a 1.0.1".split()
+        for older, newer in zip(order, order[1:]):
+            self.assertEqual(edge_filter.vercmp(older, newer), -1, (older, newer))
+            self.assertEqual(edge_filter.vercmp(newer, older), 1, (newer, older))
+        for a, b, expected in (("1:1.0-1", "2.0-1", 1), ("1.0-1", "1.0-2", -1), ("1.0", "1.0-2", 0),
+                               ("7.1.12.aurora2-11", "7.1.12.aurora10-1", -1), ("1.01", "1.1", 0)):
+            self.assertEqual(edge_filter.vercmp(a, b), expected, (a, b))
+
+    def test_another_database_than_the_published_one_never_rules_a_publish_out(self):
+        own = fixtures.candidate_set.digest(self.database)
+        self.assertFalse(self.decide("claude-code", database_sha256=own)["relevant"])
+        decision = self.decide("claude-code", database_sha256="0" * 64)
+        self.assertTrue(decision["relevant"])
+        self.assertEqual(decision["reason"], "other-database")
+        self.assertEqual(self.decide("linux-aurora", database_sha256="0" * 64)["reason"], "matched")
+
+    def test_the_whole_channel_set_is_in_the_image(self):
+        self.assertTrue(set(SET_NAMES) <= set(self.decide()["image_packages"]))
+
     def test_a_malformed_payload_is_refused(self):
         for fields, message in (({"schema": 2}, "schema 1"), ({"channel": "rc"}, "edge aarch64"),
                                 ({"arch": "x86_64"}, "edge aarch64"), ({"packages": "linux-aurora"}, "package list"),
                                 ({"packages": [{"name": "a b", "version": "1-1"}]}, "malformed package"),
                                 ({"packages": [{"name": "x"}]}, "malformed package"),
-                                ({"database_sha256": "nope"}, "database hash")):
+                                ({"database_sha256": "nope"}, "database hash"), ({"schema": True}, "schema 1")):
             with self.subTest(fields=fields), self.assertRaisesRegex(ValueError, message):
                 self.decide("linux-aurora", **fields)
         broken = self.base / "broken.json"
@@ -145,9 +197,11 @@ class EdgeDispatchFilterTest(unittest.TestCase):
             edge_filter.decide(self.database, other, self.payload("linux-aurora"), self.repos)
 
     def test_the_builder_arrays_are_read_from_build_mac_image(self):
-        names = edge_filter.builder_arrays(ROOT / "bin/build-mac-image")
-        for name in ("base", "limine", "limine-snapper-sync", "asahi-audio"):
-            self.assertIn(name, names)
+        builder = ROOT / "bin/build-mac-image"
+        script = "".join(f"eval \"$(sed -n '/^{a}=(/,/)/p' \"$1\")\"; printf '%s\\n' \"${{{a}[@]}}\"; "
+                         for a in edge_filter.BUILDER_ARRAYS)
+        bash = subprocess.run(["bash", "-c", script, "bash", str(builder)], capture_output=True, text=True, check=True)
+        self.assertEqual(edge_filter.builder_arrays(builder), bash.stdout.split(), "the arrays as Bash reads them")
 
     def test_the_command_line(self):
         result = subprocess.run([sys.executable, str(FILTER), "runtime", "--db", str(self.database)],

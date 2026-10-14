@@ -14,14 +14,17 @@ way the builder derives its set rather than from a list kept here:
     runtime archive itself (omarchy-dev on edge), as the builder reads them;
   - what those pull in through dependencies, resolved like the builder's
     pacman: the set first, then asahi-alarm, Arch Linux ARM's core, extra,
-    alarm and aur, then omarchy last. A name another repository carries comes
-    from there, a dependency an included package provides adds nothing
-    (omarchy-dev provides omarchy), and a virtual dependency takes the
-    providers of the first repository that has any.
+    alarm and aur, then omarchy last, versions compared as pacman's vercmp
+    does. A name an earlier repository carries at a version that meets the
+    dependency comes from there, a dependency an included package already
+    meets adds nothing (omarchy-dev provides omarchy), and a virtual
+    dependency takes the providers of the first repository that has any.
 
 Without the other repositories' databases (--repos), every dependency is
-looked up in omarchy.db alone, which can only over-match. Over-matching costs
-a build; nothing here publishes anything.
+looked up in omarchy.db alone, which can only over-match. When the payload
+reports a different omarchy.db sha256 than the one read here, the publish
+counts as relevant. Over-matching costs a build; nothing here publishes
+anything.
 
   edge-dispatch-filter runtime --db FILE
       prints "<filename> <sha256>" of the edge runtime archive to download
@@ -38,6 +41,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,8 +98,16 @@ def fetch_repos(directory, inputs=ROOT / 'bin/mac-image-inputs'):
     for repository, server in servers.items():
         url = db_url(server, repository)
         require(url.startswith('https://'), f'{repository} is not served over https')
-        with urllib.request.urlopen(url, timeout=120) as response, open(directory / f'{repository}.db', 'wb') as out:
-            out.write(response.read())
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(url, timeout=120) as response:
+                    require(response.geturl().startswith('https://'), f'{repository} redirected off https')
+                    (directory / f'{repository}.db').write_bytes(response.read())
+                break
+            except OSError:
+                if attempt == 2:
+                    raise
+                time.sleep(5)
 
 
 def read_repo(path):
@@ -140,51 +152,144 @@ def runtime_lists(archive):
     for apple in APPLE_LISTS:
         text = member(archive, LISTS + f'{apple}.packages')
         if text is not None:
+            require(list_names(text), f'the runtime\'s {apple}.packages names no package')
             return names + list_names(text)
     raise ValueError('the runtime ships no Apple package list')
 
 
-def strip_constraint(dependency):
-    return re.split(r'[<>=]', dependency, maxsplit=1)[0].strip()
+def rpmvercmp(a, b):
+    """libalpm's rpmvercmp: -1, 0 or 1 as version string A is older than, equal to or newer than B."""
+    if a == b:
+        return 0
+    i = j = 0
+    while i < len(a) and j < len(b):
+        si, sj = i, j
+        while i < len(a) and not a[i].isalnum():
+            i += 1
+        while j < len(b) and not b[j].isalnum():
+            j += 1
+        if i >= len(a) or j >= len(b):
+            break
+        if i - si != j - sj:
+            return -1 if i - si < j - sj else 1
+        ei, ej = i, j
+        test = str.isdigit if a[i].isdigit() else str.isalpha
+        while ei < len(a) and test(a[ei]):
+            ei += 1
+        while ej < len(b) and test(b[ej]):
+            ej += 1
+        one, two = a[i:ei], b[j:ej]
+        if not two:
+            return 1 if test is str.isdigit else -1
+        if test is str.isdigit:
+            one, two = one.lstrip('0'), two.lstrip('0')
+            if len(one) != len(two):
+                return 1 if len(one) > len(two) else -1
+        if one != two:
+            return -1 if one < two else 1
+        i, j = ei, ej
+    if i >= len(a) and j >= len(b):
+        return 0
+    if (i >= len(a) and not (j < len(b) and b[j].isalpha())) or (i < len(a) and a[i].isalpha()):
+        return -1
+    return 1
 
 
-def resolve(repositories, chosen_first, wanted):
-    """(repository, name) pairs a transaction for WANTED installs, after the set CHOSEN_FIRST
-    (names in the last repository, omarchy), searching REPOSITORIES [(name, entries)] in order."""
-    chosen, satisfied = set(), set()
+def split_evr(version):
+    epoch, _, rest = version.rpartition(':') if re.match(r'[0-9]+:', version) else ('0', '', version)
+    version, _, release = rest.rpartition('-') if '-' in rest else (rest, '', None)
+    return epoch or '0', version, release
+
+
+def vercmp(a, b):
+    """pacman's vercmp: epoch, then version, then release when both have one."""
+    (ea, va, ra), (eb, vb, rb) = split_evr(a), split_evr(b)
+    return rpmvercmp(ea, eb) or rpmvercmp(va, vb) or (rpmvercmp(ra, rb) if ra and rb else 0)
+
+
+DEPENDENCY = re.compile(r'([^<>=]+)(?:(>=|<=|=|<|>)(.+))?')
+ORDER = {'=': (0,), '>=': (0, 1), '<=': (-1, 0), '>': (1,), '<': (-1,)}
+
+
+def parse_dependency(text):
+    """(name, operator or None, version or None) of a pacman dependency, without a description."""
+    match = DEPENDENCY.fullmatch(text.split(': ', 1)[0].strip())
+    return (match.group(1), match.group(2), match.group(3)) if match else (text.strip(), None, None)
+
+
+def meets(version, operator, wanted):
+    """VERSION (None for an unversioned provide) meets OPERATOR WANTED, as pacman decides it."""
+    if operator is None:
+        return True
+    return version is not None and vercmp(version, wanted) in ORDER[operator]
+
+
+def provisions(name, entry):
+    """(name, version or None) for the package ENTRY and each name it provides."""
+    yield name, entry['VERSION'][0]
+    for value in entry.get('PROVIDES', []):
+        provided, operator, version = parse_dependency(value)
+        yield provided, version if operator == '=' else None
+
+
+def resolve(repositories, chosen_first, targets):
+    """(repository, name) pairs pacman installs for TARGETS after the set CHOSEN_FIRST (names in
+    the last repository, omarchy), searching REPOSITORIES [(name, entries)] in order. Each target and
+    unsatisfied dependency takes a literal name that meets its version from the first repository
+    that has one, else a provider that does from the first repository with any (all of them there:
+    pacman keeps one, so this can only over-match), else, for a target, the group of that name."""
     omarchy = repositories[-1][1]
-    providers = []
+    indexes = []
     for _, entries in repositories:
         index = {}
         for name, entry in entries.items():
-            for virtual in channel_set.provided(entry):
-                index.setdefault(virtual, []).append(name)
-        providers.append(index)
+            for provided, version in provisions(name, entry):
+                if provided != name:
+                    index.setdefault(provided, []).append((name, version))
+        indexes.append(index)
+    chosen, satisfiers, pending = set(), {}, []
 
     def choose(repository, name, entry):
+        if (repository, name) in chosen:
+            return
         chosen.add((repository, name))
-        satisfied.add(name)
-        satisfied.update(channel_set.provided(entry))
-        pending.extend(entry.get('DEPENDS', []))
+        for provided, version in provisions(name, entry):
+            satisfiers.setdefault(provided, []).append(version)
+        pending.extend(('dependency', d) for d in entry.get('DEPENDS', []))
 
-    pending = []
+    def find(name, operator, version):
+        for repository, entries in repositories:
+            entry = entries.get(name)
+            if entry is not None and meets(entry['VERSION'][0], operator, version):
+                return [(repository, name, entry)]
+        for (repository, entries), index in zip(repositories, indexes):
+            found = [(repository, n, entries[n]) for n, v in index.get(name, []) if meets(v, operator, version)]
+            if found:
+                return sorted(found, key=lambda f: f[1])
+        return []
+
     for name in chosen_first:
         choose('omarchy', name, omarchy[name])
-    pending.extend(wanted)
+    pending.extend(('target', t) for t in reversed(targets))
     while pending:
-        name = strip_constraint(pending.pop())
-        if not name or name in satisfied:
+        kind, text = pending.pop()
+        name, operator, version = parse_dependency(text)
+        if not name:
             continue
-        satisfied.add(name)
-        found = next(((r, entries) for r, entries in repositories if name in entries), None)
-        if found:
-            choose(found[0], name, found[1][name])
+        if kind == 'dependency' and any(meets(v, operator, version) for v in satisfiers.get(name, [])):
             continue
-        for (repository, entries), index in zip(repositories, providers):
-            if name in index:
-                for provider in sorted(index[name]):
-                    choose(repository, provider, entries[provider])
-                break
+        if kind == 'target' and any((r, name) in chosen for r, _ in repositories):
+            continue
+        found = find(name, operator, version)
+        if not found and kind == 'target':
+            seen = set()
+            for repository, entries in repositories:
+                for member, entry in sorted(entries.items()):
+                    if name in entry.get('GROUPS', []) and member not in seen:
+                        seen.add(member)
+                        found.append((repository, member, entry))
+        for repository, member, entry in found:
+            choose(repository, member, entry)
     return chosen
 
 
@@ -195,7 +300,7 @@ def read_payload(path):
     except (OSError, ValueError) as error:
         raise ValueError(f'unreadable payload: {error}') from None
     require(isinstance(payload, dict), 'the payload is not an object')
-    require(payload.get('schema') == 1, 'the payload is not schema 1')
+    require(type(payload.get('schema')) is int and payload['schema'] == 1, 'the payload is not schema 1')
     require(payload.get('channel') == 'edge' and payload.get('arch') == 'aarch64',
             'the payload is not for edge aarch64')
     packages = payload.get('packages')
@@ -232,14 +337,20 @@ def decide(database, runtime, payload_path, repos=None, builder=ROOT / 'bin/buil
     image = sorted(name for repository, name in resolve(repositories, chosen, seeds) if repository == 'omarchy')
     published = sorted({p['name'] for p in payload['packages']})
     matched = sorted(set(published) & set(image))
+    database_sha256 = channel_set.digest(database)
+    # A database other than the one the publish wrote (a newer publish since, or a stale copy) may
+    # not show what the published packages pull in, so it never rules a publish out.
+    reported = payload.get('database_sha256')
+    other_database = bool(published) and reported is not None and reported != database_sha256
     return {
-        'relevant': bool(matched),
+        'relevant': bool(matched) or other_database,
+        'reason': 'matched' if matched else 'other-database' if other_database else 'unrelated',
         'matched': matched,
         'published': published,
         'image_packages': image,
         'resolved_against': [r for r, _ in repositories],
-        'database_sha256': channel_set.digest(database),
-        'payload_database_sha256': payload.get('database_sha256'),
+        'database_sha256': database_sha256,
+        'payload_database_sha256': reported,
         'runtime': entry['FILENAME'][0],
     }
 
