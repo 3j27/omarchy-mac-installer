@@ -136,10 +136,10 @@ jobs:
           path: ${{ steps.stage.outputs.stage }}
           if-no-files-found: error
           compression-level: 0
-          retention-days: 30
+          retention-days: 14
 
-      - name: Keep the evidence of a failed build
-        if: failure()
+      - name: Keep the evidence of a failed or timed-out build
+        if: failure() || cancelled()
         run: |
           set +e
           sudo chown -R "$(id -u):$(id -g)" "$WORK/out" 2>/dev/null
@@ -149,8 +149,8 @@ jobs:
           done
           true
 
-      - name: Upload the evidence of a failed build
-        if: failure()
+      - name: Upload the evidence of a failed or timed-out build
+        if: failure() || cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mac-image-evidence
