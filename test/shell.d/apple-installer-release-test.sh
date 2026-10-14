@@ -49,6 +49,7 @@ refuse_plan "pull requests never run the release" EVENT=pull_request REF=refs/pu
 refuse_plan "pull_request_target never runs the release" EVENT=pull_request_target REF=refs/heads/main RUN_NUMBER=1
 refuse_plan "a push to a branch is not a release" EVENT=push REF=refs/heads/main RUN_NUMBER=1
 refuse_plan "a tag that is not v<version> is refused" EVENT=push REF=refs/tags/vnext RUN_NUMBER=1
+refuse_plan "a release version is plain X.Y.Z (the app compares only that)" EVENT=push REF=refs/tags/v2.2.0-preview.2 RUN_NUMBER=1
 refuse_plan "only a v* tag publishes" \
   EVENT=workflow_dispatch REF=refs/heads/main RUN_NUMBER=1 DRY_RUN=false SIGNING=developer-id VERSION=2.2.0
 refuse_plan "a release is never ad hoc" \
