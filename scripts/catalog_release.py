@@ -330,6 +330,8 @@ def build_catalog(
     check_evidence(evidence, payload["sha256"])
     if installer is not None:
         installer = check_installer(installer, engine["version"])
+    elif re.fullmatch(r"v0\.9\.2-omarchy\.(1[89]|[2-9][0-9]|[1-9][0-9]{2,})", engine["version"]):
+        raise Refusal("this engine needs app 2.1.0 or later: pass installer with minimumVersion >= 2.1.0")
 
     def plain(artifact: dict) -> dict:
         return {"sourceURL": artifact["url"], "fileName": artifact["fileName"], "sizeBytes": artifact["sizeBytes"]}
@@ -455,13 +457,13 @@ def find_openssl() -> str:
     raise Refusal("OpenSSL 3 or newer is required for Ed25519 raw signing (set OMARCHY_OPENSSL)")
 
 
-def decode_private_key(text: bytes, source: str) -> bytes:
-    if len(text) == 32:
+def decode_private_key(text: bytes, source: str, raw_allowed: bool) -> bytes:
+    if raw_allowed and len(text) == 32:
         return text
     try:
         seed = base64.b64decode(text.strip(), validate=True)
     except (binascii.Error, ValueError):
-        raise Refusal(f"the signing key in {source} is neither 32 raw bytes nor base64") from None
+        raise Refusal(f"the signing key in {source} is not base64 (or, in a file, 32 raw bytes)") from None
     if len(seed) != 32:
         raise Refusal(f"the signing key in {source} is not a 32-byte Ed25519 key")
     return seed
@@ -474,10 +476,10 @@ def load_private_key(key_env: str | None, key_file: Path | None) -> bytes:
         value = os.environ.pop(key_env, None)
         if not value:
             raise Refusal(f"the signing key variable {key_env} is empty or unset")
-        return decode_private_key(value.encode(), key_env)
+        return decode_private_key(value.encode(), key_env, raw_allowed=False)
     if not key_file.is_file() or key_file.is_symlink():
         raise Refusal(f"missing or unsafe key file: {key_file}")
-    return decode_private_key(key_file.read_bytes(), str(key_file))
+    return decode_private_key(key_file.read_bytes(), str(key_file), raw_allowed=True)
 
 
 def openssl_public_key(openssl: str, seed: bytes) -> bytes:
@@ -609,7 +611,8 @@ class GitHubReleaseHost:
     """The stopgap host: one prerelease per channel, tag catalog-<channel>,
     whose catalog-<channel>.signed.json asset is replaced in place. Catalogs
     are the only mutable objects; images and engines live in immutable
-    releases. Ticket 13 adds the mac.omarchy.org/v1 host beside this one."""
+    releases. Ticket 13 adds the catalog base host (INSTALLER_CATALOG_BASE)
+    beside this one."""
 
     def __init__(self, repo: str):
         self.repo = repo
@@ -630,30 +633,60 @@ class GitHubReleaseHost:
         return data
 
     def gh(self, *arguments: str, check: bool = True) -> subprocess.CompletedProcess:
-        result = subprocess.run(["gh", *arguments, "--repo", self.repo], capture_output=True, text=True)
+        result = subprocess.run(["gh", *arguments], capture_output=True, text=True)
         if check and result.returncode != 0:
-            raise Refusal(f"gh {arguments[0]} {arguments[1]} failed: {result.stderr.strip()}")
+            raise Refusal(f"gh {' '.join(arguments[:2])} failed: {result.stderr.strip()}")
         return result
 
+    def release(self, tag: str) -> dict | None:
+        result = self.gh("api", f"repos/{self.repo}/releases/tags/{tag}", check=False)
+        if result.returncode != 0:
+            if "Not Found" in result.stderr or "404" in result.stderr:
+                return None
+            raise Refusal(f"reading the {tag} release failed: {result.stderr.strip()}")
+        return json.loads(result.stdout)
+
+    def asset_ids(self, tag: str) -> dict[str, int]:
+        release = self.release(tag)
+        return {asset["name"]: asset["id"] for asset in (release or {}).get("assets", [])}
+
     def publish(self, channel: str, envelope: Path) -> None:
+        """Upload under a staging name, then swap it in: the old asset is
+        deleted only once the new bytes are on the release, and the window
+        without a catalog is one rename."""
         tag = f"catalog-{channel}"
-        view = self.gh("release", "view", tag, "--json", "isDraft,isPrerelease,tagName", check=False)
-        if view.returncode != 0:
-            if "not found" not in view.stderr.lower():
-                raise Refusal(f"gh release view {tag} failed: {view.stderr.strip()}")
+        name = f"catalog-{channel}.signed.json"
+        staged = f"{name}.next"
+        release = self.release(tag)
+        if release is None:
             target = os.environ.get("GITHUB_SHA", "main")
-            self.gh("release", "create", tag, "--prerelease", "--latest=false", "--target", target,
-                    "--title", f"Omarchy Mac {channel} catalog",
+            self.gh("release", "create", tag, "--repo", self.repo, "--prerelease", "--latest=false",
+                    "--target", target, "--title", f"Omarchy Mac {channel} catalog",
                     "--notes", f"The signed {channel} channel catalog, replaced in place by the Mac catalog "
                     "workflow. Not a release: images and engines live in their own immutable releases.")
-        else:
-            state = json.loads(view.stdout)
-            if state.get("isDraft") or not state.get("isPrerelease"):
-                raise Refusal(f"the {tag} release must be a published prerelease")
+        elif release.get("draft") or not release.get("prerelease"):
+            raise Refusal(f"the {tag} release must be a published prerelease")
+        assets = self.asset_ids(tag)
+        if staged in assets:
+            # A failed earlier publish; its catalog was never served.
+            self.gh("api", "-X", "DELETE", f"repos/{self.repo}/releases/assets/{assets[staged]}")
         with tempfile.TemporaryDirectory() as directory:
-            upload = Path(directory) / f"catalog-{channel}.signed.json"
+            upload = Path(directory) / staged
             shutil.copyfile(envelope, upload)
-            self.gh("release", "upload", tag, str(upload), "--clobber")
+            self.gh("release", "upload", tag, str(upload), "--repo", self.repo)
+        assets = self.asset_ids(tag)
+        if staged not in assets:
+            raise Refusal(f"the staged {staged} is not on the {tag} release after upload")
+        if name in assets:
+            self.gh("api", "-X", "DELETE", f"repos/{self.repo}/releases/assets/{assets[name]}")
+        for attempt in range(3):
+            renamed = self.gh("api", "-X", "PATCH", f"repos/{self.repo}/releases/assets/{assets[staged]}",
+                              "-f", f"name={name}", check=False)
+            if renamed.returncode == 0:
+                return
+            time.sleep(5)
+        raise Refusal(f"could not rename {staged} to {name} on {tag}: {renamed.stderr.strip()}; "
+                      "rename it by hand to restore the channel")
 
 
 def catalog_host(spec: str):
@@ -681,7 +714,16 @@ def live_sequence(host, channel: str, trust_root: bytes, openssl: str) -> int:
 # ── commands ─────────────────────────────────────────────────────────────────
 
 
+def check_repository() -> None:
+    """Only this repository's own runs publish its catalogs: a workflow_call
+    from elsewhere would check out the caller's code with the caller's token."""
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    if repository is not None and repository != stopgap_repo():
+        raise Refusal(f"catalogs are released from {stopgap_repo()}, not {repository}")
+
+
 def command_prepare(arguments) -> None:
+    check_repository()
     channel = check_channel(arguments.channel)
     now = (
         datetime.datetime.strptime(arguments.now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
@@ -778,19 +820,30 @@ def command_verify_envelope(arguments) -> None:
 
 
 def command_publish(arguments) -> None:
+    check_repository()
     channel = check_channel(arguments.channel)
     openssl = find_openssl()
     trust_root = read_trust_root(arguments.trust_root)
     data = arguments.envelope.read_bytes()
     document = verify_envelope(data, trust_root, openssl)
     host = catalog_host(arguments.host)
+    if host.fetch(channel) == data:
+        # A retry after a publish whose readback failed: already live.
+        print(f"published={host.describe(channel)} (already live)")
+        return
     live = live_sequence(host, channel, trust_root, openssl)
     if document["sequence"] <= live:
         raise Refusal(f"sequence {document['sequence']} does not follow the published {live}")
     host.publish(channel, arguments.envelope)
-    # Read it back as a client would.
+    # Read it back as a client would, riding out transient errors.
+    served = None
     for attempt in range(12):
-        if host.fetch(channel) == data:
+        try:
+            served = host.fetch(channel)
+        except (OSError, urllib.error.URLError) as error:
+            print(f"readback attempt {attempt + 1}: {error}", file=sys.stderr)
+            served = None
+        if served == data:
             break
         time.sleep(5)
     else:

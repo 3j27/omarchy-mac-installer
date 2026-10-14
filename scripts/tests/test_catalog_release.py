@@ -82,6 +82,11 @@ def engine_document() -> dict:
     )
 
 
+def installer_document() -> dict:
+    return {"minimumVersion": "2.1.0", "latestVersion": "2.1.0",
+            "downloadURL": f"{release_base('app-v2.1.0')}/Omarchy-Installer.dmg"}
+
+
 def evidence_document(image_sha256: str = sha(PAYLOAD)) -> dict:
     return {
         "image_sha256": image_sha256,
@@ -125,6 +130,7 @@ class CatalogReleaseTests(unittest.TestCase):
             shim.chmod(0o755)
         self.environment = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", OMARCHY_OPENSSL=OPENSSL)
         self.environment.pop("CATALOG_SIGNING_KEY", None)
+        self.environment.pop("GITHUB_REPOSITORY", None)
 
     def write(self, name: str, document: object) -> Path:
         path = self.directory / name
@@ -144,6 +150,7 @@ class CatalogReleaseTests(unittest.TestCase):
             "--payload", str(self.write("payload.json", payload or payload_document())),
             "--engine", str(self.write("engine.json", engine_document())),
             "--installer-data", str(self.write("metadata.json", artifact(IMAGE, "installer_data.json", METADATA))),
+            "--installer", str(self.write("installer.json", installer_document())),
             "--now", NOW, "--out", str(self.directory / out), *extra,
         ]
         if evidence is not None:
@@ -308,7 +315,9 @@ class CatalogReleaseTests(unittest.TestCase):
 
     def test_refuses_a_malformed_or_missing_key(self) -> None:
         catalog = self.built_catalog()
-        self.assert_refused(self.sign(catalog, key="not-a-key"), "neither 32 raw bytes nor base64")
+        self.assert_refused(self.sign(catalog, key="not-a-key"), "is not base64")
+        # 32 characters in the variable are base64 text, never a raw key.
+        self.assert_refused(self.sign(catalog, key="A" * 32), "not a 32-byte")
         self.assert_refused(self.sign(catalog, key=base64.b64encode(b"short").decode()), "not a 32-byte")
         self.assert_refused(self.sign(catalog, key=""), "empty or unset")
 
@@ -342,31 +351,72 @@ class CatalogReleaseTests(unittest.TestCase):
 
     def test_publish_refuses_a_sequence_that_does_not_move_forward(self) -> None:
         scratch = self.directory / "scratch-host"
-        self.assertEqual(self.sign(self.built_catalog()).returncode, 0)
-        envelope = self.directory / "signed" / "catalog-edge.signed.json"
-        arguments = ("publish", "--channel", "edge", "--envelope", str(envelope),
-                     "--host", f"scratch:{scratch}", "--trust-root", str(self.trust_root))
-        self.assertEqual(self.run_tool(*arguments).returncode, 0)
-        self.assert_refused(self.run_tool(*arguments), f"does not follow the published {SEQUENCE}")
-        (scratch / "catalog-edge.signed.json").write_text("{}")
-        self.assert_refused(self.run_tool(*arguments), "does not verify")
 
-    def test_the_github_release_host_replaces_only_the_catalog_asset(self) -> None:
-        self.assertEqual(self.sign(self.built_catalog()).returncode, 0)
-        envelope = self.directory / "signed" / "catalog-edge.signed.json"
-        state = self.directory / "release-state"
-        served = self.directory / "served"
+        def publish(envelope: Path) -> subprocess.CompletedProcess:
+            return self.run_tool("publish", "--channel", "edge", "--envelope", str(envelope),
+                                 "--host", f"scratch:{scratch}", "--trust-root", str(self.trust_root))
+
+        newer = self.signed_at(NOW, "newer")
+        older = self.signed_at("2026-10-13T00:00:00Z", "older")
+        self.assertEqual(publish(newer).returncode, 0)
+        self.assert_refused(publish(older), f"does not follow the published {SEQUENCE}")
+        self.assertEqual((scratch / "catalog-edge.signed.json").read_bytes(), newer.read_bytes())
+        (scratch / "catalog-edge.signed.json").write_text("{}")
+        self.assert_refused(publish(newer), "does not verify")
+
+    def fake_github(self) -> Path:
+        """A gh stand-in holding one repository's releases in a directory."""
+        state = self.directory / "github"
+        (state / "assets").mkdir(parents=True)
         gh = self.bin / "gh"
-        gh.write_text(f"""#!/bin/bash
-printf '%s\\n' "gh $*" >>"{self.calls}"
-case "$1 $2" in
-  "release view") [[ -f {state} ]] && {{ cat {state}; exit 0; }}; echo "release not found" >&2; exit 1 ;;
-  "release create") echo '{{"isDraft":false,"isPrerelease":true,"tagName":"catalog-edge"}}' >{state} ;;
-  "release upload") cp "$4" {served} ;;
-  *) exit 97 ;;
-esac
+        gh.write_text(f"""#!{sys.executable}
+import json, os, shutil, sys
+from pathlib import Path
+state = Path({str(state)!r})
+arguments = sys.argv[1:]
+with open({str(self.calls)!r}, "a") as log:
+    log.write("gh " + " ".join(arguments) + "\\n")
+release = state / "release.json"
+def load():
+    return json.loads(release.read_text())
+def save(document):
+    release.write_text(json.dumps(document))
+if arguments[:1] == ["api"] and "/releases/tags/" in arguments[1]:
+    if not release.exists():
+        sys.stderr.write("gh: Not Found (HTTP 404)\\n")
+        sys.exit(1)
+    print(release.read_text())
+elif arguments[:2] == ["release", "create"]:
+    save({{"draft": False, "prerelease": True, "assets": []}})
+elif arguments[:2] == ["release", "upload"]:
+    if (state / "upload-fails").exists():
+        sys.exit(1)
+    source = Path(arguments[3])
+    document = load()
+    identifier = 1 + max([asset["id"] for asset in document["assets"]] + [0])
+    document["assets"].append({{"id": identifier, "name": source.name}})
+    shutil.copyfile(source, state / "assets" / source.name)
+    save(document)
+elif arguments[:3] in (["api", "-X", "DELETE"], ["api", "-X", "PATCH"]):
+    identifier = int(arguments[3].rsplit("/", 1)[1])
+    document = load()
+    asset = next(asset for asset in document["assets"] if asset["id"] == identifier)
+    if arguments[2] == "DELETE":
+        document["assets"].remove(asset)
+        (state / "assets" / asset["name"]).unlink()
+    else:
+        name = arguments[5].split("=", 1)[1]
+        os.replace(state / "assets" / asset["name"], state / "assets" / name)
+        asset["name"] = name
+    save(document)
+else:
+    sys.exit(97)
 """)
+        return state
+
+    def publish_to_fake_github(self, envelope: Path, state: Path) -> tuple[int, str]:
         host = release.GitHubReleaseHost(release.stopgap_repo())
+        served = state / "assets" / "catalog-edge.signed.json"
 
         def fake_open(url, timeout=60):
             self.assertEqual(url, host.describe("edge"))
@@ -376,30 +426,67 @@ esac
 
         arguments = ["publish", "--channel", "edge", "--envelope", str(envelope), "--host", "github-release",
                      "--trust-root", str(self.trust_root)]
-        saved_open, saved_path, saved_ssl = release.open_url, os.environ["PATH"], os.environ.get("OMARCHY_OPENSSL")
+        saved = release.open_url, dict(os.environ)
         release.open_url = fake_open
-        os.environ["PATH"] = self.environment["PATH"]
-        os.environ["OMARCHY_OPENSSL"] = OPENSSL
+        os.environ.update(PATH=self.environment["PATH"], OMARCHY_OPENSSL=OPENSSL)
+        os.environ.pop("GITHUB_REPOSITORY", None)
         try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(release.main(arguments), 0)
-            calls = self.calls.read_text().splitlines()
-            self.assertTrue(calls[1].startswith("gh release create catalog-edge --prerelease --latest=false"), calls)
-            self.assertIn("gh release upload catalog-edge", calls[2])
-            self.assertIn("--clobber", calls[2])
-            self.assertEqual(served.read_bytes(), envelope.read_bytes())
-            state.write_text('{"isDraft":true,"isPrerelease":true,"tagName":"catalog-edge"}')
-            served.unlink()
-            with contextlib.redirect_stderr(io.StringIO()) as errors:
-                self.assertEqual(release.main(arguments), 1)
-            self.assertIn("must be a published prerelease", errors.getvalue())
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                status = release.main(arguments)
+            return status, output.getvalue()
         finally:
-            release.open_url = saved_open
-            os.environ["PATH"] = saved_path
-            if saved_ssl is None:
-                os.environ.pop("OMARCHY_OPENSSL", None)
-            else:
-                os.environ["OMARCHY_OPENSSL"] = saved_ssl
+            release.open_url = saved[0]
+            os.environ.clear()
+            os.environ.update(saved[1])
+
+    def signed_at(self, now: str, out: str) -> Path:
+        result = self.prepare("default", None, out, "--now", now)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.sign(self.directory / out / "catalog-edge.json", out=f"{out}-signed").returncode, 0)
+        return self.directory / f"{out}-signed" / "catalog-edge.signed.json"
+
+    def test_the_github_release_host_swaps_the_catalog_in(self) -> None:
+        state = self.fake_github()
+        served = state / "assets" / "catalog-edge.signed.json"
+        first = self.signed_at("2026-10-14T00:00:00Z", "first")
+        status, output = self.publish_to_fake_github(first, state)
+        self.assertEqual(status, 0, output)
+        calls = self.calls.read_text().splitlines()
+        self.assertTrue(any(c.startswith("gh release create catalog-edge") and "--prerelease --latest=false" in c
+                            for c in calls), calls)
+        self.assertFalse(any("--clobber" in c for c in calls))
+        self.assertEqual(served.read_bytes(), first.read_bytes())
+
+        # A retry of the same envelope is a no-op, not a sequence refusal.
+        status, output = self.publish_to_fake_github(first, state)
+        self.assertEqual(status, 0, output)
+        self.assertIn("already live", output)
+
+        # A failed upload leaves the published catalog in place.
+        second = self.signed_at("2026-10-15T00:00:00Z", "second")
+        (state / "upload-fails").touch()
+        status, output = self.publish_to_fake_github(second, state)
+        self.assertEqual(status, 1, output)
+        self.assertEqual(served.read_bytes(), first.read_bytes())
+        (state / "upload-fails").unlink()
+        status, output = self.publish_to_fake_github(second, state)
+        self.assertEqual(status, 0, output)
+        self.assertEqual(served.read_bytes(), second.read_bytes())
+        self.assertEqual(sorted(p.name for p in (state / "assets").iterdir()), ["catalog-edge.signed.json"])
+
+    def test_the_github_release_host_refuses_a_draft(self) -> None:
+        state = self.fake_github()
+        (state / "release.json").write_text('{"draft": true, "prerelease": true, "assets": []}')
+        status, output = self.publish_to_fake_github(self.signed_at(NOW, "draft"), state)
+        self.assertEqual(status, 1)
+        self.assertIn("must be a published prerelease", output)
+
+    def test_only_this_repository_releases_catalogs(self) -> None:
+        environment = dict(self.environment, GITHUB_REPOSITORY="someone/fork")
+        result = self.run_tool("publish", "--channel", "edge", "--envelope", "x", "--host", "scratch:/nonexistent",
+                               environment=environment)
+        self.assert_refused(result, "not someone/fork")
 
     # ── remote verification ──────────────────────────────────────────────────
 

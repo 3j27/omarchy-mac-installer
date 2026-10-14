@@ -42,7 +42,7 @@ on:
         type: string
         required: true
       installer:
-        description: Optional app compatibility as JSON {minimumVersion, latestVersion, downloadURL}
+        description: App compatibility as JSON {minimumVersion, latestVersion, downloadURL}; required for engines from v0.9.2-omarchy.18
         type: string
         default: ''
       channel:
@@ -53,6 +53,12 @@ on:
         description: Sign and publish to a scratch directory only
         type: boolean
         default: true
+    secrets:
+      # The sign job reads the catalog-release environment's secret, which a
+      # caller must still pass: call with `secrets: inherit`. Callers must be
+      # workflows of this repository; catalog_release.py refuses others.
+      CATALOG_SIGNING_KEY:
+        required: false
     outputs:
       catalog-sha256:
         description: sha256 of the unsigned catalog
@@ -80,7 +86,7 @@ on:
         type: string
         required: true
       installer:
-        description: Optional app compatibility as JSON {minimumVersion, latestVersion, downloadURL}
+        description: App compatibility as JSON {minimumVersion, latestVersion, downloadURL}; required for engines from v0.9.2-omarchy.18
         type: string
         default: ''
       channel:
@@ -209,9 +215,14 @@ jobs:
         run: |
           set -euo pipefail
           inputs=$RUNNER_TEMP/catalog-inputs
+          catalog=$inputs/catalog-$(<"$inputs/channel").json
+          status=0
+          # No pipe: nothing but the signer starts while the key is set.
           python3 scripts/catalog_release.py sign --key-env CATALOG_SIGNING_KEY \
-            --catalog "$inputs/catalog-$(<"$inputs/channel").json" --out "$RUNNER_TEMP/catalog-signed" |
-            tee "$inputs/sign.log"
+            --catalog "$catalog" --out "$RUNNER_TEMP/catalog-signed" >"$inputs/sign.log" 2>&1 || status=$?
+          unset CATALOG_SIGNING_KEY
+          cat "$inputs/sign.log"
+          exit "$status"
 
       - name: Publish to a scratch directory (dry run)
         if: ${{ inputs.dry-run }}

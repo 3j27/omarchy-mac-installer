@@ -20,6 +20,10 @@
 
 `scripts/catalog_release.py` implements every step; `scripts/tests/test_catalog_release.py` drives it as the workflow does (round trip, evidence refusals, signing refusals, hosts, dry run). `Tests/OmarchyAppleInstallerTrustCoreTests/CISignedCatalogTests.swift` checks the app accepts an envelope the CI path signed.
 
+## Callers
+
+Only workflows of omacom/omarchy-mac-installer may call it (`catalog_release.py` refuses another `GITHUB_REPOSITORY`: a caller elsewhere would check out its own code with its own token). Call with `secrets: inherit`: GitHub requires the caller to pass even an environment secret, which otherwise resolves to empty and the signer refuses. The caller must grant `contents: write`. A pipeline in another repository dispatches this workflow instead.
+
 ## Inputs
 
 All JSON inputs are strict: unknown keys are refused. Digests are 64 lowercase hex characters without a prefix. Every URL is https, without query, fragment or escapes, ends with its `fileName`, and lies under an immutable release location: `https://mac.omarchy.org/v1/releases/` or `.../v1/engine/`, or an asset of a release of omacom/omarchy-mac-installer whose tag does not start with `catalog-`.
@@ -28,7 +32,7 @@ All JSON inputs are strict: unknown keys are refused. Digests are 64 lowercase h
 - `payload` (ticket 07's upload output for the image zip): `{"url", "fileName", "sizeBytes", "sha256", "parts"?}`. `parts` (2 to 16, for a host with a file size limit) is a list of `{"url", "fileName", "sizeBytes", "sha256"}` in order; their sizes sum to `sizeBytes` and their bytes join into `sha256`. The whole-file `url` is informational when parts are given.
 - `installer-data`: the image's `installer_data.json` as `{"url", "fileName", "sizeBytes", "sha256"}`.
 - `engine`: `{"version", "url", "fileName", "sizeBytes", "sha256", "downstreamRevision"}`, optionally `asahiInstallerTag`, `asahiInstallerRevision` and `asahiInstallerDataRevision`, which default to `Engine/source-lock.json`.
-- `installer` (optional): `{"minimumVersion", "latestVersion", "downloadURL"}`, the app compatibility block. Engines from `v0.9.2-omarchy.18` need `minimumVersion` 2.1.0 or later.
+- `installer`: `{"minimumVersion", "latestVersion", "downloadURL"}`, the app compatibility block. Required for engines from `v0.9.2-omarchy.18` (every current engine), whose `minimumVersion` must be 2.1.0 or later; `downloadURL` is under `.../v1/installer/` or a non-catalog release of this repository.
 - `evidence`: the VM evidence record below.
 - `dry-run`: defaults to true.
 
@@ -54,13 +58,13 @@ Ticket 06's acceptance job writes it; ticket 07's upload and this workflow consu
 - `result` is `pass` or `fail`; each scenario's `result` is `pass`, `fail` or `skip`. Scenario names are the harness's (`tools/acceptance/mac-image/run --list`).
 - A publish is refused unless `image_sha256` equals the payload's `sha256`, `result` is `pass`, no scenario failed, and `first-boot`, `conversion` and `second-boot` (the harness's `fresh-install`) all passed.
 - Other keys may be added and are ignored here.
-- The record is trusted as passed in: when chained, it comes from the acceptance job of the same run; run by hand, the owner's approval of the `sign` job is the check that it is genuine.
+- The record is trusted as passed in: the workflow checks its shape and digest, not its origin. When chained (ticket 09), it must come from the acceptance job of the same run; run by hand, the owner's approval of the `sign` job is the check that it is genuine. Binding it to a verified acceptance run (fetching `run_url`'s artifact) is left to tickets 06 and 09.
 
 ## Hosts
 
 `catalog_release.py publish --host` selects where catalogs go. Every host serves `catalog-<channel>.signed.json`, the envelope `publish-channels envelope` writes, and is the only mutable object.
 
-- `github-release` (the stopgap): the asset `catalog-<channel>.signed.json` of the prerelease `catalog-<channel>` of the repository named by `INSTALLER_CATALOG_STOPGAP_REPO`, created on first publish (never marked latest) and replaced in place with `gh release upload --clobber`. While it is replaced the asset is briefly missing, so a client fetching in that moment gets a 404. It is read back from `https://github.com/<repo>/releases/download/catalog-<channel>/catalog-<channel>.signed.json`.
+- `github-release` (the stopgap): the asset `catalog-<channel>.signed.json` of the prerelease `catalog-<channel>` of the repository named by `INSTALLER_CATALOG_STOPGAP_REPO`, created on first publish (never marked latest). A publish uploads the new envelope as `catalog-<channel>.signed.json.next`, deletes the old asset only once that upload is on the release, and renames the new one into place, so a failed upload leaves the old catalog served and the only gap is one rename. A retry of an envelope that is already live succeeds without publishing. It is read back from `https://github.com/<repo>/releases/download/catalog-<channel>/catalog-<channel>.signed.json`.
 - `scratch:DIR`: a directory, for dry runs and tests.
 - Ticket 13 adds the R2 host at `mac.omarchy.org/v1/` as another host class (`fetch`, `publish`, `describe`) and switches the workflow's `--host`.
 
