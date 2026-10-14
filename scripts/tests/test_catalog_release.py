@@ -28,7 +28,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "catalog_release.py"
 SIGNING_TOOL = ROOT / "scripts" / "catalog-signing.swift"
-WORKFLOW = ROOT / ".github" / "workflows" / "mac-catalog.yml"
+WORKFLOWS = ROOT / ".github" / "workflows"
+WORKFLOW = WORKFLOWS / "mac-catalog.yml"
+SIGN_WORKFLOW = WORKFLOWS / "mac-catalog-sign.yml"
 FIXTURE = ROOT / "Tests" / "OmarchyAppleInstallerTrustCoreTests" / "Fixtures" / "ci-signed-catalog"
 
 spec = importlib.util.spec_from_file_location("catalog_release", SCRIPT)
@@ -539,20 +541,43 @@ else:
         finally:
             release.open_url = saved
 
-    # ── the workflow ─────────────────────────────────────────────────────────
+    # ── the workflows ────────────────────────────────────────────────────────
 
-    def test_the_workflow_keeps_the_key_in_one_approved_step(self) -> None:
-        text = WORKFLOW.read_text()
-        self.assertNotIn("pull_request", text)
+    def test_the_key_is_read_in_one_approved_step_of_one_workflow(self) -> None:
+        texts = {path.name: path.read_text() for path in sorted(WORKFLOWS.glob("*.y*ml"))}
+        self.assertEqual([name for name, text in texts.items() if "CATALOG_SIGNING_KEY }}" in text],
+                         ["mac-catalog-sign.yml"])
+        self.assertEqual([name for name, text in texts.items() if "environment: catalog-release" in text],
+                         ["mac-catalog-sign.yml"])
+        text = texts["mac-catalog-sign.yml"]
         self.assertEqual(text.count("secrets."), 1)
         self.assertEqual(text.count("environment: catalog-release"), 1)
+        self.assertIn("on:\n  workflow_call:\n", text)
+        self.assertNotIn("workflow_dispatch", text)
         sign_job = text.split("\n  sign:\n")[1].split("\n  publish:\n")[0]
         self.assertIn("environment: catalog-release", sign_job)
         self.assertIn("secrets.CATALOG_SIGNING_KEY", sign_job)
         self.assertIn("contents: read", sign_job)
+        self.assertIn("github.repository == 'omacom/omarchy-mac-installer'", sign_job)
+        self.assertIn("github.ref == 'refs/heads/main'", sign_job)
+        # Each gate runs only for its own channels, before the key is read.
+        gate_step = sign_job.split("Check the catalog")[1].split("- name: Sign")[0]
+        self.assertIn("evidence:edge)", gate_step)
+        self.assertIn("promotion:rc | promotion:stable)", gate_step)
         publish_job = text.split("\n  publish:\n")[1]
-        self.assertIn("if: ${{ !inputs.dry-run }}", publish_job)
+        self.assertIn("needs.sign.result == 'success' && !inputs.dry-run", publish_job)
         self.assertNotIn("secrets.", publish_job)
+
+    def test_both_catalog_writers_sign_through_the_shared_job(self) -> None:
+        for workflow, gate in ((WORKFLOW, "evidence"),):
+            text = workflow.read_text()
+            self.assertNotIn("pull_request", text)
+            self.assertNotIn("secrets.", text)
+            release_job = text.split("\n  release:\n")[1]
+            self.assertIn("uses: ./.github/workflows/mac-catalog-sign.yml", release_job)
+            self.assertIn(f"gate: {gate}", release_job)
+            self.assertIn("dry-run: ${{ inputs.dry-run }}", release_job)
+            self.assertIn("secrets: inherit", release_job)
 
 
 LATER = "2026-10-20T00:00:00Z"

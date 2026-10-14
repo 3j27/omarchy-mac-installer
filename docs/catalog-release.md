@@ -1,6 +1,6 @@
 # Mac catalog release
 
-`.github/workflows/mac-catalog.yml` signs and publishes a channel catalog that pins one uploaded image, its engine and its `installer_data.json` by digest. It is a reusable workflow (`workflow_call`) for the edge publish trigger and can be run by hand (`workflow_dispatch`). Only `edge` is accepted until rc and stable promotion is unparked.
+`.github/workflows/mac-catalog.yml` signs and publishes a channel catalog that pins one uploaded image, its engine and its `installer_data.json` by digest. It is a reusable workflow (`workflow_call`) for the edge publish trigger and can be run by hand (`workflow_dispatch`). Only `edge` is accepted until rc and stable promotion is unparked. It signs through `.github/workflows/mac-catalog-sign.yml`, the only workflow that reads the catalog key.
 
 ## The Omacom catalog key
 
@@ -15,10 +15,12 @@
 | Job | Holds | Does |
 | --- | --- | --- |
 | `prepare` | no secrets, `contents: read` | runs the catalog tests, refuses unless the evidence record passed for the image's exact sha256, downloads every pinned artifact (or part) and checks its size and sha256, checks the new sequence follows the published one, writes the unsigned `catalog-<channel>.json` |
-| `sign` | `catalog-release` (owner approval), `contents: read` | checks the catalog is the one `prepare` wrote and re-checks the evidence, signs with OpenSSL 3, wraps the envelope with `publish-channels envelope` and verifies it against `Release/trust-root.ed25519.pub`. A dry run publishes to a scratch directory on the runner and keeps only the log |
-| `publish` | `contents: write`, no key; skipped in a dry run | verifies the envelope again, refuses a sequence that does not follow the published one, replaces the catalog on the host and reads it back |
+| `sign` (`mac-catalog-sign.yml`) | `catalog-release` (owner approval), `contents: read` | checks the catalog is the one `prepare` wrote and re-checks the evidence, signs with OpenSSL 3, wraps the envelope with `publish-channels envelope` and verifies it against `Release/trust-root.ed25519.pub`. A dry run publishes to a scratch directory on the runner and keeps only the log |
+| `publish` (`mac-catalog-sign.yml`) | `contents: write`, no key; skipped in a dry run | verifies the envelope again, refuses a sequence that does not follow the published one, replaces the catalog on the host and reads it back |
 
 `scripts/catalog_release.py` implements every step; `scripts/tests/test_catalog_release.py` drives it as the workflow does (round trip, evidence refusals, signing refusals, hosts, dry run). `Tests/OmarchyAppleInstallerTrustCoreTests/CISignedCatalogTests.swift` checks the app accepts an envelope the CI path signed.
+
+`mac-catalog-sign.yml` is `workflow_call` only. Its caller uploads the artifact `catalog-unsigned` (the file `channel`, `catalog-<channel>.json` and the gate's inputs) and names the gate: `evidence` re-runs `check-evidence` on `evidence.json`; `promotion` re-runs `check-promotion` on `source-channel` and `source.signed.json`.
 
 ## Callers
 
