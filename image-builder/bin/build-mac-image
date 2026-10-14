@@ -408,16 +408,47 @@ verify_database() {
     fail "${file##*/} is not the database the inputs pin"
 }
 
-# Every repository a transaction reads, in the Apple profile's order behind the
+# The pinned repositories behind the candidate set, in the order transactions
+# search them. A candidate set keeps the Apple profile's order, [omarchy] last;
+# a channel set takes its runtime's (read_repository_order).
+repository_order=(asahi-alarm core extra alarm aur omarchy)
+
+# Every repository a transaction reads, in repository_order behind the
 # candidate set: name, pinned sha256 (none for the set) and remote server.
 repositories() {
-  printf 'omarchy-candidates - -\n'
-  printf 'asahi-alarm %s %s\n' "$(field asahi_alarm_db_sha256)" "$(field asahi_alarm_server)"
   local repository
-  for repository in core extra alarm aur; do
-    printf '%s %s %s\n' "$repository" "$(field "alarm_${repository}_db_sha256")" "$(field alarm_server)"
+  printf 'omarchy-candidates - -\n'
+  for repository in "${repository_order[@]}"; do
+    case $repository in
+      omarchy) printf 'omarchy %s %s\n' "$(field omarchy_db_sha256)" "$(field omarchy_server)" ;;
+      asahi-alarm) printf 'asahi-alarm %s %s\n' "$(field asahi_alarm_db_sha256)" "$(field asahi_alarm_server)" ;;
+      *) printf '%s %s %s\n' "$repository" "$(field "alarm_${repository}_db_sha256")" "$(field alarm_server)" ;;
+    esac
   done
-  printf 'omarchy %s %s\n' "$(field omarchy_db_sha256)" "$(field omarchy_server)"
+}
+
+# A channel image searches the repositories in the order its runtime's Apple
+# template for the channel names them (default/pacman/aarch64-apple/
+# pacman-<channel>.conf, [omarchy] first on aarch64), read from the archive
+# that fills the omarchy-settings role (omarchy-settings-dev on edge, which
+# ships the templates) before anything installs: the template becomes the image's
+# /etc/pacman.conf, so the installed Mac resolves every package from the
+# repository the image took it from, and its first update swaps nothing. The
+# template must name exactly the pinned repositories; its servers are not
+# used. A candidate set keeps the Apple profile's order.
+read_repository_order() {
+  [[ $(set_kind) == channel ]] || return 0
+  local archive template text order=()
+  archive=$candidates/$(candidate_archive omarchy-settings)
+  template=usr/share/omarchy/default/pacman/aarch64-apple/pacman-$(field omarchy_channel).conf
+  [[ $(bsdtar -tvf "$archive" "$template" 2>/dev/null) == -* ]] ||
+    fail "the runtime ships no Apple pacman template for the channel ($template)"
+  text=$(bsdtar -xOf "$archive" "$template") || fail "could not read the runtime's ${template##*/}"
+  mapfile -t order < <(pacman_repositories <(printf '%s\n' "$text"))
+  [[ $(printf '%s\n' "${order[@]}" | LC_ALL=C sort | paste -sd' ' -) == \
+    "$(printf '%s\n' "${repository_order[@]}" | LC_ALL=C sort | paste -sd' ' -)" ]] ||
+    fail "the runtime's ${template##*/} names the repositories ${order[*]}, not the pinned ${repository_order[*]}"
+  repository_order=("${order[@]}")
 }
 
 prepare_toolchain() {
@@ -1604,6 +1635,8 @@ build_payload() {
   step "preparing the toolchain from Arch Linux ARM"
   prepare_toolchain
   step "publishing $(set_name) as [omarchy-candidates]"
+  read_repository_order
+  step "repository order: omarchy-candidates ${repository_order[*]}"
   prepare_repositories
   read_apple_list
   render_config "$repos" /cache >"$work/build.conf"
