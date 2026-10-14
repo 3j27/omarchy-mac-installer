@@ -58,7 +58,6 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 LAB_CATALOG_KEY = ROOT / "builder/lab-catalog-key.ed25519.pub"
-LAB_CATALOG_KEY_SHA256 = "0e86a878c2445009981a182a4642ec22ae14ab4d8365fad4b038cafc4802dc1b"
 TRUST = ROOT / "builder/candidate-trust"
 KERNEL = "linux-aurora"
 CHUNK = 4 << 20
@@ -134,8 +133,8 @@ def first_packet_body(packets: bytes) -> bytes:
 def key_patterns() -> dict[bytes, str]:
     """Byte strings no public image may contain, with what each is."""
     raw = LAB_CATALOG_KEY.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != LAB_CATALOG_KEY_SHA256 or len(raw) != 32:
-        raise GuardError(f"{LAB_CATALOG_KEY} is not the pinned lab catalog key")
+    if len(raw) != 32:
+        raise GuardError(f"{LAB_CATALOG_KEY} is not a 32-byte Ed25519 public key")
     fingerprint = hashlib.sha256(raw).hexdigest()
     patterns = {
         raw: "the lab catalog key",

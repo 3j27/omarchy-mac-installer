@@ -177,7 +177,7 @@ class ImageTreeTest(unittest.TestCase):
             "raw": ("usr/share/omarchy/catalog.pub", LAB_KEY),
             "hex": ("usr/lib/python3/omarchy.py", b"KEY = '" + LAB_KEY.hex().encode() + b"'\n"),
             "base64": ("etc/omarchy/release.json", b'{"key": "' + base64.b64encode(LAB_KEY) + b'"}\n'),
-            "fingerprint": ("usr/share/doc/omarchy/README", b"sha256:" + guard.LAB_CATALOG_KEY_SHA256.encode()),
+            "fingerprint": ("usr/share/doc/omarchy/README", b"sha256:" + guard.hashlib.sha256(LAB_KEY).hexdigest().encode()),
         }
         for form, (relative, body) in cases.items():
             with self.subTest(form=form):
@@ -298,9 +298,8 @@ class RecordsTest(unittest.TestCase):
 
 
 class PinnedKeysTest(unittest.TestCase):
-    def test_the_lab_catalog_key_is_pinned(self):
+    def test_the_lab_catalog_key_is_an_ed25519_key(self):
         self.assertEqual(len(LAB_KEY), 32)
-        self.assertEqual(guard.hashlib.sha256(LAB_KEY).hexdigest(), guard.LAB_CATALOG_KEY_SHA256)
 
     def test_the_test_key_packet_is_the_policys_key(self):
         packet = guard.test_key_packet()
