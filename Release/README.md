@@ -22,7 +22,7 @@ the pinned fingerprint; `test/all` fails until the two agree. A build can also
 take both files from another release directory, `build-app.sh
 RELEASE_DIRECTORY OUTPUT_DIRECTORY`, which checks that they match.
 
-The trust root is the Omacom catalog key (`sha256:bb914ffba2a74d05fd8d57013999376654ff9d7489929c76996a7f7716f27ea3`). Its private key is the `CATALOG_SIGNING_KEY` secret of the `catalog-release` environment, used only by `.github/workflows/mac-catalog-sign.yml` (which `mac-catalog.yml` calls), with the owner's backup in the Keychain item `omacom-catalog-signing-key` and 1Password. It must never appear here or anywhere else on disk; see [`docs/catalog-release.md`](../docs/catalog-release.md).
+The trust root is the Omacom catalog key (`sha256:bb914ffba2a74d05fd8d57013999376654ff9d7489929c76996a7f7716f27ea3`). Its private key is the `CATALOG_SIGNING_KEY` secret of the `catalog-release` environment, used only by `.github/workflows/mac-catalog-sign.yml` (which `mac-catalog.yml` and the parked `mac-promote.yml` call), with the owner's backup in the Keychain item `omacom-catalog-signing-key` and 1Password. It must never appear here or anywhere else on disk; see [`docs/catalog-release.md`](../docs/catalog-release.md).
 
 The default channel is `edge`. The channels match Omarchy's (stable, rc, edge; dev is a developer choice made after installation), and today only edge has a Mac release. Stable and rc serve signed empty catalogs (`scripts/publish-channels empty-catalog`), which the app shows as "No Mac release yet", never as a channel it cannot reach or verify.
 

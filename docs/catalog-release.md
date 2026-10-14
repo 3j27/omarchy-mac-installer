@@ -1,6 +1,6 @@
 # Mac catalog release
 
-`.github/workflows/mac-catalog.yml` signs and publishes a channel catalog that pins one uploaded image, its engine and its `installer_data.json` by digest. It is a reusable workflow (`workflow_call`) for the edge publish trigger and can be run by hand (`workflow_dispatch`). Only `edge` is accepted until rc and stable promotion is unparked. It signs through `.github/workflows/mac-catalog-sign.yml`, the only workflow that reads the catalog key.
+`.github/workflows/mac-catalog.yml` signs and publishes a channel catalog that pins one uploaded image, its engine and its `installer_data.json` by digest. It is a reusable workflow (`workflow_call`) for the edge publish trigger and can be run by hand (`workflow_dispatch`). It writes only `edge`; rc and stable catalogs come from `.github/workflows/mac-promote.yml` (see [Promotion](#promotion-parked), parked). Both sign through `.github/workflows/mac-catalog-sign.yml`, the only workflow that reads the catalog key.
 
 ## The Omacom catalog key
 
@@ -18,7 +18,7 @@
 | `sign` (`mac-catalog-sign.yml`) | `catalog-release` (owner approval), `contents: read` | checks the catalog is the one `prepare` wrote and re-checks the evidence, signs with OpenSSL 3, wraps the envelope with `publish-channels envelope` and verifies it against `Release/trust-root.ed25519.pub`. A dry run publishes to a scratch directory on the runner and keeps only the log |
 | `publish` (`mac-catalog-sign.yml`) | `contents: write`, no key; skipped in a dry run | verifies the envelope again, refuses a sequence that does not follow the published one, replaces the catalog on the host and reads it back |
 
-`scripts/catalog_release.py` implements every step; `scripts/tests/test_catalog_release.py` drives it as the workflow does (round trip, evidence refusals, signing refusals, hosts, dry run). `Tests/OmarchyAppleInstallerTrustCoreTests/CISignedCatalogTests.swift` checks the app accepts an envelope the CI path signed.
+`scripts/catalog_release.py` implements every step; `scripts/tests/test_catalog_release.py` drives it as the workflows do (round trip, evidence refusals, signing refusals, hosts, dry run, promotion). `Tests/OmarchyAppleInstallerTrustCoreTests/CISignedCatalogTests.swift` checks the app accepts an envelope the CI path signed.
 
 `mac-catalog-sign.yml` is `workflow_call` only. Its caller uploads the artifact `catalog-unsigned` (the file `channel`, `catalog-<channel>.json` and the gate's inputs) and names the gate: `evidence` re-runs `check-evidence` on `evidence.json`; `promotion` re-runs `check-promotion` on `source-channel` and `source.signed.json`.
 
@@ -82,3 +82,29 @@ gh workflow run mac-catalog.yml -R omacom/omarchy-mac-installer -f dry-run=true 
 ```
 
 The `sign` job waits for the owner's approval in the run page, in a dry run too: a dry run signs with the real key, then writes only to the runner's scratch directory.
+
+## Promotion (parked)
+
+> **Parked.** rc and stable promotion waits for the kernel work. Run `mac-promote.yml` only as a dry run until the owner unparks it. A real promotion needs `dry-run` off, `confirm` set to `promote-<channel>` and `source-sha256` pinning the source catalog, then the owner's approval in `promote` and again in `catalog-release`.
+
+`.github/workflows/mac-promote.yml` (`workflow_dispatch` only) writes a signed `rc` or `stable` catalog over exactly the bytes a published channel catalog pins. Nothing is built and nothing new is uploaded: the image, engine and `installer_data.json` keep their URLs, sizes and digests; only `sequence` (the current Unix time) and `issuedAt` change. Promotion goes forward only: edge to rc or stable, rc to stable.
+
+| Job | Holds | Does |
+| --- | --- | --- |
+| `prepare` | no secrets, `contents: read` | fetches `catalog-<source>.signed.json` from the catalog host, verifies it against `Release/trust-root.ed25519.pub` (and `source-sha256` when given), refuses a source whose models pin more than one image or anything outside the immutable release locations, copies it with a new sequence and issue time, downloads every pinned artifact (or part) to check it still serves its digest, checks the new sequence follows the target channel's published one, and uploads `catalog-unsigned` with the source envelope. A real run without the explicit inputs is refused here |
+| `approve` | `promote` (owner approval), no permissions | the promotion decision, made after reading `prepare`'s summary; refuses a real run without the explicit inputs again |
+| `sign`, `publish` | `mac-catalog-sign.yml`, gate `promotion` | re-verifies the source envelope and that the new catalog differs from it only in `sequence` and `issuedAt`, signs in `catalog-release`; a dry run writes to scratch and keeps only the log, a real run publishes to the `catalog-<channel>` prerelease |
+
+Why it signs through `mac-catalog-sign.yml` instead of holding the key itself: the key stays a secret of one environment (`catalog-release`) read by one job definition, so rotating it, auditing it or tightening that job happens once, and the `promote` environment holds no secrets at all. The cost is two approvals per promotion run: `promote` approves promoting this catalog, `catalog-release` approves using the key.
+
+The `promote` environment deploys from `main` only and needs the owner's approval; administrators cannot bypass it.
+
+```bash
+# Dry run (the default): note source_catalog_sha256 in the prepare summary.
+gh workflow run mac-promote.yml -R omacom/omarchy-mac-installer -f channel=rc -f source=edge
+# Real promotion, once unparked:
+gh workflow run mac-promote.yml -R omacom/omarchy-mac-installer -f channel=rc -f source=edge \
+  -f dry-run=false -f confirm=promote-rc -f source-sha256=<source_catalog_sha256>
+```
+
+A promoted catalog keeps the source's `evidenceRevision` (the image name, `omarchy-mac-edge-...`): it names the image that passed VM acceptance, not the channel. The app compiled from `Release/` reads `mac.omarchy.org/v1`, so stopgap rc and stable catalogs, like edge ones, reach only a preview build pointed at them.

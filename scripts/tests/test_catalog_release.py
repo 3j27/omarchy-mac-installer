@@ -31,6 +31,7 @@ SIGNING_TOOL = ROOT / "scripts" / "catalog-signing.swift"
 WORKFLOWS = ROOT / ".github" / "workflows"
 WORKFLOW = WORKFLOWS / "mac-catalog.yml"
 SIGN_WORKFLOW = WORKFLOWS / "mac-catalog-sign.yml"
+PROMOTE_WORKFLOW = WORKFLOWS / "mac-promote.yml"
 FIXTURE = ROOT / "Tests" / "OmarchyAppleInstallerTrustCoreTests" / "Fixtures" / "ci-signed-catalog"
 
 spec = importlib.util.spec_from_file_location("catalog_release", SCRIPT)
@@ -569,7 +570,7 @@ else:
         self.assertNotIn("secrets.", publish_job)
 
     def test_both_catalog_writers_sign_through_the_shared_job(self) -> None:
-        for workflow, gate in ((WORKFLOW, "evidence"),):
+        for workflow, gate in ((WORKFLOW, "evidence"), (PROMOTE_WORKFLOW, "promotion")):
             text = workflow.read_text()
             self.assertNotIn("pull_request", text)
             self.assertNotIn("secrets.", text)
@@ -578,6 +579,24 @@ else:
             self.assertIn(f"gate: {gate}", release_job)
             self.assertIn("dry-run: ${{ inputs.dry-run }}", release_job)
             self.assertIn("secrets: inherit", release_job)
+
+    def test_promotion_is_parked_behind_approval_and_an_explicit_input(self) -> None:
+        text = PROMOTE_WORKFLOW.read_text()
+        self.assertIn("PARKED", text.split("\non:\n")[0])
+        triggers = text.split("\non:\n")[1].split("\npermissions:")[0]
+        self.assertIn("  workflow_dispatch:\n", triggers)
+        for trigger in ("push:", "schedule:", "workflow_call:", "repository_dispatch:", "pull_request"):
+            self.assertNotIn(trigger, triggers)
+        dry_run = triggers.split("      dry-run:\n")[1].split("\n      confirm:")[0]
+        self.assertIn("default: true", dry_run)
+        self.assertIn("default: ''", triggers.split("      confirm:\n")[1])
+        approve = text.split("\n  approve:\n")[1].split("\n  release:\n")[0]
+        self.assertIn("environment: promote", approve)
+        self.assertIn('promote-$CHANNEL', approve)
+        self.assertIn("needs: [prepare, approve]", text.split("\n  release:\n")[1])
+        prepare = text.split("\n  prepare:\n")[1].split("\n  approve:\n")[0]
+        self.assertIn("--real --confirm", prepare)
+        self.assertIn("--verify-remote --check-live", prepare)
 
 
 LATER = "2026-10-20T00:00:00Z"
