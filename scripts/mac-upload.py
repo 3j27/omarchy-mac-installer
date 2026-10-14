@@ -36,9 +36,11 @@ Usage:
                              [--run-id ID]... [--part-bytes N]
   mac-upload.py check-evidence --evidence FILE --sha256 HEX
   mac-upload.py check-run --run-json FILE --repository OWNER/REPO --role ROLE
+                          [--current-run-id ID]
   mac-upload.py publish --artifact DIR --image NAME --sha256 HEX
                         --destination DEST --release NAME [--dry-run]
-                        [--evidence FILE] [--part-bytes N] [--target SHA]
+                        [--evidence FILE --evidence-run-url URL]
+                        [--part-bytes N] [--target SHA]
                         [--run-url URL] [--report FILE]
   mac-upload.py discard --destination DEST --release NAME
 """
@@ -70,6 +72,7 @@ COMMIT = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[1-9][0-9]{0,19}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 RELEASE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+PAYLOAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.zip$")
 RECORDS = ("installer_data.json", "IMAGE", "PROVENANCE", "INSPECTION", "inputs")
 EVIDENCE_NAME = "acceptance-evidence.json"
 SUMS_NAME = "SHA256SUMS"
@@ -122,8 +125,11 @@ def check_inputs(image: str, sha256: str, dry_run: bool, run_ids: list[str], par
         require(int(part_bytes) <= GITHUB_PART_BYTES, f"the part size can't exceed {GITHUB_PART_BYTES}")
 
 
-def check_evidence(document: object, expected_sha256: str) -> None:
-    """Refuse unless the record says the image with this sha256 passed."""
+def check_evidence(document: object, expected_sha256: str, expected_run_url: str = "") -> None:
+    """Refuse unless the record says the image with this sha256 passed.
+
+    With run_url, the record must also name the run it was downloaded from.
+    """
     require(isinstance(document, dict), "the evidence record is not a JSON object")
     sha = document.get("image_sha256")
     require(isinstance(sha, str) and SHA256_HEX.fullmatch(sha) is not None, "the evidence record's image_sha256 is malformed")
@@ -147,24 +153,31 @@ def check_evidence(document: object, expected_sha256: str) -> None:
     require(isinstance(runner, str) and runner.strip() != "", "the evidence record names no runner")
     run_url = document.get("run_url")
     require(isinstance(run_url, str) and run_url.startswith("https://"), "the evidence record's run_url is not an https URL")
+    require(not expected_run_url or run_url == expected_run_url,
+            f"the evidence record names run {run_url}, not the run it came from ({expected_run_url})")
 
 
-def load_evidence(path: Path, expected_sha256: str) -> dict:
+def load_evidence(path: Path, expected_sha256: str, expected_run_url: str = "") -> dict:
     require(path.is_file() and not path.is_symlink(), f"missing or unsafe evidence record: {path}")
     try:
         document = json.loads(path.read_text())
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise Refusal(f"the evidence record is not JSON: {error}") from error
-    check_evidence(document, expected_sha256)
+    check_evidence(document, expected_sha256, expected_run_url)
     return document
 
 
-def check_run(run: dict, repository: str, role: str) -> None:
-    """Refuse a run that isn't this repository's own main branch."""
+def check_run(run: dict, repository: str, role: str, current_run_id: str = "") -> None:
+    """Refuse a run that isn't this repository's own main branch.
+
+    Another run must also have succeeded; this run is still in progress.
+    """
     require(run.get("repository", {}).get("full_name") == repository, f"the {role} run is not from {repository}")
     require(run.get("head_repository", {}).get("full_name") == repository, f"the {role} run's code is not from {repository}")
     require(run.get("head_branch") == "main", f"the {role} run is from {run.get('head_branch')!r}, not main")
     require(run.get("event") not in PULL_REQUEST_EVENTS, f"the {role} run was triggered by {run.get('event')}")
+    if str(run.get("id")) != current_run_id:
+        require(run.get("conclusion") == "success", f"the {role} run's conclusion is {run.get('conclusion')!r}, not success")
 
 
 # Destinations
@@ -318,12 +331,20 @@ class GitHubReleaseDestination:
         if release is None:
             return {}
         remote: dict[str, Remote] = {}
-        for asset in self._paged(f"/repos/{self.repository}/releases/{release['id']}/assets"):
-            require(asset.get("state") == "uploaded",
-                    f"{asset.get('name')} on {self.location()} is an incomplete upload ({asset.get('state')}); delete it by hand")
+        for asset in self._assets_of(release):
             digest = asset.get("digest") or ""
             remote[asset["name"]] = Remote(int(asset["size"]), digest[7:] if digest.startswith("sha256:") else None)
         return remote
+
+    def _assets_of(self, release: dict) -> list[dict]:
+        assets = self._paged(f"/repos/{self.repository}/releases/{release['id']}/assets")
+        names = [asset.get("name") for asset in assets]
+        require(len(set(names)) == len(names), f"{self.location()} lists an asset name twice; resolve that by hand")
+        for asset in assets:
+            require(asset.get("state") == "uploaded",
+                    f"{asset.get('name')} on {self.location()} is an incomplete upload ({asset.get('state')}); delete it by hand")
+            self._assets[asset["name"]] = asset
+        return assets
 
     def _create(self) -> dict:
         document = {
@@ -344,12 +365,14 @@ class GitHubReleaseDestination:
             tagged = [item for item in self._paged(f"/repos/{self.repository}/releases") if item.get("tag_name") == self.release]
             require(all(item["id"] == created["id"] for item in tagged), f"another release tagged {self.release} exists")
             if tagged:
-                break
+                return created
             time.sleep(attempt + 1)
-        return created
+        raise Refusal(f"created {self.release} but it never showed in the release list, so it can't be checked as the only one; re-run to resume")
 
     def put(self, name: str, path: Path) -> None:
         release = self._find() or self._create()
+        # Once published, a release is the catalog's: never add to it.
+        require(release.get("draft") is True, f"{self.release} is already published; refusing to add {name} to it")
         upload = release["upload_url"].split("{", 1)[0]
         size = path.stat().st_size
         with path.open("rb") as stream:
@@ -359,7 +382,8 @@ class GitHubReleaseDestination:
                     asset = json.loads(response.read())
             except urllib.error.HTTPError as error:
                 if error.code == 422:
-                    raise Refusal(f"{name} already exists on {self.location()}") from error
+                    detail = error.read().decode(errors="replace")[:500]
+                    raise Refusal(f"GitHub refused {name} on {self.location()} (422, maybe it already exists): {detail}") from error
                 raise
         require(asset.get("name") == name, f"GitHub stored {name} as {asset.get('name')}")
         self._assets[name] = asset
@@ -369,8 +393,7 @@ class GitHubReleaseDestination:
         if name not in self._assets:
             release = self._find()
             require(release is not None, f"{self.location()} doesn't exist")
-            for asset in self._paged(f"/repos/{self.repository}/releases/{release['id']}/assets"):
-                self._assets.setdefault(asset["name"], asset)
+            self._assets_of(release)
         require(name in self._assets, f"{name} is missing from {self.location()}")
         with self._request("GET", f"/repos/{self.repository}/releases/assets/{self._assets[name]['id']}",
                            accept="application/octet-stream") as response:
@@ -408,6 +431,7 @@ def find_payload(artifact: Path) -> Path:
     zips = sorted(path for path in artifact.iterdir() if path.suffix == ".zip")
     require(len(zips) == 1, f"the artifact holds {len(zips)} image zips, not one")
     require(zips[0].is_file() and not zips[0].is_symlink(), f"unsafe image zip: {zips[0].name}")
+    require(PAYLOAD_NAME.fullmatch(zips[0].name) is not None, f"unexpected image zip name: {zips[0].name!r}")
     return zips[0]
 
 
@@ -521,7 +545,8 @@ def probe_refusals(files: list[Path], destination: Destination, staging: Path) -
 
 
 def publish(*, artifact: Path, image: str, sha256: str, destination: Destination, release: str, dry_run: bool,
-            evidence: Path | None = None, part_bytes: int | None = None, work: Path | None = None) -> dict:
+            evidence: Path | None = None, evidence_run_url: str = "", part_bytes: int | None = None,
+            work: Path | None = None) -> dict:
     check_inputs(image, sha256, dry_run, [], str(part_bytes) if part_bytes else "")
     if dry_run:
         require(release.startswith(DRY_RUN_PREFIX), f"a dry run writes only to a {DRY_RUN_PREFIX} scratch release, not {release}")
@@ -529,7 +554,8 @@ def publish(*, artifact: Path, image: str, sha256: str, destination: Destination
         require(release == image, f"a real upload goes to the release named after the image ({image}), not {release}")
     record = None
     if evidence is not None:
-        record = load_evidence(evidence, sha256)
+        require(dry_run or evidence_run_url != "", "a real upload needs the URL of the run the evidence came from")
+        record = load_evidence(evidence, sha256, evidence_run_url)
     else:
         require(dry_run, "refusing to upload: no acceptance evidence for this image")
         print("  dry run without acceptance evidence: a real upload would refuse")
@@ -591,6 +617,7 @@ def main(argv: list[str]) -> int:
     run.add_argument("--run-json", type=Path, required=True)
     run.add_argument("--repository", required=True)
     run.add_argument("--role", required=True)
+    run.add_argument("--current-run-id", default="")
 
     upload = commands.add_parser("publish")
     upload.add_argument("--artifact", type=Path, required=True)
@@ -600,6 +627,7 @@ def main(argv: list[str]) -> int:
     upload.add_argument("--release", required=True)
     upload.add_argument("--dry-run", action="store_true")
     upload.add_argument("--evidence", type=Path)
+    upload.add_argument("--evidence-run-url", default="")
     upload.add_argument("--part-bytes", default="")
     upload.add_argument("--target", default="")
     upload.add_argument("--run-url", default="")
@@ -617,13 +645,14 @@ def main(argv: list[str]) -> int:
             load_evidence(args.evidence, args.sha256)
             print(f"evidence passes for {args.sha256}")
         elif args.command == "check-run":
-            check_run(json.loads(args.run_json.read_text()), args.repository, args.role)
+            check_run(json.loads(args.run_json.read_text()), args.repository, args.role, args.current_run_id)
         elif args.command == "publish":
             check_inputs(args.image, args.sha256, args.dry_run, [], args.part_bytes)
             destination = open_destination(args.destination, args.release, target=args.target,
                                            notes=release_notes(args.image, args.sha256, args.run_url))
             report = publish(artifact=args.artifact, image=args.image, sha256=args.sha256, destination=destination,
                              release=args.release, dry_run=args.dry_run, evidence=args.evidence,
+                             evidence_run_url=args.evidence_run_url,
                              part_bytes=int(args.part_bytes) if args.part_bytes else None)
             if args.report:
                 args.report.write_text(json.dumps(report, indent=2) + "\n")

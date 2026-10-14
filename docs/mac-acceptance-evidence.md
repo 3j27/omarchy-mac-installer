@@ -24,10 +24,10 @@ A JSON object in a file named `acceptance-evidence.json`, uploaded as its own wo
 - `image_sha256`: the digest of the exact zip the harness booted. It must equal the upload's expected sha256.
 - `result`: `pass` or `fail`. A failing run still writes a record, with `fail`.
 - `scenarios`: one entry per scenario run, each `pass` or `fail`. A passing record has every scenario `pass` and includes at least `first-boot`, `encrypted-conversion` and `second-boot`.
-- `harness_commit`, `runner`, `run_url`: where and with what the scenarios ran.
+- `harness_commit`, `runner`, `run_url`: where and with what the scenarios ran. `run_url` is the GitHub Actions run that uploaded the record's artifact; a real upload refuses a record that names any other run.
 
 Other keys are allowed and ignored, so the harness can add detail (log digests, timings) without a format change.
 
 ## Where a record is trusted from
 
-A real upload takes the record only from a run of this repository's `main` branch that was not triggered by a pull request (`check-run`). Dry runs accept any record they're given and still check it.
+A real upload takes the record only from a run of this repository's `main` branch that was not triggered by a pull request and, unless it is the upload's own run, that succeeded (`check-run`). Any such run can upload an artifact, so the acceptance job should also attest the record; binding the record to the acceptance workflow is left to ticket 06. Dry runs accept a record from any run they're given and still check it.

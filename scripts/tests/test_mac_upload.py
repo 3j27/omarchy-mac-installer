@@ -27,6 +27,7 @@ def load(name: str, path: Path):
 upload = load("mac_upload", SCRIPTS / "mac-upload.py")
 fixture = load("mac_upload_fixture", SCRIPTS / "tests/make-mac-upload-fixture.py")
 PART = 1024 * 1024
+RUN_URL = "https://example.invalid/run"
 
 
 class RecordingDestination(upload.DirectoryDestination):
@@ -75,7 +76,8 @@ class UploadTests(unittest.TestCase):
             return upload.publish(
                 artifact=self.artifact, image=self.image, sha256=self.sha256, destination=destination,
                 release=destination.release, dry_run=dry_run,
-                evidence=self.evidence if evidence == "default" else evidence, part_bytes=part_bytes)
+                evidence=self.evidence if evidence == "default" else evidence,
+                evidence_run_url=RUN_URL, part_bytes=part_bytes)
 
     def assertRefused(self, pattern: str, function, *args, **kwargs):
         with self.assertRaisesRegex(upload.Refusal, pattern):
@@ -189,6 +191,18 @@ class UploadTests(unittest.TestCase):
                 self.assertRefused(message, self.run_publish, destination, evidence=evidence)
                 self.assertEqual(destination.puts, [])
 
+    def test_evidence_must_name_the_run_it_came_from(self):
+        destination = self.destination()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertRefused("names run https://example.invalid/run, not the run it came from", upload.publish,
+                               artifact=self.artifact, image=self.image, sha256=self.sha256, destination=destination,
+                               release=self.image, dry_run=False, evidence=self.evidence,
+                               evidence_run_url="https://example.invalid/other")
+            self.assertRefused("needs the URL of the run", upload.publish,
+                               artifact=self.artifact, image=self.image, sha256=self.sha256, destination=destination,
+                               release=self.image, dry_run=False, evidence=self.evidence)
+        self.assertEqual(destination.puts, [])
+
     def test_evidence_that_is_not_json_is_refused(self):
         evidence = self.directory / "broken.json"
         evidence.write_text("{")
@@ -253,10 +267,13 @@ class UploadTests(unittest.TestCase):
 
     def test_only_this_repositorys_main_branch_runs_are_trusted(self):
         repository = "omacom/omarchy-mac-installer"
-        run = {"repository": {"full_name": repository}, "head_repository": {"full_name": repository},
-               "head_branch": "main", "event": "workflow_dispatch"}
+        run = {"id": 7, "repository": {"full_name": repository}, "head_repository": {"full_name": repository},
+               "head_branch": "main", "event": "workflow_dispatch", "conclusion": "success"}
         upload.check_run(run, repository, "image")
+        upload.check_run({**run, "conclusion": None}, repository, "image", current_run_id="7")
         for message, change in {
+            "conclusion is 'failure'": {"conclusion": "failure"},
+            "conclusion is None": {"conclusion": None},
             "not main": {"head_branch": "mac-upload"},
             "triggered by pull_request": {"event": "pull_request"},
             "code is not from": {"head_repository": {"full_name": "someone/fork"}},
@@ -286,6 +303,78 @@ class UploadTests(unittest.TestCase):
         self.assertIn("refused as expected", result.stdout)
         self.assertEqual(list(self.published.iterdir()), [])
         self.assertEqual(json.loads(report.read_text())["evidence"]["result"], "pass")
+
+
+class FakeGitHub(upload.GitHubReleaseDestination):
+    """The GitHub destination over canned API answers, no network."""
+
+    def __init__(self, releases: list[dict], assets: list[dict] | None = None) -> None:
+        super().__init__("omacom/omarchy-mac-installer", "omarchy-mac-edge-2026.10.14-0123456789ab", "token")
+        self.releases = releases
+        self.assets = assets or []
+        self.calls: list[tuple[str, str]] = []
+
+    def _paged(self, url):
+        return self.assets if url.endswith("/assets") else self.releases
+
+    def _json(self, method, url, document=None):
+        self.calls.append((method, url))
+        if method == "POST":
+            return {"id": 99, "tag_name": self.release, "draft": True, "upload_url": "https://uploads.invalid/x{?name}"}
+        return None
+
+
+class GitHubDestinationTests(unittest.TestCase):
+    TAG = "omarchy-mac-edge-2026.10.14-0123456789ab"
+
+    def release(self, **change):
+        return {"id": 1, "tag_name": self.TAG, "draft": True, "upload_url": "https://uploads.invalid/x{?name}", **change}
+
+    def test_a_published_release_is_never_added_to(self):
+        github = FakeGitHub([self.release(draft=False)])
+        with self.assertRaisesRegex(upload.Refusal, "already published; refusing to add IMAGE"):
+            github.put("IMAGE", Path(__file__))
+
+    def test_a_published_release_is_never_deleted(self):
+        github = FakeGitHub([self.release(draft=False, tag_name=f"dryrun-{self.TAG}")])
+        github.release = f"dryrun-{self.TAG}"
+        with self.assertRaisesRegex(upload.Refusal, "not a draft"):
+            github.discard()
+        self.assertEqual(github.calls, [])
+
+    def test_two_releases_with_the_tag_are_refused(self):
+        github = FakeGitHub([self.release(), self.release(id=2)])
+        with self.assertRaisesRegex(upload.Refusal, "2 releases are tagged"):
+            github.listing()
+
+    def test_a_duplicated_or_incomplete_asset_is_refused(self):
+        asset = {"name": "IMAGE", "size": 3, "state": "uploaded", "digest": "sha256:" + "a" * 64, "id": 5}
+        with self.assertRaisesRegex(upload.Refusal, "lists an asset name twice"):
+            FakeGitHub([self.release()], [asset, {**asset, "id": 6}]).listing()
+        with self.assertRaisesRegex(upload.Refusal, "incomplete upload"):
+            FakeGitHub([self.release()], [{**asset, "state": "starter"}]).listing()
+        listing = FakeGitHub([self.release()], [asset]).listing()
+        self.assertEqual(listing, {"IMAGE": upload.Remote(3, "a" * 64)})
+
+    def test_a_created_release_that_never_lists_fails_closed(self):
+        github = FakeGitHub([])
+        sleep, upload.time.sleep = upload.time.sleep, lambda seconds: None
+        self.addCleanup(setattr, upload.time, "sleep", sleep)
+        with self.assertRaisesRegex(upload.Refusal, "never showed in the release list"):
+            github.put("IMAGE", Path(__file__))
+
+    def test_another_draft_with_the_tag_is_refused_after_create(self):
+        github = FakeGitHub([])
+        original = github._json
+
+        def create_then_race(method, url, document=None):
+            created = original(method, url, document)
+            if method == "POST":
+                github.releases = [created, self.release(id=3)]
+            return created
+        github._json = create_then_race
+        with self.assertRaisesRegex(upload.Refusal, "another release tagged"):
+            github.put("IMAGE", Path(__file__))
 
 
 if __name__ == "__main__":
