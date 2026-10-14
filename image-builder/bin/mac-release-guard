@@ -22,8 +22,9 @@ Findings, wherever they are and whatever they are called:
   passwordless sudo for every command, polkit rules granting every action, sshd
   enabled, the lab overlay's files (builder/lab_access.py's scan),
   passwordless sudo for a shell, Tailscale state (/var/lib/tailscale), which
-  only a lab Mac enrolls, and configuration it cannot read whole (a link or a
-  file too large)
+  only a lab Mac enrolls, and configuration it cannot read whole (a link loop or
+  one out of the image, or a file too large); a link inside the image is read
+  where it points
 - lab hosts: the lab's host names (omarchy-m1-pro, omarchy-m2-…), its
   Thunderbolt bridge network (10.77.0.x), its bootstrap server, a tailnet
   (*.ts.net) or the lab-thunderbolt profile, in configuration, home and state
@@ -46,6 +47,7 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import json
+import mmap
 import os
 from pathlib import Path
 import re
@@ -81,7 +83,8 @@ TARGET_MANIFESTS = ("var/lib/omarchy/image/target", "var/lib/omarchy/image/targe
 ENTITLEMENTS = (b"<key>get-task-allow</key>", b"<key>com.apple.security.get-task-allow</key>",
                 b"\x0c\x0eget-task-allow", b"\x0c\x21com.apple.security.get-task-allow")
 ARMOR_BEGIN = b"-----BEGIN PGP PUBLIC KEY BLOCK-----"
-ARMOR = re.compile(rb"-----BEGIN PGP PUBLIC KEY BLOCK-----\r?\n(.*?)-----END PGP PUBLIC KEY BLOCK-----", re.S)
+# A key block's body is bounded, so a header without an end costs one bounded look ahead.
+ARMOR = re.compile(rb"-----BEGIN PGP PUBLIC KEY BLOCK-----\r?\n(.{0,1048576}?)-----END PGP PUBLIC KEY BLOCK-----", re.S)
 
 
 class GuardError(Exception):
@@ -199,7 +202,7 @@ def bytes_findings(data: bytes, patterns: dict[bytes, str]) -> set[str]:
 
 
 def file_findings(path: Path, patterns: dict[bytes, str]) -> set[str]:
-    """What PATH's bytes hold, read in overlapping chunks; armored key blocks in files up to TEXT_LIMIT."""
+    """What PATH's bytes hold, read in overlapping chunks, and any armored key block in it."""
     overlap = max(len(pattern) for pattern in patterns) - 1
     found: set[str] = set()
     armored = False
@@ -212,8 +215,8 @@ def file_findings(path: Path, patterns: dict[bytes, str]) -> set[str]:
                 armored = armored or ARMOR_BEGIN in window
                 tail = window[-overlap:]
         if armored:
-            found |= (armored_findings(path.read_bytes()) if path.stat().st_size <= TEXT_LIMIT
-                      else {"an armored key block in a file too large to read whole"})
+            with open(path, "rb") as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                found |= armored_findings(data)
     except OSError as error:
         raise GuardError(f"cannot read {path}: {error}") from None
     return found
@@ -223,26 +226,64 @@ def host_findings(data: bytes) -> set[str]:
     return {match.group(0).decode(errors="replace").lower() for match in LAB_HOSTS.finditer(data)}
 
 
+def resolve(root: Path, path: Path) -> Path | None:
+    """PATH with its links followed inside the image ROOT (an absolute target is the image's), or None for a
+    link loop or one that leaves the image."""
+    top = os.path.normpath(root)
+    for _ in range(16):
+        if not path.is_symlink():
+            return path
+        target = os.readlink(path)
+        path = Path(os.path.normpath(Path(top, target.lstrip("/")) if target.startswith("/") else path.parent / target))
+        if os.path.commonpath([top, path]) != top:
+            return None
+    return None
+
+
+def read_config(root: Path, path: Path) -> bytes | None:
+    """The bytes of the configuration file PATH, links followed inside the image; b"" when it (or a link's
+    target) is absent, None when the guard cannot read it: a link loop or out of the image, not a regular
+    file, or larger than lab_access reads."""
+    real = resolve(root, path)
+    if real is None:
+        return None
+    if not real.exists():
+        return b""
+    info = real.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size > lab_access.SECRET_SCAN_LIMIT:
+        return None
+    return real.read_bytes()
+
+
 def config_findings(root: Path) -> list[tuple[str, str]]:
-    """Configuration the scans read whole must be a small regular file, so none hides from them
-    (lab_access.read_small reads anything else as empty); and no sudo rule may run a shell without a password."""
+    """Configuration the scans read whole must be readable, so none hides from them: a link's target inside
+    the image is scanned as lab_access scans the file itself (systemd ships sshd_config.d drop-ins as links),
+    and anything else lab_access would read as empty is a finding. No sudo rule may run a shell without a
+    password."""
     found = []
     configs = [root / "etc/sudoers", *sorted((root / "etc/sudoers.d").glob("*")),
                root / "etc/ssh/sshd_config", *sorted((root / "etc/ssh/sshd_config.d").glob("*")),
                root / "etc/pacman.conf", *sorted((root / "etc/pacman.d").glob("*.conf")),
                *(root / manifest for manifest in TARGET_MANIFESTS)]
-    for config in configs:
-        if not (config.exists() or config.is_symlink()):
-            continue
-        where = str(config.relative_to(root))
-        info = config.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_size > lab_access.SECRET_SCAN_LIMIT:
-            found.append((where, "configuration the guard cannot read (a link, not a file, or too large)"))
-            continue
-        if where == "etc/sudoers" or where.startswith("etc/sudoers.d/"):
-            for line in lab_access.config_lines(config.read_bytes()):
-                if "NOPASSWD" in line and PASSWORDLESS_SHELL.search(line):
-                    found.append((where, "a passwordless sudo grant of a shell"))
+    with tempfile.TemporaryDirectory(prefix="mac-release-guard-links-") as scratch:
+        linked = Path(scratch)
+        for config in configs:
+            if not (config.exists() or config.is_symlink()):
+                continue
+            where = str(config.relative_to(root))
+            body = read_config(root, config)
+            if body is None:
+                found.append((where, "configuration the guard cannot read (a link loop or out of the image, "
+                                     "not a file, or too large)"))
+                continue
+            if config.is_symlink():
+                (linked / where).parent.mkdir(parents=True, exist_ok=True)
+                (linked / where).write_bytes(body)
+            if where == "etc/sudoers" or where.startswith("etc/sudoers.d/"):
+                for line in lab_access.config_lines(body):
+                    if "NOPASSWD" in line and PASSWORDLESS_SHELL.search(line):
+                        found.append((where, "a passwordless sudo grant of a shell"))
+        found += [(f"{path} (linked)", what) for path, what, _ in lab_access.findings(linked)]
     return found
 
 
@@ -250,7 +291,7 @@ def pin_findings(root: Path) -> list[tuple[str, str]]:
     found = []
     configs = [root / "etc/pacman.conf", *sorted((root / "etc/pacman.d").glob("*.conf"))]
     for config in configs:
-        body = lab_access.read_small(config).decode(errors="replace")
+        body = (read_config(root, config) or b"").decode(errors="replace")
         where = str(config.relative_to(root))
         if test_image_pin.MARK in body:
             found.append((where, "the test image pin"))
@@ -261,7 +302,7 @@ def pin_findings(root: Path) -> list[tuple[str, str]]:
             if line.strip() == "[omarchy-candidates]":
                 found.append((where, "the candidate repository"))
     for manifest in TARGET_MANIFESTS:
-        body = lab_access.read_small(root / manifest).decode(errors="replace")
+        body = (read_config(root, root / manifest) or b"").decode(errors="replace")
         fields = dict(line.split("=", 1) for line in body.splitlines() if "=" in line)
         if "candidate_set" in fields or "candidate_source_commit" in fields:
             found.append((manifest, "an image target naming a candidate set"))

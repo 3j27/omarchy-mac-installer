@@ -141,14 +141,36 @@ class ImageTreeTest(unittest.TestCase):
         fixtures.write(self.root, "etc/sudoers.d/20-tz", "%wheel ALL=(root) NOPASSWD: /usr/bin/timedatectl set-timezone *\n")
         self.assertEqual(self.scan(), [])
 
-    def test_configuration_hidden_from_the_scan_is_refused(self):
-        fixtures.write(self.work, "elsewhere", b"maralc ALL=(ALL) NOPASSWD: ALL\n")
+    def test_linked_configuration_is_scanned_where_it_points(self):
+        # systemd ships its sshd drop-in as a link into /usr/lib.
+        fixtures.write(self.root, "usr/lib/systemd/sshd_config.d/20-systemd-userdb.conf",
+                       "AuthorizedKeysCommand /usr/bin/userdbctl ssh-authorized-keys %u\n")
+        (self.root / "etc/ssh/sshd_config.d").mkdir(parents=True, exist_ok=True)
+        (self.root / "etc/ssh/sshd_config.d/20-systemd-userdb.conf").symlink_to(
+            "/usr/lib/systemd/sshd_config.d/20-systemd-userdb.conf")
+        self.assertEqual(self.scan(), [])
+        fixtures.write(self.root, "usr/share/lab/sudo", b"maralc ALL=(ALL) NOPASSWD: ALL\n")
         (self.root / "etc/sudoers.d").mkdir(parents=True, exist_ok=True)
-        (self.root / "etc/sudoers.d/lab").symlink_to(self.work / "elsewhere")
+        (self.root / "etc/sudoers.d/lab").symlink_to("../../usr/share/lab/sudo")
+        found = dict(self.scan())
+        self.assertEqual(found["etc/sudoers.d/lab (linked)"], "a passwordless sudo grant for every command")
+
+    def test_configuration_hidden_from_the_scan_is_refused(self):
+        (self.root / "etc/sudoers.d").mkdir(parents=True, exist_ok=True)
+        (self.root / "etc/sudoers.d/out").symlink_to("../../../../../../../../../../../tmp/lab-sudo")
+        (self.root / "etc/sudoers.d/loop").symlink_to("loop")
         fixtures.write(self.root, "etc/ssh/sshd_config", b"#" * (2 << 20) + b"\nAuthorizedKeysFile /lab/keys\n")
         found = dict(self.scan())
-        self.assertIn("cannot read", found["etc/sudoers.d/lab"])
-        self.assertIn("cannot read", found["etc/ssh/sshd_config"])
+        for where in ("etc/sudoers.d/out", "etc/sudoers.d/loop", "etc/ssh/sshd_config"):
+            self.assertIn("cannot read", found[where])
+
+    def test_an_armored_test_key_in_a_large_binary(self):
+        root = Path(tempfile.mkdtemp(dir=self.work))
+        fixtures.write(root, "usr/bin/tool", b"\0" * (guard.TEXT_LIMIT + 1) + TEST_KEY_ARMORED)
+        self.assertFinds("the test candidate key (armored)", root)
+        fixtures.write(root, "usr/bin/tool", b"\0" * (guard.TEXT_LIMIT + 1)
+                       + (ROOT / "builder/candidate-trust/omarchy-channel.asc").read_bytes())
+        self.assertEqual(self.scan(root), [])
 
     def test_the_lab_catalog_key_in_any_form_and_any_file(self):
         cases = {
