@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -133,6 +134,28 @@ class ReleaseGuardTest(unittest.TestCase):
         binary = self.app / "Contents/MacOS/OmarchyAppleInstallerApp"
         binary.write_bytes(binary.read_bytes() + b"\x30\x1d\x0c\x0eget-task-allow\x01\x01\xff")
         self.assertRefused("get-task-allow")
+
+    def test_get_task_allow_in_a_binary_plist_is_refused(self) -> None:
+        (self.app / "Contents/Resources/app.entitlements").write_bytes(
+            plistlib.dumps({"com.apple.security.get-task-allow": True}, fmt=plistlib.FMT_BINARY))
+        self.assertRefused("get-task-allow")
+
+    @unittest.skipUnless(shutil.which("cc") and shutil.which("codesign"), "needs cc and codesign (macOS)")
+    def test_get_task_allow_signed_into_an_archived_binary_is_refused(self) -> None:
+        work = Path(self.temp.name)
+        (work / "tool.c").write_text("int main(void) { return 0; }\n")
+        (work / "debug.plist").write_bytes(plistlib.dumps({"com.apple.security.get-task-allow": True}))
+        subprocess.run(["cc", "-o", str(work / "tool"), str(work / "tool.c")], check=True)
+        subprocess.run(["codesign", "--force", "--sign", "-", "--entitlements", str(work / "debug.plist"),
+                        str(work / "tool")], check=True, capture_output=True)
+        self.write_engine({"bin/tool": (work / "tool").read_bytes()})
+        self.assertRefused("installer-test.tar.gz!bin/tool: a get-task-allow entitlement in its signature")
+
+    def test_a_symlinked_release_input_is_refused(self) -> None:
+        release = self.app / "Contents/Resources/Release"
+        (release / "trust-root.ed25519.pub").rename(Path(self.temp.name) / "key")
+        os.symlink(Path(self.temp.name) / "key", release / "trust-root.ed25519.pub")
+        self.assertRefused("a symbolic link Release/trust-root.ed25519.pub")
 
     def test_the_lab_catalog_key_as_trust_root_is_refused(self) -> None:
         self.set_trust_root(guard.LAB_CATALOG_KEY.read_bytes())

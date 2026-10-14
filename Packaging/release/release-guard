@@ -8,8 +8,9 @@ only) or a single file. The guard exits 1 and lists every finding when any
 PATH carries one of the following, wherever it is and whatever it is called,
 inside .tar.gz, .tar and .zip archives too (the bundled engine):
 
-- get-task-allow: a debugging entitlement, as a plist key or DER, in any file,
-  and in the signed entitlements of every Mach-O (codesign, when available)
+- get-task-allow: a debugging entitlement, as an XML or binary plist key or
+  DER, in any file, and in the signed entitlements of every Mach-O, archived
+  ones included (codesign, when available)
 - the lab catalog key (lab-catalog-key.ed25519.pub beside this script): raw,
   hex or base64, or its SHA-256 fingerprint
 - the test candidate key (image-builder/builder/candidate-trust): its
@@ -132,6 +133,26 @@ def key_patterns() -> dict[bytes, str]:
     return patterns
 
 
+def binary_plist_allows_debugging(data: bytes) -> bool:
+    """A binary property list (an entitlements file) with a get-task-allow key."""
+    if not data.startswith(b"bplist00"):
+        return False
+    try:
+        value = plistlib.loads(data)
+    except Exception:
+        return False
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            if any(str(key).endswith("get-task-allow") for key in item):
+                return True
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return False
+
+
 class Guard:
     def __init__(self) -> None:
         self.values = identity()
@@ -145,10 +166,10 @@ class Guard:
     # ── contents ────────────────────────────────────────────────────────────
     def scan_bytes(self, where: str, data: bytes) -> None:
         self.scanned += 1
-        for pattern in ENTITLEMENTS:
-            if pattern in data:
-                self.find(where, "a get-task-allow entitlement")
-                break
+        if any(pattern in data for pattern in ENTITLEMENTS) or binary_plist_allows_debugging(data):
+            self.find(where, "a get-task-allow entitlement")
+        if data[:4] in MACHO and "!" in where:
+            self.archived_entitlements(where, data)
         for pattern, what in self.patterns.items():
             if pattern in data:
                 self.find(where, what)
@@ -214,6 +235,15 @@ class Guard:
                 if name.endswith(".app"):
                     self.check_app(base / name, f"{label}/{(base / name).relative_to(top)}")
 
+    def archived_entitlements(self, where: str, data: bytes) -> None:
+        """An archived Mach-O's signed entitlements, read from a private copy."""
+        if not shutil.which("codesign"):
+            return
+        with tempfile.TemporaryDirectory(prefix="release-guard.") as directory:
+            copy = Path(directory) / "code"
+            copy.write_bytes(data)
+            self.signed_entitlements(where, copy)
+
     def signed_entitlements(self, where: str, path: Path) -> None:
         if not shutil.which("codesign"):
             return
@@ -254,6 +284,9 @@ class Guard:
         if client != client_requirement:
             self.find(label, f"the helper's client requirement {client!r} is not the Developer ID team's")
         release = contents / "Resources/Release"
+        for entry in sorted(release.iterdir()) if release.is_dir() else []:
+            if entry.is_symlink():
+                self.find(label, f"a symbolic link Release/{entry.name}")
         for name in ("catalog.json", "catalog.json.sig", "limine-inputs.json"):
             if (release / name).exists() or (release / name).is_symlink():
                 self.find(label, f"a sealed private input Release/{name}")
