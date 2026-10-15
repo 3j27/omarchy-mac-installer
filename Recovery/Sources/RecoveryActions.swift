@@ -648,6 +648,7 @@ enum RecoveryActions {
       receipt: record,
       hasPendingInstallation: FileManager.default.fileExists(atPath: pendingInstallation.path),
       persist: {
+        try run("/sbin/mount", ["-u", "-w", volume.path])
         try RecoveryFileTransaction.write(
           JSONSerialization.data(withJSONObject: $0, options: [.prettyPrinted, .sortedKeys]),
           to: receipt)
