@@ -22,5 +22,6 @@ compile_run log-view Sources/LogTextView.swift Tests/LogTextViewCheck.swift
 compile_run configuration Sources/RecoveryOwner.swift Sources/InstallConfiguration.swift Tests/InstallConfigurationCheck.swift
 compile_run file-transaction Sources/Account/RecoveryFileTransaction.swift Tests/RecoveryFileTransactionCheck.swift
 compile_run installation-journal Sources/RecoveryInstallationJournal.swift Tests/RecoveryInstallationJournalCheck.swift
+compile_run account-restart Sources/RecoveryAccountRestart.swift Tests/RecoveryAccountRestartCheck.swift
 compile_run directory-swap Sources/Account/RecoveryFileTransaction.swift Sources/RecoveryDirectorySwap.swift Tests/RecoveryDirectorySwapCheck.swift
 compile_run baseline Sources/RecoveryBaseline.swift Tests/RecoveryBaselineCheck.swift

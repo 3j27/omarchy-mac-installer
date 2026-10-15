@@ -757,7 +757,7 @@ def _collect_neo_radios(installer, pkg, collect=None, *, required=False):
                 files = omarchy_mt7932.collect(root)
         else:
             files = collect()
-        required = {
+        required_files = {
             "mediatek/mt7932/" + name for name in (
                 omarchy_mt7932.WIFI_PATCH, omarchy_mt7932.WIFI_RAM,
                 "ppr.bin", "oca2.bin", "wcal.bin", "config-original.bin",
@@ -766,7 +766,7 @@ def _collect_neo_radios(installer, pkg, collect=None, *, required=False):
             "mediatek/" + omarchy_mt7932.BT_PTX,
             "mediatek/j700-mt7932-btcal.bin", "mediatek/j700-mt7932-bdaddr.bin",
         }
-        missing = sorted(name for name in required if not files.get(name))
+        missing = sorted(name for name in required_files if not files.get(name))
         if missing:
             raise omarchy_mt7932.Mt7932Error("missing required files: " + ", ".join(missing))
     except (OSError, ValueError, subprocess.CalledProcessError, omarchy_mt7932.Mt7932Error,

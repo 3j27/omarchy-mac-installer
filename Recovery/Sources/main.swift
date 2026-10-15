@@ -35,12 +35,14 @@ final class InstallerModel: ObservableObject {
   @Published var accountConfirmation = ""
   @Published var accountAlreadyStarted = false
   @Published var creatingAccount = false
+  @Published var restartingWithoutAccount = false
   @Published var accountNeedsAuthorization = false
   private var checkingAccount = false
   private var awaitingStartupDiskReturn = false
 
   var canCreateAccount: Bool {
-    !creatingAccount && RecoveryAccountInstaller.validName(accountUsername)
+    !creatingAccount && !restartingWithoutAccount
+      && RecoveryAccountInstaller.validName(accountUsername)
       && !accountPassword.isEmpty && accountPassword == accountConfirmation
       && (try? RecoveryAccountInstaller.validatePassword(Data(accountPassword.utf8))) != nil
   }
@@ -59,7 +61,7 @@ final class InstallerModel: ObservableObject {
 
   func resumeAccountSetup() {
     guard RecoveryActions.inRecovery, RecoveryActions.recovering,
-      !creatingAccount, !checkingAccount
+      !creatingAccount, !restartingWithoutAccount, !checkingAccount
     else { return }
     checkingAccount = true
     DispatchQueue.global(qos: .userInitiated).async {
@@ -114,6 +116,32 @@ final class InstallerModel: ObservableObject {
         InstallerLog.shared.append("Recovery account setup failed: " + error.localizedDescription)
         DispatchQueue.main.async {
           self.creatingAccount = false
+          self.failure = error.localizedDescription
+        }
+      }
+    }
+  }
+
+  func skipRecoveryAccountAndRestart() {
+    guard stage == .account, !creatingAccount, !restartingWithoutAccount, !checkingAccount else { return }
+    accountPassword = ""
+    accountConfirmation = ""
+    if RecoveryActions.isPreview {
+      let alert = NSAlert()
+      alert.messageText = "Restart simulated"
+      alert.informativeText =
+        "Recovery account setup is deferred. This preview does not restart your Mac."
+      alert.runModal()
+      return
+    }
+    restartingWithoutAccount = true
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        try RecoveryActions.skipRecoveryAccountAndRestart()
+      } catch {
+        InstallerLog.shared.append("Restart failed: " + error.localizedDescription)
+        DispatchQueue.main.async {
+          self.restartingWithoutAccount = false
           self.failure = error.localizedDescription
         }
       }
@@ -748,7 +776,7 @@ struct InstallerView: View {
     }
     .frame(width: 380)
     .textFieldStyle(.roundedBorder)
-    .disabled(model.creatingAccount)
+    .disabled(model.creatingAccount || model.restartingWithoutAccount)
     .onAppear { accountField = model.accountAlreadyStarted ? .password : .username }
     .onDisappear {
       model.accountPassword = ""
@@ -784,18 +812,27 @@ struct InstallerView: View {
     case .installing:
       EmptyView()
     case .account:
-      HStack(spacing: 12) {
-        ProgressView().controlSize(.small)
-          .frame(width: 16, height: 16)
-          .opacity(model.creatingAccount ? 1 : 0)
-          .accessibilityLabel("Preparing account")
-          .accessibilityHidden(!model.creatingAccount)
-        Button(model.accountAlreadyStarted ? "Continue" : "Create Account") {
-          model.createRecoveryAccount()
+      VStack(spacing: 8) {
+        HStack(spacing: 12) {
+          ProgressView().controlSize(.small)
+            .frame(width: 16, height: 16)
+            .opacity(model.creatingAccount ? 1 : 0)
+            .accessibilityLabel("Preparing account")
+            .accessibilityHidden(!model.creatingAccount)
+          Button(model.accountAlreadyStarted ? "Continue" : "Create Account") {
+            model.createRecoveryAccount()
+          }
+          .buttonStyle(RecoveryPrimaryButtonStyle()).controlSize(.large)
+          .disabled(!model.canCreateAccount)
+          Color.clear.frame(width: 16, height: 16).accessibilityHidden(true)
         }
-        .buttonStyle(RecoveryPrimaryButtonStyle()).controlSize(.large)
-        .disabled(!model.canCreateAccount)
-        Color.clear.frame(width: 16, height: 16).accessibilityHidden(true)
+        Button(model.restartingWithoutAccount ? "Restarting…" : "Skip, Restart Now") {
+          model.skipRecoveryAccountAndRestart()
+        }
+        .buttonStyle(.plain)
+        .font(OmarchyTheme.mono(12))
+        .foregroundColor(OmarchyTheme.secondaryText)
+        .disabled(model.creatingAccount || model.restartingWithoutAccount)
       }
     case .complete:
       Button("Restart") { model.openStartupDisk() }

@@ -635,6 +635,29 @@ enum RecoveryActions {
     try installed()["recoveryAccountRequired"] as? Bool == true
   }
 
+  static func skipRecoveryAccountAndRestart() throws {
+    try recoveryOnly()
+    let record = try installed()
+    let config = try configuration.get()
+    let expected = try asset("raw/boot.bin", manifest: manifest())
+    let target = try esp().appendingPathComponent(config.stage2Path)
+    try check(
+      try Data(contentsOf: target) == expected,
+      "The installed startup bundle changed. Restore it before restarting.")
+    try RecoveryAccountRestart.perform(
+      receipt: record,
+      hasPendingInstallation: FileManager.default.fileExists(atPath: pendingInstallation.path),
+      persist: {
+        try RecoveryFileTransaction.write(
+          JSONSerialization.data(withJSONObject: $0, options: [.prettyPrinted, .sortedKeys]),
+          to: receipt)
+      },
+      restart: {
+        InstallerLog.shared.append("Recovery account deferred by request. Restarting now.")
+        _ = try run("/sbin/shutdown", ["-r", "now"])
+      })
+  }
+
   static func createRecoveryAccount(username: String, password: Data) throws
     -> RecoveryAccountRecord
   {

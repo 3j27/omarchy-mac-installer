@@ -2174,6 +2174,20 @@ class NeoRadioFirmwareTests(unittest.TestCase):
             with self.subTest(missing=missing), self.assertRaisesRegex(AsahiAdapterError, "missing required"):
                 self.run_hook("j700ap", lambda: partial)
 
+    def test_optional_incomplete_radios_warn_without_aborting_installation(self):
+        for files in ({}, {name: data for name, data in self.files.items()
+                              if name != "mediatek/" + self.radio.BT_PTX}):
+            with self.subTest(files=list(files)), self.assertLogs(level="WARNING") as logs:
+                self.assertEqual(self.run_hook("j700ap", lambda: files, required=False), [])
+            self.assertIn("radio firmware unavailable", logs.output[0])
+
+    def test_optional_collector_failure_warns_without_aborting_installation(self):
+        def collect():
+            raise self.radio.Mt7932Error("factory calibration unavailable")
+
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual(self.run_hook("j700ap", collect, required=False), [])
+
 class NeoTouchIdCalibrationTests(unittest.TestCase):
     """The MacBook Neo's FSC2 calibration joins its vendor firmware package."""
 

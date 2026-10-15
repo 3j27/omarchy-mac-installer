@@ -98,6 +98,10 @@ jobs:
         run: xcodebuildmcp swift-package test --package-path "$PWD" --configuration debug 2>&1 | tee "$RUNNER_TEMP/installer-ci/swift-debug.log"
       - name: Run release Swift tests
         run: xcodebuildmcp swift-package test --package-path "$PWD" --configuration release 2>&1 | tee "$RUNNER_TEMP/installer-ci/swift-release.log"
+      - name: Build Recovery enrollment app and run its standalone fixtures
+        run: bash Recovery/build-app.sh recovery "$RUNNER_TEMP/installer-ci/recovery-enrollment" 2>&1 | tee "$RUNNER_TEMP/installer-ci/recovery-enrollment.log"
+      - name: Build Recovery preview
+        run: OMARCHY_RECOVERY_BUILD=preview xcodebuildmcp swift-package build --package-path "$PWD/Recovery" --configuration release 2>&1 | tee "$RUNNER_TEMP/installer-ci/recovery-preview.log"
       - name: Save macOS evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
