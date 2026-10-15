@@ -53,6 +53,7 @@ helper_identifier="$INSTALLER_HELPER_IDENTIFIER"
 app_name="$INSTALLER_APP_NAME.app"
 app_executable_name="OmarchyAppleInstallerApp"
 daemon_plist_name="$helper_identifier.plist"
+# The engine is pinned only in the source lock (docs/engine-versions.md).
 read -r engine_file_name engine_digest engine_size < <(
   python3 "$script_directory/read-validation-engine.py"
 )

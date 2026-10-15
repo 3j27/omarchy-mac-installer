@@ -21,7 +21,6 @@ BOOTSTRAP_MEMBERS = {
     'asahi_firmware/bluetooth.py': 'aa12e6cd684ed5b55d732db1f040d84570537bacc991d03ee6f854cbb232c369',
 }
 BASE_COMMIT = 'f0469cea0899f3efed8efead604174c7a53c4451'
-VERSION = 'v0.9.2-omarchy.50'
 
 _SPEC = importlib.util.spec_from_file_location(
     'verify_source_lock', Path(__file__).resolve().parent / 'verify-source-lock.py')
@@ -137,7 +136,8 @@ def rebuild(checkout, base, output):
             if item['destination'] != 'bin/' + Path(item['path']).name:
                 raise ValueError('bundled tool destination is invalid: ' + item['path'])
             overlay[item['destination']] = (root / item['path']).read_bytes()
-    overlay['version.tag'] = (VERSION + '\n').encode()
+    # The name is the lock's; Engine/engine_pin.py chooses it.
+    overlay['version.tag'] = (lock['downstream_overlay']['version'] + '\n').encode()
     with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
         # The engine carries its own installer metadata; the per-payload copy in the repository is a different file.
         if sha256(archive.extractfile('./installer_data.json').read()) != lock['validation_artifact']['metadata_sha256']:

@@ -1,10 +1,5 @@
 {
   "engine": {
-    "version": "v0.9.2-omarchy.50",
-    "url": "https://github.com/omacom/omarchy-mac-installer/releases/download/engine-v0.9.2-omarchy.50/installer-v0.9.2-omarchy.50.tar.gz",
-    "fileName": "installer-v0.9.2-omarchy.50.tar.gz",
-    "sizeBytes": 18037588,
-    "sha256": "313f91571422170094a8fa1ac65fb24002d708bba86f7a2dbfe4821f89b12e6e",
     "downstreamRevision": "6b644750fa3165d47838892cdbc46801cfe75018"
   },
   "installer": {
