@@ -66,6 +66,13 @@ class OSInstaller:
 class StubInstaller:
     def __init__(self, sysinfo, dutil, osinfo):
         self.ipsw = None
+        self.bootcaches = {"bless2": {}}
+
+    def load_identity(self):
+        pass
+
+    def collect_firmware(self, package):
+        pass
 
     def install_files(self, current_os):
         pass
@@ -101,8 +108,11 @@ def written_metadata(package: str, out: Path) -> dict:
 def engine_admits(metadata: Path, payload: Path) -> list:
     """Runs the engine's preflight on METADATA and PAYLOAD; returns the firmware it chose from."""
     chosen = []
-    installer = SimpleNamespace(dutil=None, sysinfo=None, osinfo=None,
-                                choose_ipsw=lambda supported: chosen.append(supported) or "ipsw")
+    installer = SimpleNamespace(
+        dutil=None, sysinfo=SimpleNamespace(device_class="j314sap"), osinfo=None,
+        choose_ipsw=lambda supported: chosen.append(supported)
+        or SimpleNamespace(version=supported[-1]),
+    )
     adapter = omarchy_asahi.AsahiStage1Adapter(installer=installer, metadata_path=str(metadata),
                                                payload_path=str(payload), stub_size=0)
     try:
