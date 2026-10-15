@@ -39,36 +39,15 @@ defaults:
     shell: bash
 
 jobs:
-  # Namespace's runners are ours: nothing a pull request starts reaches them.
-  # A build starts only from main, as the acceptance that runs on its image.
-  guard:
-    name: Guard
-    if: github.repository == 'omacom/omarchy-mac-installer'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions: {}
-    steps:
-      - name: Refuse a pull request or a run off main
-        env:
-          EVENT: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          if [[ $EVENT == pull_request || $EVENT == pull_request_target ]]; then
-            echo "::error::this never runs for pull requests"
-            exit 1
-          fi
-          if [[ $GITHUB_REF != refs/heads/main ]]; then
-            echo "::error::this runs only from main, not $GITHUB_REF"
-            exit 1
-          fi
-          echo "event=$EVENT ref=$GITHUB_REF"
-
-  # Namespace's Apple-backed Linux ARM64 runner: the image never leaves
-  # Namespace on its way to acceptance and upload, which read it from
-  # Namespace's artifact storage.
   build:
     name: Build the edge image
-    needs: guard
+    # Namespace's runners are ours: nothing a pull request starts reaches
+    # them, and a build starts only from main, as the acceptance of its image.
+    if: >-
+      github.repository == 'omacom/omarchy-mac-installer' &&
+      github.event_name != 'pull_request' &&
+      github.event_name != 'pull_request_target' &&
+      github.ref == 'refs/heads/main'
     runs-on: namespace-profile-arm64-linux-apple-12x32
     timeout-minutes: 90
     outputs:

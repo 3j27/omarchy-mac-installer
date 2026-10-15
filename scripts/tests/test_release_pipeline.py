@@ -308,23 +308,29 @@ class AcceptanceJobs(unittest.TestCase):
         self.assertEqual(runs_on(self.jobs["acceptance"]), "${{ fromJSON(needs.guard.outputs.runner) }}")
         self.assertEqual(field(self.jobs["guard"], "if"), "github.repository == 'omacom/omarchy-mac-installer'")
 
-    def test_every_job_off_github_hosted_runners_needs_the_guard(self):
-        # Namespace's runners are ours: every job on one waits for its
-        # workflow's guard, a GitHub-hosted job that refuses pull requests.
+    def test_every_job_off_github_hosted_runners_refuses_pull_requests(self):
+        # Namespace's runners are ours. A job on one either waits for a
+        # GitHub-hosted guard (acceptance's, which also checks its inputs and
+        # picks the runner) or carries the same refusal in its own condition,
+        # which GitHub evaluates before the job reaches a runner.
+        refusal = ("github.repository == 'omacom/omarchy-mac-installer'",
+                   "github.event_name != 'pull_request'", "github.event_name != 'pull_request_target'")
         for workflow in sorted(WORKFLOWS.glob("*.yml")):
             for job, body in jobs(workflow).items():
                 if field(body, "uses") or hosted(body):
                     continue
                 with self.subTest(f"{workflow.name} {job}"):
-                    self.assertIn("guard", field(body, "needs"))
-                    guard = jobs(workflow)["guard"]
-                    self.assertTrue(hosted(guard))
-                    self.assertEqual(field(guard, "if"), "github.repository == 'omacom/omarchy-mac-installer'")
-                    self.assertIn("pull_request_target", guard)
+                    if "guard" in field(body, "needs"):
+                        guard = jobs(workflow)["guard"]
+                        self.assertTrue(hosted(guard))
+                        self.assertEqual(field(guard, "if"), refusal[0])
+                        self.assertIn("pull_request_target", guard)
+                    else:
+                        for condition in refusal:
+                            self.assertIn(condition, body)
 
     def test_the_image_is_built_only_from_main(self):
-        guard = jobs(WORKFLOWS / "mac-image.yml")["guard"]
-        self.assertIn('if [[ $GITHUB_REF != refs/heads/main ]]; then', guard)
+        self.assertIn("github.ref == 'refs/heads/main'", jobs(WORKFLOWS / "mac-image.yml")["build"])
 
     def test_no_pull_request_workflow_can_reach_the_lab_runner(self):
         for workflow in sorted(WORKFLOWS.glob("*.yml")):

@@ -22,28 +22,13 @@ defaults:
     shell: bash
 
 jobs:
-  # Namespace's runners are ours: nothing a pull request starts reaches them.
-  guard:
-    name: Guard
-    if: github.repository == 'omacom/omarchy-mac-installer'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions: {}
-    steps:
-      - name: Refuse a pull request
-        env:
-          EVENT: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          if [[ $EVENT == pull_request || $EVENT == pull_request_target ]]; then
-            echo "::error::this never runs for pull requests"
-            exit 1
-          fi
-          echo "event=$EVENT ref=$GITHUB_REF"
-
   fixture:
     name: Make a fake image
-    needs: guard
+    # Namespace's runners are ours: nothing a pull request starts reaches them.
+    if: >-
+      github.repository == 'omacom/omarchy-mac-installer' &&
+      github.event_name != 'pull_request' &&
+      github.event_name != 'pull_request_target'
     # The upload reads the image from Namespace's artifact storage, which only
     # a Namespace runner can write to.
     runs-on: namespace-profile-linux-amd64-16x32
