@@ -258,7 +258,7 @@ class Hardening(unittest.TestCase):
                 self.assertEqual(body.count("uses: actions/checkout@"), body.count("persist-credentials: false"))
 
 
-DEFAULT_RUNNER = '["self-hosted","linux","ARM64","omarchy-m2-lab"]'
+DEFAULT_RUNNER = '["namespace-profile-arm64-linux-apple-12x32"]'
 HARNESS_COMMIT = "c" * 40
 PASSING_RUN = """scenarios=first-boot conversion second-boot
 ok - set: IMAGE (unsigned), PROVENANCE and a passed INSPECTION agree
@@ -332,7 +332,7 @@ class AcceptanceJobs(unittest.TestCase):
         body = text(ACCEPTANCE)
         self.assertEqual(body.count(f"default: '{DEFAULT_RUNNER}'"), 2)
         self.assertEqual(body.count(f"DEFAULT_RUNNER: '{DEFAULT_RUNNER}'"), 1)
-        self.assertIn("Namespace replaces it", body)
+        self.assertIn("Apple-backed Linux ARM64 runner: the ARM runner with KVM", body)
 
     def test_permissions_are_the_least_each_job_needs(self):
         def permissions(job: str) -> dict[str, str]:
@@ -359,7 +359,8 @@ class AcceptanceJobs(unittest.TestCase):
                      "ROOT: /var/tmp/omarchy-mac-acceptance/${{ github.run_id }}-${{ github.run_attempt }}"):
             self.assertIn(line, vm)
         script = step_script(ACCEPTANCE, "Run the harness")
-        self.assertIn('"$ROOT/harness/tools/acceptance/mac-image/run" --image "$ROOT/image" --scenario "$SCENARIOS"', script)
+        self.assertIn('scripts/mac-acceptance-container "$ROOT/harness/tools/acceptance/mac-image/run" \\\n'
+                      '  --image "$ROOT/image" --scenario "$SCENARIOS"', script)
         # The serial socket lives under the run directory and must stay under 100 bytes.
         root = "/var/tmp/omarchy-mac-acceptance/99999999999-99"
         self.assertLess(len(f"{root}/state/runs/99999999999-99/serial.sock"), 100)
