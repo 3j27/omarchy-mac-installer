@@ -123,7 +123,9 @@ final class InstallerModel: ObservableObject {
   }
 
   func skipRecoveryAccountAndRestart() {
-    guard stage == .account, !creatingAccount, !restartingWithoutAccount, !checkingAccount else { return }
+    guard stage == .account, !creatingAccount, !restartingWithoutAccount, !checkingAccount else {
+      return
+    }
     accountPassword = ""
     accountConfirmation = ""
     if RecoveryActions.isPreview {

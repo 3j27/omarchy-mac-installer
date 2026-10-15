@@ -22,7 +22,7 @@
     public static let fileName = "installer-v0.9.2-omarchy.42.tar.gz"
     public static let expectedDigest =
       "sha256:6d8b76e1a997a60d5a36bc4c9d5eab83fb5b62447ba909d6aefeeffea6fb15b0"
-    public static let expectedSizeBytes: UInt64 = 23859720
+    public static let expectedSizeBytes: UInt64 = 23_859_720
 
     public init() {}
 
