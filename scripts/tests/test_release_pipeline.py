@@ -309,13 +309,22 @@ class AcceptanceJobs(unittest.TestCase):
         self.assertEqual(field(self.jobs["guard"], "if"), "github.repository == 'omacom/omarchy-mac-installer'")
 
     def test_every_job_off_github_hosted_runners_needs_the_guard(self):
+        # Namespace's runners are ours: every job on one waits for its
+        # workflow's guard, a GitHub-hosted job that refuses pull requests.
         for workflow in sorted(WORKFLOWS.glob("*.yml")):
             for job, body in jobs(workflow).items():
                 if field(body, "uses") or hosted(body):
                     continue
                 with self.subTest(f"{workflow.name} {job}"):
-                    self.assertEqual(workflow, ACCEPTANCE)
                     self.assertIn("guard", field(body, "needs"))
+                    guard = jobs(workflow)["guard"]
+                    self.assertTrue(hosted(guard))
+                    self.assertEqual(field(guard, "if"), "github.repository == 'omacom/omarchy-mac-installer'")
+                    self.assertIn("pull_request_target", guard)
+
+    def test_the_image_is_built_only_from_main(self):
+        guard = jobs(WORKFLOWS / "mac-image.yml")["guard"]
+        self.assertIn('if [[ $GITHUB_REF != refs/heads/main ]]; then', guard)
 
     def test_no_pull_request_workflow_can_reach_the_lab_runner(self):
         for workflow in sorted(WORKFLOWS.glob("*.yml")):

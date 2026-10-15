@@ -22,9 +22,31 @@ defaults:
     shell: bash
 
 jobs:
+  # Namespace's runners are ours: nothing a pull request starts reaches them.
+  guard:
+    name: Guard
+    if: github.repository == 'omacom/omarchy-mac-installer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Refuse a pull request
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ $EVENT == pull_request || $EVENT == pull_request_target ]]; then
+            echo "::error::this never runs for pull requests"
+            exit 1
+          fi
+          echo "event=$EVENT ref=$GITHUB_REF"
+
   fixture:
     name: Make a fake image
-    runs-on: ubuntu-24.04
+    needs: guard
+    # The upload reads the image from Namespace's artifact storage, which only
+    # a Namespace runner can write to.
+    runs-on: namespace-profile-linux-amd64-16x32
     timeout-minutes: 10
     permissions:
       contents: read
@@ -43,7 +65,7 @@ jobs:
             --evidence "$RUNNER_TEMP/fixture/evidence/acceptance-evidence.json" \
             --seed "dry run $GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" | tee -a "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: namespace-actions/upload-artifact@f6ccaacc655aec41b93af180d1d7eef21af862d2 # v1.0.3
         with:
           name: ${{ steps.make.outputs.name }}
           path: ${{ runner.temp }}/fixture/image
