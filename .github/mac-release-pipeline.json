@@ -5,7 +5,7 @@
     "fileName": "installer-v0.9.2-omarchy.45.tar.gz",
     "sizeBytes": 18031036,
     "sha256": "0df40b586c1fdad30371d7c1965b211c5292a1830832bbecaeb6f6f236f5b5f0",
-    "downstreamRevision": "d8dcb5e6cc8fe4af15e1150434876279cc5b6e9a"
+    "downstreamRevision": "5792a79260aaf39c84b0bfc9b4e344c72e640803"
   },
   "installer": {
     "minimumVersion": "2.2.0",
