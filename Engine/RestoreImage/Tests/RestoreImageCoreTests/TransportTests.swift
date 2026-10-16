@@ -10,6 +10,7 @@ private final class RangeServer: @unchecked Sendable {
   let port: UInt16
   let variant: String
   let lock = NSLock()
+  let workers = DispatchGroup()
   var requests: [String] = []
 
   init(_ variant: String) throws {
@@ -35,7 +36,9 @@ private final class RangeServer: @unchecked Sendable {
       $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(descriptor, $0, &size) }
     }
     port = UInt16(bigEndian: address.sin_port)
+    workers.enter()
     DispatchQueue.global().async { [self] in
+      defer { workers.leave() }
       for _ in 0..<3 {
         let client = accept(fd, nil, nil)
         if client < 0 { break }
@@ -81,12 +84,25 @@ private final class RangeServer: @unchecked Sendable {
   }
   func stop() {
     shutdown(fd, SHUT_RDWR)
+    workers.wait()
     close(fd)
   }
   func received() -> [String] { lock.withLock { requests } }
 }
 
 final class TransportTests: XCTestCase, @unchecked Sendable {
+  func testFCSRedirectAdmissionAndLimit() throws {
+    let path = "/fcs-keys/" + String(repeating: "a", count: 43) + "="
+    let apple = try XCTUnwrap(URL(string: "https://wkms-public.apple.com" + path))
+    let cdn = try XCTUnwrap(URL(string: "https://fcs-keys-pub-prod.cdn-apple.com" + path))
+    let policy = RedirectPolicy(keyPath: path)
+    XCTAssertTrue(policy.allows(apple))
+    XCTAssertTrue(policy.allows(cdn))
+    XCTAssertFalse(policy.allows(apple))
+    XCTAssertFalse(RedirectPolicy(keyPath: nil).allows(apple))
+    XCTAssertFalse(RedirectPolicy(keyPath: path).allows(URL(string: "https://example.org" + path)!))
+    XCTAssertFalse(RedirectPolicy(keyPath: path).allows(URL(string: "https://wkms-public.apple.com/fcs-keys/" + String(repeating: "b", count: 43) + "=")!))
+  }
   func testExactHTTPRangeAndRedirectRefusal() async throws {
     for variant in ["valid", "200", "extent", "length", "encoding", "changed", "redirect"] {
       let server = try RangeServer(variant)

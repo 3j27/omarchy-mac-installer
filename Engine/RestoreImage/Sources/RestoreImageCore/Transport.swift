@@ -18,27 +18,30 @@ func appleRangeURL(_ raw: String) -> Bool {
     && u.user == nil && u.password == nil && u.query == nil && u.fragment == nil
 }
 
-final class RedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
+final class RedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
   let keyPath: String?
+  private let lock = NSLock()
+  private var redirects = 0
   init(keyPath: String?) { self.keyPath = keyPath }
+  func allows(_ url: URL) -> Bool {
+    lock.withLock {
+      guard let keyPath, redirects < 2, url.path == keyPath,
+        (try? keyURL(url.absoluteString)) != nil
+      else { return false }
+      redirects += 1
+      return true
+    }
+  }
   func urlSession(
     _ session: URLSession, task: URLSessionTask,
     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
     completionHandler: @escaping @Sendable (URLRequest?) -> Void
   ) {
-    guard let keyPath, task.countOfBytesReceived <= 16384,
-      let url = request.url, url.path == keyPath, (try? keyURL(url.absoluteString)) != nil,
-      task.currentRequest?.value(forHTTPHeaderField: "X-Omarchy-Redirects").flatMap(Int.init) ?? 0
-        < 3
-    else {
+    guard let url = request.url, allows(url) else {
       completionHandler(nil)
       return
     }
-    var next = request
-    let count =
-      task.currentRequest?.value(forHTTPHeaderField: "X-Omarchy-Redirects").flatMap(Int.init) ?? 0
-    next.setValue(String(count + 1), forHTTPHeaderField: "X-Omarchy-Redirects")
-    completionHandler(next)
+    completionHandler(request)
   }
 }
 
