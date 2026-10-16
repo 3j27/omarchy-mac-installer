@@ -12,6 +12,7 @@ private final class RangeServer: @unchecked Sendable {
   let lock = NSLock()
   let workers = DispatchGroup()
   var requests: [String] = []
+  var stopping = false
 
   init(_ variant: String) throws {
     self.variant = variant
@@ -40,8 +41,10 @@ private final class RangeServer: @unchecked Sendable {
     DispatchQueue.global().async { [self] in
       defer { workers.leave() }
       for _ in 0..<3 {
+        if lock.withLock({ stopping }) { break }
         let client = accept(fd, nil, nil)
         if client < 0 { break }
+        if lock.withLock({ stopping }) { close(client); break }
         var enabled: Int32 = 1
         _ = setsockopt(
           client, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))
@@ -83,7 +86,22 @@ private final class RangeServer: @unchecked Sendable {
     }
   }
   func stop() {
-    shutdown(fd, SHUT_RDWR)
+    lock.withLock { stopping = true }
+    // Wake accept explicitly: shutting down a listening socket is not portable.
+    let wake = socket(AF_INET, SOCK_STREAM, 0)
+    if wake >= 0 {
+      var address = sockaddr_in()
+      address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+      address.sin_family = sa_family_t(AF_INET)
+      address.sin_port = port.bigEndian
+      address.sin_addr.s_addr = inet_addr("127.0.0.1")
+      _ = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+          connect(wake, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+      }
+      close(wake)
+    }
     workers.wait()
     close(fd)
   }
