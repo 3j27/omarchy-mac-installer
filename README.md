@@ -32,6 +32,12 @@ The Application Support line also frees any image the old app downloaded. A Mac 
 | `test/` | Portable aggregate runner and extracted packaging tests |
 | `evidence/` | Recorded journal fixture required by the Swift tests and preview |
 
+## Apple restore inputs
+
+Firmware preparation needs HTTPS access to Apple's restore-image CDN (`updates.cdn-apple.com`) and, for AEA-encrypted inputs, Apple's public release-key service (`wkms-public.apple.com` or `fcs-keys-pub-prod.cdn-apple.com`). An offline Linux image bundle does not remove that Apple-input dependency. The helper requests only the admitted FCS key URL from the archive metadata; it sends no installation credentials. Range extraction checks the recipe, response extent, ciphertext authentication and resulting file hashes before publishing any firmware.
+
+The helper is built from the [Swift source in this repository](Engine/RestoreImage/README.md), ported from Eryk Wieliczko's MIT implementation. Its recorded source hashes, toolchain, two-build comparison and binary digest are checked alongside the engine source lock. The helper requires macOS 14 or newer; the installer app already requires macOS 15 or newer.
+
 ## Supported Macs
 
 Every catalog that offers a Mac release enables every M1, M2 and M3 Mac: the 34 boards in [`scripts/supported-models.json`](scripts/supported-models.json). `make-unsigned-catalog.py` refuses inputs that miss, add or refuse one, and `publish-channels envelope` refuses to wrap a catalog that lists a Mac but leaves any of them out or disabled; only an empty "No Mac release yet" catalog lists none. `os-promote` does not re-check an envelope staged before this rule, so a rollback to an older catalog stays possible. The file also names the boards that stay refused and why: the M3 Ultra Mac Studio (`apple,j575d`), which the pinned v0.9.2 engine cannot inspect, and M4 and later (`apple,j614s`). M3 Macs run with software rendering (llvmpipe) until their GPU driver lands.

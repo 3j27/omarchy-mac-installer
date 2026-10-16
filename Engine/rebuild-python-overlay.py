@@ -15,7 +15,7 @@ import tempfile
 
 BASE_SHA256 = '9e9277384b6c9e8b269cc79b1b24df7bfcdcbb898a596a677b74d1d18050aebe'
 BASE_COMMIT = 'f0469cea0899f3efed8efead604174c7a53c4451'
-VERSION = 'v0.9.2-omarchy.44'
+VERSION = 'v0.9.2-omarchy.45'
 
 _SPEC = importlib.util.spec_from_file_location(
     'verify_source_lock', Path(__file__).resolve().parent / 'verify-source-lock.py')
@@ -96,6 +96,7 @@ def rebuild(checkout, base, output):
     lock = json.loads((root / 'source-lock.json').read_text())
     require_base(data, lock)
     VERIFY.verify_upstream(root, lock, checkout)
+    VERIFY.require_restore_image(root)
     records = lock['downstream_overlay']['files']
     expected = {item['path'] for item in records if item['destination'].startswith('src/')}
     actual = {str(p.relative_to(root)) for p in (root / 'overlay/src').glob('*.py')}

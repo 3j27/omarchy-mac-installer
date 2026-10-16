@@ -13,9 +13,9 @@ restore image, using the J700 range recipe below. macOS 27 no longer ships the
 B1 Bluetooth build the Linux driver falls back to, and its recovery image has
 no Bluetooth PTX, so neither the running macOS nor the recovery image will do.
 
-omarchy-restore-image and the recipe come from omarchy-mac-installer's Aurora
-engine (Engine/development/aurora: restore-image/ and
-profiles/j700-25G83-ranges.json).
+The Swift decoder source and its build record live in Engine/RestoreImage.
+The recipe is checked in there as a fixture and embedded below. Both derive
+from Eryk Wieliczko's macos-firmware-extract (MIT).
 """
 
 import base64
