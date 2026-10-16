@@ -17,10 +17,18 @@ for variant in first second; do
   swift build --package-path "$package" --scratch-path "$stage/$variant" \
     --configuration release --jobs "$jobs" --triple arm64-apple-macosx14.0 \
     -Xswiftc -file-prefix-map -Xswiftc "$package=/Sources/RestoreImage" \
-    -Xswiftc -no-serialize-debugging-options -Xlinker -no_uuid
+    -Xswiftc -gnone -Xswiftc -Xfrontend -Xswiftc -no-serialize-debugging-options \
+    -Xlinker -oso_prefix -Xlinker "$stage/$variant/" -Xlinker -no_uuid
   cp "$stage/$variant/arm64-apple-macosx/release/omarchy-restore-image" "$stage/$variant.bin"
 done
-cmp "$stage/first.bin" "$stage/second.bin"
+if ! cmp "$stage/first.bin" "$stage/second.bin"; then
+  cp "$stage/first.bin" "$output/first-unqualified.bin"
+  cp "$stage/second.bin" "$output/second-unqualified.bin"
+  otool -l "$stage/first.bin" > "$output/first-load-commands.txt"
+  otool -l "$stage/second.bin" > "$output/second-load-commands.txt"
+  echo "Release builds differ; both candidates retained for diagnosis" >&2
+  exit 1
+fi
 cp "$stage/first.bin" "$output/omarchy-restore-image"
 chmod 755 "$output/omarchy-restore-image"
 "$output/omarchy-restore-image" capabilities

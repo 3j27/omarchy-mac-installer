@@ -44,7 +44,10 @@ private final class RangeServer: @unchecked Sendable {
         if lock.withLock({ stopping }) { break }
         let client = accept(fd, nil, nil)
         if client < 0 { break }
-        if lock.withLock({ stopping }) { close(client); break }
+        if lock.withLock({ stopping }) {
+          close(client)
+          break
+        }
         var enabled: Int32 = 1
         _ = setsockopt(
           client, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))
@@ -119,7 +122,11 @@ final class TransportTests: XCTestCase, @unchecked Sendable {
     XCTAssertFalse(policy.allows(apple))
     XCTAssertFalse(RedirectPolicy(keyPath: nil).allows(apple))
     XCTAssertFalse(RedirectPolicy(keyPath: path).allows(URL(string: "https://example.org" + path)!))
-    XCTAssertFalse(RedirectPolicy(keyPath: path).allows(URL(string: "https://wkms-public.apple.com/fcs-keys/" + String(repeating: "b", count: 43) + "=")!))
+    XCTAssertFalse(
+      RedirectPolicy(keyPath: path).allows(
+        URL(
+          string: "https://wkms-public.apple.com/fcs-keys/" + String(repeating: "b", count: 43)
+            + "=")!))
   }
   func testExactHTTPRangeAndRedirectRefusal() async throws {
     for variant in ["valid", "200", "extent", "length", "encoding", "changed", "redirect"] {
