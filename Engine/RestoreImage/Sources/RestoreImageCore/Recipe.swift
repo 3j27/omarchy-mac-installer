@@ -22,16 +22,30 @@ struct ClusterRecord: Codable, Sendable {
   var expected_mac: String
   var record: RangeRecord { RangeRecord(offset: offset, size: size, sha256: sha256) }
 }
-struct ImageRecord: Codable, Sendable { var size_bytes: Int; var sha256: String }
-struct SourceRecord: Codable, Sendable { var size_bytes: Int; var sha256: String; var url: String }
+struct ImageRecord: Codable, Sendable {
+  var size_bytes: Int
+  var sha256: String
+}
+struct SourceRecord: Codable, Sendable {
+  var size_bytes: Int
+  var sha256: String
+  var url: String
+}
 struct SystemRecord: Codable, Sendable {
   var size_bytes: Int
   var sha256: String
   var member: String
   var decoded: ImageRecord
 }
-struct PlainSpan: Codable, Sendable { var offset: Int; var size: Int }
-struct StorageRecord: Codable, Sendable { var size: Int; var sha256: String; var spans: [PlainSpan] }
+struct PlainSpan: Codable, Sendable {
+  var offset: Int
+  var size: Int
+}
+struct StorageRecord: Codable, Sendable {
+  var size: Int
+  var sha256: String
+  var spans: [PlainSpan]
+}
 struct RangeFile: Codable, Sendable {
   var source: String
   var name: String
@@ -56,7 +70,8 @@ struct RangeRecipe: Codable, Sendable {
   func validate() throws {
     let system = system_image
     try require(
-      schema == 1 && appleRangeURL(source.url) && source.size_bytes > 0 && source.size_bytes <= 128 << 30
+      schema == 1 && appleRangeURL(source.url) && source.size_bytes > 0
+        && source.size_bytes <= 128 << 30
         && validHash(source.sha256) && validHash(system.sha256) && validHash(system.decoded.sha256)
         && system.size_bytes > 0 && system.size_bytes <= source.size_bytes
         && system.decoded.size_bytes > 0 && system.decoded.size_bytes <= 128 << 30
@@ -73,10 +88,12 @@ struct RangeRecipe: Codable, Sendable {
     for header in headers {
       try require(
         header.cluster >= 0
-          && header.cluster < (system.decoded.size_bytes + segmentBytes * clusterWidth - 1) / (segmentBytes * clusterWidth)
+          && header.cluster < (system.decoded.size_bytes + segmentBytes * clusterWidth - 1)
+            / (segmentBytes * clusterWidth)
           && !clusters.contains(header.cluster) && header.size == clusterHeaderBytes
           && header.record.valid(limit: system.size_bytes, maximum: clusterHeaderBytes)
-          && header.offset >= prefix.size && validHash(header.expected_mac), "Invalid firmware cluster descriptor.")
+          && header.offset >= prefix.size && validHash(header.expected_mac),
+        "Invalid firmware cluster descriptor.")
       clusters.insert(header.cluster)
       encrypted += header.size
     }
@@ -84,7 +101,8 @@ struct RangeRecipe: Codable, Sendable {
     for (key, record) in segments {
       guard let id = Int(key), id >= 0, String(id) == key,
         id < (system.decoded.size_bytes + segmentBytes - 1) / segmentBytes,
-        clusters.contains(id / clusterWidth), record.valid(limit: system.size_bytes, maximum: segmentBytes)
+        clusters.contains(id / clusterWidth),
+        record.valid(limit: system.size_bytes, maximum: segmentBytes)
       else { throw RestoreFailure("Invalid firmware segment descriptor.") }
       ids.insert(id)
       encrypted += record.size
@@ -98,21 +116,26 @@ struct RangeRecipe: Codable, Sendable {
     for file in files {
       try require(
         safeRelative(file.source) && safeRelative(file.name) && !names.contains(file.name)
-          && validHash(file.raw_sha256) && validHash(file.sha256) && (0...maxFileBytes).contains(file.size)
+          && validHash(file.raw_sha256) && validHash(file.sha256)
+          && (0...maxFileBytes).contains(file.size)
           && ["identity", "nvram"].contains(file.transform) && (1...2).contains(file.storage.count)
           && (file.compressed || file.storage.count == 1), "Invalid firmware file descriptor.")
-      try require(!names.contains { file.name.hasPrefix($0 + "/") || $0.hasPrefix(file.name + "/") },
-                  "Conflicting output paths.")
+      try require(
+        !names.contains { file.name.hasPrefix($0 + "/") || $0.hasPrefix(file.name + "/") },
+        "Conflicting output paths.")
       names.insert(file.name)
       output += file.size
       for storage in file.storage {
-        try require((0...maxFileBytes).contains(storage.size) && validHash(storage.sha256)
-                      && storage.spans.count <= 4096, "Invalid firmware storage descriptor.")
+        try require(
+          (0...maxFileBytes).contains(storage.size) && validHash(storage.sha256)
+            && storage.spans.count <= 4096, "Invalid firmware storage descriptor.")
         storageTotal += storage.size
         var size = 0
         for span in storage.spans {
-          try require(span.offset >= 0 && span.size > 0 && span.size <= storage.size
-                        && span.offset <= system.decoded.size_bytes - span.size, "Invalid firmware plaintext span.")
+          try require(
+            span.offset >= 0 && span.size > 0 && span.size <= storage.size
+              && span.offset <= system.decoded.size_bytes - span.size,
+            "Invalid firmware plaintext span.")
           size += span.size
           try require(size <= storage.size, "Firmware span sum exceeded.")
           for id in (span.offset / segmentBytes)...((span.offset + span.size - 1) / segmentBytes) {
@@ -124,8 +147,10 @@ struct RangeRecipe: Codable, Sendable {
         try require(size == storage.size, "Firmware span sum mismatch.")
       }
     }
-    try require(output <= maxFileBytes && storageTotal <= maxFileBytes && needed == ids && neededClusters == clusters,
-                "Firmware output budget or dependency closure mismatch.")
+    try require(
+      output <= maxFileBytes && storageTotal <= maxFileBytes && needed == ids
+        && neededClusters == clusters,
+      "Firmware output budget or dependency closure mismatch.")
   }
 }
 
@@ -141,16 +166,27 @@ func strictRecipe(_ bytes: Data) throws -> RangeRecipe {
     guard let result = value as? [Any] else { throw RestoreFailure("Invalid recipe array.") }
     return result
   }
-  let r = try object(JSONSerialization.jsonObject(with: bytes), ["schema", "source", "system_image", "member_offset", "zip_header", "prefix", "headers", "segments", "files"])
+  let r = try object(
+    JSONSerialization.jsonObject(with: bytes),
+    [
+      "schema", "source", "system_image", "member_offset", "zip_header", "prefix", "headers",
+      "segments", "files",
+    ])
   _ = try object(r["source"], ["url", "size_bytes", "sha256"])
   let system = try object(r["system_image"], ["member", "size_bytes", "sha256", "decoded"])
   _ = try object(system["decoded"], ["size_bytes", "sha256"])
   for key in ["zip_header", "prefix"] { _ = try object(r[key], ["offset", "size", "sha256"]) }
-  for h in try array(r["headers"]) { _ = try object(h, ["offset", "size", "sha256", "cluster", "expected_mac"]) }
-  guard let segments = r["segments"] as? [String: Any] else { throw RestoreFailure("Invalid segments.") }
+  for h in try array(r["headers"]) {
+    _ = try object(h, ["offset", "size", "sha256", "cluster", "expected_mac"])
+  }
+  guard let segments = r["segments"] as? [String: Any] else {
+    throw RestoreFailure("Invalid segments.")
+  }
   for s in segments.values { _ = try object(s, ["offset", "size", "sha256"]) }
   for value in try array(r["files"]) {
-    let f = try object(value, ["source", "name", "transform", "compressed", "raw_sha256", "sha256", "size", "storage"])
+    let f = try object(
+      value,
+      ["source", "name", "transform", "compressed", "raw_sha256", "sha256", "size", "storage"])
     for value in try array(f["storage"]) {
       let storage = try object(value, ["size", "sha256", "spans"])
       for span in try array(storage["spans"]) { _ = try object(span, ["offset", "size"]) }

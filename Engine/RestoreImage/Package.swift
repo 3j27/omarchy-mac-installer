@@ -4,7 +4,7 @@ import PackageDescription
 
 let package = Package(
   name: "RestoreImage",
-  platforms: [.macOS(.v13)],
+  platforms: [.macOS(.v14)],
   products: [.executable(name: "omarchy-restore-image", targets: ["RestoreImageCLI"])],
   targets: [
     .target(name: "RestoreImageCore"),

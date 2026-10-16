@@ -108,8 +108,7 @@ jobs:
           xcodebuildmcp swift-package test --package-path "$PWD/Engine/RestoreImage" --configuration release 2>&1 | tee "$RUNNER_TEMP/installer-ci/restore-image-release.log"
           xcodebuildmcp swift-package build --package-path "$PWD/Engine/RestoreImage" --configuration release 2>&1 | tee "$RUNNER_TEMP/installer-ci/restore-image-build.log"
           mkdir -p "$RUNNER_TEMP/installer-ci/restore-image-bin"
-          binary_dir=$(swift build --package-path Engine/RestoreImage -c release --show-bin-path)
-          cp "$binary_dir/omarchy-restore-image" "$RUNNER_TEMP/installer-ci/restore-image-bin/"
+          bash Engine/RestoreImage/build.sh "$RUNNER_TEMP/installer-ci/restore-image-bin" 2>&1 | tee "$RUNNER_TEMP/installer-ci/restore-image-reproduce.log"
       - name: Run debug Swift tests
         run: xcodebuildmcp swift-package test --package-path "$PWD" --configuration debug 2>&1 | tee "$RUNNER_TEMP/installer-ci/swift-debug.log"
       - name: Run release Swift tests

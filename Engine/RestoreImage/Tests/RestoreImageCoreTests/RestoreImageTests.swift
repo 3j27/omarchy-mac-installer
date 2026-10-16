@@ -2,11 +2,14 @@
 import CryptoKit
 import Foundation
 import XCTest
+
 @testable import RestoreImageCore
 
-final class RestoreImageTests: XCTestCase {
+final class RestoreImageTests: XCTestCase, @unchecked Sendable {
   func fixture(_ name: String) throws -> Data {
-    try Data(contentsOf: XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")))
+    try Data(
+      contentsOf: XCTUnwrap(
+        Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures")))
   }
   func vectors() throws -> [String: String] {
     try JSONDecoder().decode([String: String].self, from: fixture("go-vectors"))
@@ -26,17 +29,26 @@ final class RestoreImageTests: XCTestCase {
     let material = try bytes(v, "material")
     let plain = try bytes(v, "plain")
     let ciphertext = try bytes(v, "ciphertext")
-    let response = try JSONSerialization.data(withJSONObject: ["enc-request": v["enc"]!, "wrapped-key": v["wrapped"]!])
+    let response = try JSONSerialization.data(withJSONObject: [
+      "enc-request": v["enc"]!, "wrapped-key": v["wrapped"]!,
+    ])
     let md = ["com.apple.wkms.fcs-response": response]
     XCTAssertEqual(try unwrap(md, releaseKey: Data(v["pem"]!.utf8)), key)
-    var changed = try bytes(v, "wrapped"); changed[0] ^= 1
-    let forged = try JSONSerialization.data(withJSONObject: ["enc-request": v["enc"]!, "wrapped-key": changed.base64EncodedString()])
-    XCTAssertThrowsError(try unwrap(["com.apple.wkms.fcs-response": forged], releaseKey: Data(v["pem"]!.utf8)))
+    var changed = try bytes(v, "wrapped")
+    changed[0] ^= 1
+    let forged = try JSONSerialization.data(withJSONObject: [
+      "enc-request": v["enc"]!, "wrapped-key": changed.base64EncodedString(),
+    ])
+    XCTAssertThrowsError(
+      try unwrap(["com.apple.wkms.fcs-response": forged], releaseKey: Data(v["pem"]!.utf8)))
     XCTAssertEqual(try ctr(material, data: ciphertext), plain)
-    XCTAssertEqual(derive(key, salt: Data("salt".utf8), info: Data("AEA_RHEK".utf8), size: 80), try bytes(v, "hkdf"))
+    XCTAssertEqual(
+      derive(key, salt: Data("salt".utf8), info: Data("AEA_RHEK".utf8), size: 80),
+      try bytes(v, "hkdf"))
     let mac = try unhex(v["mac"]!)
     try authenticate(material, data: ciphertext, salt: Data("metadata".utf8), expected: mac)
-    XCTAssertThrowsError(try authenticate(material, data: plain, salt: Data("metadata".utf8), expected: mac))
+    XCTAssertThrowsError(
+      try authenticate(material, data: plain, salt: Data("metadata".utf8), expected: mac))
     XCTAssertThrowsError(try authenticate(material, data: ciphertext, expected: mac))
   }
   func testMetadataBoundsAndAmbiguity() throws {
@@ -46,12 +58,17 @@ final class RestoreImageTests: XCTestCase {
     }
     let valid = archive([Data("key\0value".utf8)])
     XCTAssertEqual(try metadata(valid)["key"], Data("value".utf8))
-    for data in [Data(valid.prefix(5)), Data(valid.dropLast()), archive([Data("key\0one".utf8), Data("key\0two".utf8)]), archive([Data("unterminated".utf8)])] {
+    for data in [
+      Data(valid.prefix(5)), Data(valid.dropLast()),
+      archive([Data("key\0one".utf8), Data("key\0two".utf8)]), archive([Data("unterminated".utf8)]),
+    ] {
       XCTAssertThrowsError(try metadata(data))
     }
-    var oversized = valid; oversized.replaceSubrange(8..<12, with: littleBytes(1_048_577, count: 4))
+    var oversized = valid
+    oversized.replaceSubrange(8..<12, with: littleBytes(1_048_577, count: 4))
     XCTAssertThrowsError(try metadata(oversized))
-    var badEntry = valid; badEntry.replaceSubrange(12..<16, with: littleBytes(3, count: 4))
+    var badEntry = valid
+    badEntry.replaceSubrange(12..<16, with: littleBytes(3, count: 4))
     XCTAssertThrowsError(try metadata(badEntry))
   }
   func testAppleURLAdmission() throws {
@@ -59,14 +76,23 @@ final class RestoreImageTests: XCTestCase {
     for host in ["wkms-public.apple.com", "fcs-keys-pub-prod.cdn-apple.com"] {
       _ = try keyURL("https://" + host + suffix)
     }
-    for url in ["http://wkms-public.apple.com" + suffix, "https://wkms-public.apple.com:443" + suffix,
-                "https://user@wkms-public.apple.com" + suffix, "https://wkms-public.apple.com.evil.invalid" + suffix,
-                "https://wkms-public.apple.com" + suffix + "?x=1", "https://wkms-public.apple.com" + suffix + "#fragment",
-                "https://wkms-public.apple.com/fcs-keys/../secret", "https://wkms-public.apple.com/fcs-keys/%61" + suffix] {
+    for url in [
+      "http://wkms-public.apple.com" + suffix, "https://wkms-public.apple.com:443" + suffix,
+      "https://user@wkms-public.apple.com" + suffix,
+      "https://wkms-public.apple.com.evil.invalid" + suffix,
+      "https://wkms-public.apple.com" + suffix + "?x=1",
+      "https://wkms-public.apple.com" + suffix + "#fragment",
+      "https://wkms-public.apple.com" + suffix + "\n",
+      "https://wkms-public.apple.com/fcs-keys/../secret",
+      "https://wkms-public.apple.com/fcs-keys/%61" + suffix,
+    ] {
       XCTAssertThrowsError(try keyURL(url))
     }
     XCTAssertTrue(appleRangeURL("https://updates.cdn-apple.com/restore.ipsw"))
-    for url in ["http://updates.cdn-apple.com/a", "https://updates.cdn-apple.com:443/a", "https://updates.cdn-apple.com/a?x", "https://evil.invalid/a"] {
+    for url in [
+      "http://updates.cdn-apple.com/a", "https://updates.cdn-apple.com:443/a",
+      "https://updates.cdn-apple.com/a?x", "https://evil.invalid/a",
+    ] {
       XCTAssertFalse(appleRangeURL(url))
     }
   }
@@ -79,16 +105,21 @@ final class RestoreImageTests: XCTestCase {
     XCTAssertThrowsError(try readRecipe(path, digest: Data("changed".utf8).sha256))
     let mutations: [(inout RangeRecipe) -> Void] = [
       { $0.files[0].name = "../escape" }, { $0.files.append($0.files[0]) },
-      { $0.source.url = "https://example.org/archive" }, { $0.segments.removeValue(forKey: $0.segments.keys.first!) },
-      { $0.files[0].size = maxFileBytes + 1 }, { $0.files[0].storage[0].spans[0].offset = $0.system_image.decoded.size_bytes },
+      { $0.source.url = "https://example.org/archive" },
+      { $0.segments.removeValue(forKey: $0.segments.keys.first!) },
+      { $0.files[0].size = maxFileBytes + 1 },
+      { $0.files[0].storage[0].spans[0].offset = $0.system_image.decoded.size_bytes },
       { $0.source.size_bytes = Int.max }, { $0.prefix.size = Int.max },
-      { $0.headers[0].cluster = Int.max }, { $0.segments["9223372036854775807"] = $0.segments.values.first! },
+      { $0.headers[0].cluster = Int.max },
+      { $0.segments["9223372036854775807"] = $0.segments.values.first! },
     ]
     for mutate in mutations {
-      var changed = recipe; mutate(&changed)
+      var changed = recipe
+      mutate(&changed)
       XCTAssertThrowsError(try changed.validate())
     }
-    var extra = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any]); extra["unknown"] = 1
+    var extra = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    extra["unknown"] = 1
     XCTAssertThrowsError(try strictRecipe(JSONSerialization.data(withJSONObject: extra)))
     XCTAssertThrowsError(try strictRecipe(data + Data("{}".utf8)))
   }
@@ -100,18 +131,22 @@ final class RestoreImageTests: XCTestCase {
     XCTAssertThrowsError(try boundedLZFSE(compressed, maximum: 1))
     XCTAssertThrowsError(try boundedLZFSE(Data(compressed.dropLast()), maximum: plain.count))
     for kind in [3, 4, 7, 8, 11, 12] {
-      let attr = Data("fpmc".utf8) + littleBytes(kind, count: 4) + littleBytes(plain.count, count: 8)
+      let attr =
+        Data("fpmc".utf8) + littleBytes(kind, count: 4) + littleBytes(plain.count, count: 8)
       let block = try bytes(v, kind <= 4 ? "zlib" : kind <= 8 ? "lzvn" : "lzfse")
       let storage: [Data]
-      if kind % 2 == 1 { storage = [attr + block] }
-      else if kind == 4 {
+      if kind % 2 == 1 {
+        storage = [attr + block]
+      } else if kind == 4 {
         var fork = Data(count: 272)
         fork.replaceSubrange(0..<4, with: Data([0, 0, 1, 0]))
         fork.replaceSubrange(260..<264, with: littleBytes(1, count: 4))
         fork.replaceSubrange(264..<268, with: littleBytes(12, count: 4))
         fork.replaceSubrange(268..<272, with: littleBytes(block.count, count: 4))
         storage = [attr, fork + block]
-      } else { storage = [attr, littleBytes(8, count: 4) + littleBytes(8 + block.count, count: 4) + block] }
+      } else {
+        storage = [attr, littleBytes(8, count: 4) + littleBytes(8 + block.count, count: 4) + block]
+      }
       XCTAssertEqual(try decompressStorage(storage), plain, "APFS type \(kind)")
       var tooBig = storage
       tooBig[0].replaceSubrange(8..<16, with: littleBytes(maxFileBytes + 1, count: 8))
@@ -122,12 +157,17 @@ final class RestoreImageTests: XCTestCase {
         XCTAssertThrowsError(try decompressStorage(malformed))
       }
       let sentinel: UInt8 = kind <= 4 ? 0xff : kind <= 8 ? 6 : 0
-      if kind % 2 == 1 { XCTAssertEqual(try decompressStorage([attr + Data([sentinel]) + plain]), plain) }
+      if kind % 2 == 1 {
+        XCTAssertEqual(try decompressStorage([attr + Data([sentinel]) + plain]), plain)
+      }
     }
     XCTAssertThrowsError(try decompressStorage([]))
   }
   struct AEAFixture: Decodable {
-    struct Record: Decodable { let record: RangeRecord; let data: Data }
+    struct Record: Decodable {
+      let record: RangeRecord
+      let data: Data
+    }
     let recipe: RangeRecipe
     let key: Data
     let plain: Data
@@ -146,7 +186,8 @@ final class RestoreImageTests: XCTestCase {
     }
     let parent = try temporary()
     let output = parent.appendingPathComponent("firmware")
-    var wrong = f.recipe; wrong.files[0].sha256 = Data("bad".utf8).sha256
+    var wrong = f.recipe
+    wrong.files[0].sha256 = Data("bad".utf8).sha256
     XCTAssertThrowsError(try assembleRangeFiles(wrong, decoded: decoded, output: output))
     XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: parent.path), [])
     try assembleRangeFiles(f.recipe, decoded: decoded, output: output)
@@ -159,7 +200,9 @@ final class RestoreImageTests: XCTestCase {
     let data = Data(repeating: 42, count: 16384)
     try data.write(to: path)
     try verifyStage1(path, digest: data.sha256, size: "16384")
-    for size in ["16383", "32768", "0", "-1"] { XCTAssertThrowsError(try verifyStage1(path, digest: data.sha256, size: size)) }
+    for size in ["16383", "32768", "0", "-1"] {
+      XCTAssertThrowsError(try verifyStage1(path, digest: data.sha256, size: size))
+    }
     XCTAssertThrowsError(try verifyStage1(path, digest: Data().sha256, size: "16384"))
     let link = parent.appendingPathComponent("link")
     try FileManager.default.createSymbolicLink(at: link, withDestinationURL: path)
@@ -170,7 +213,8 @@ final class RestoreImageTests: XCTestCase {
     let path = parent.appendingPathComponent("recipe.json")
     try Data("{}".utf8).write(to: path)
     do {
-      try await extractFirmwareRanges(path, digest: Data("{}".utf8).sha256, output: parent.appendingPathComponent("out"))
+      try await extractFirmwareRanges(
+        path, digest: Data("{}".utf8).sha256, output: parent.appendingPathComponent("out"))
       XCTFail("Invalid recipe admitted")
     } catch { XCTAssertFalse((error as? RestoreFailure)?.fallback ?? false) }
     do {

@@ -40,13 +40,15 @@ func littleBytes(_ value: Int, count: Int) -> Data {
   Data((0..<count).map { UInt8(truncatingIfNeeded: UInt64(value) >> ($0 * 8)) })
 }
 func validHash(_ value: String) -> Bool {
-  value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+  value.utf8.count == 64
+    && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
 }
 func unhex(_ value: String) throws -> Data {
   try require(validHash(value), "Invalid SHA-256 or MAC.")
   let bytes = Array(value.utf8)
   func digit(_ b: UInt8) -> UInt8 { b <= 57 ? b - 48 : b - 87 }
-  return Data(stride(from: 0, to: bytes.count, by: 2).map { digit(bytes[$0]) * 16 + digit(bytes[$0 + 1]) })
+  return Data(
+    stride(from: 0, to: bytes.count, by: 2).map { digit(bytes[$0]) * 16 + digit(bytes[$0 + 1]) })
 }
 func safeRelative(_ name: String) -> Bool {
   !name.isEmpty && !name.contains(where: { "\\\0\r\n".contains($0) })
@@ -62,14 +64,16 @@ func exists(_ path: URL) -> Bool {
 
 func openRegular(_ path: URL, maximum: Int) throws -> (FileHandle, Int) {
   var before = stat()
-  try require(lstat(path.path, &before) == 0 && before.st_mode & S_IFMT == S_IFREG,
-              "Input must be a regular file.")
+  try require(
+    lstat(path.path, &before) == 0 && before.st_mode & S_IFMT == S_IFREG,
+    "Input must be a regular file.")
   let fd = open(path.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
   try require(fd >= 0, "Cannot open input.")
   let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
   var after = stat()
-  guard fstat(fd, &after) == 0 && before.st_dev == after.st_dev && before.st_ino == after.st_ino
-    && after.st_mode & S_IFMT == S_IFREG && after.st_size >= 0 && after.st_size <= maximum
+  guard
+    fstat(fd, &after) == 0 && before.st_dev == after.st_dev && before.st_ino == after.st_ino
+      && after.st_mode & S_IFMT == S_IFREG && after.st_size >= 0 && after.st_size <= maximum
   else {
     try? handle.close()
     throw RestoreFailure("Input identity or size changed.")
@@ -86,10 +90,11 @@ func readRegular(_ path: URL, maximum: Int) throws -> Data {
 }
 
 func privateDirectory(beside output: URL, prefix: String) throws -> URL {
-  var pattern = Array(output.deletingLastPathComponent().appendingPathComponent(prefix + "XXXXXX").path.utf8CString)
+  var pattern = Array(
+    output.deletingLastPathComponent().appendingPathComponent(prefix + "XXXXXX").path.utf8CString)
   let made = pattern.withUnsafeMutableBufferPointer { mkdtemp($0.baseAddress!) }
   try require(made != nil, "Cannot create private staging directory.")
-  return URL(fileURLWithPath: String(cString: pattern))
+  return URL(fileURLWithPath: String(decoding: pattern.dropLast().map { UInt8(bitPattern: $0) }, as: UTF8.self))
 }
 func writePrivate(_ data: Data, to path: URL) throws {
   let fd = open(path.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
@@ -127,6 +132,7 @@ func runNative(_ executable: String, _ arguments: [String], timeout: TimeInterva
     }
     Thread.sleep(forTimeInterval: 0.02)
   }
-  try require(process.terminationReason == .exit && process.terminationStatus == 0,
-              "Native \(URL(fileURLWithPath: executable).lastPathComponent) failed.")
+  try require(
+    process.terminationReason == .exit && process.terminationStatus == 0,
+    "Native \(URL(fileURLWithPath: executable).lastPathComponent) failed.")
 }

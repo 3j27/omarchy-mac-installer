@@ -2,13 +2,18 @@
 import Foundation
 
 func keyURL(_ raw: String) throws -> URL {
-  let pattern = #"^https://(wkms-public\.apple\.com|fcs-keys-pub-prod\.cdn-apple\.com)/fcs-keys/[A-Za-z0-9_-]{43}=$"#
-  try require(raw.range(of: pattern, options: .regularExpression) != nil, "FCS URL is outside Apple's public service.")
+  let pattern =
+    #"^https://(wkms-public\.apple\.com|fcs-keys-pub-prod\.cdn-apple\.com)/fcs-keys/[A-Za-z0-9_-]{43}=\z"#
+  try require(
+    raw.range(of: pattern, options: .regularExpression) != nil,
+    "FCS URL is outside Apple's public service.")
   guard let url = URL(string: raw) else { throw RestoreFailure("Invalid FCS URL.") }
   return url
 }
 func appleRangeURL(_ raw: String) -> Bool {
-  guard raw.hasPrefix("https://updates.cdn-apple.com/"), let u = URLComponents(string: raw) else { return false }
+  guard raw.hasPrefix("https://updates.cdn-apple.com/"), let u = URLComponents(string: raw) else {
+    return false
+  }
   return u.scheme == "https" && u.host == "updates.cdn-apple.com" && u.port == nil
     && u.user == nil && u.password == nil && u.query == nil && u.fragment == nil
 }
@@ -23,10 +28,15 @@ final class RedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
   ) {
     guard let keyPath, task.countOfBytesReceived <= 16384,
       let url = request.url, url.path == keyPath, (try? keyURL(url.absoluteString)) != nil,
-      task.currentRequest?.value(forHTTPHeaderField: "X-Omarchy-Redirects").flatMap(Int.init) ?? 0 < 3
-    else { completionHandler(nil); return }
+      task.currentRequest?.value(forHTTPHeaderField: "X-Omarchy-Redirects").flatMap(Int.init) ?? 0
+        < 3
+    else {
+      completionHandler(nil)
+      return
+    }
     var next = request
-    let count = task.currentRequest?.value(forHTTPHeaderField: "X-Omarchy-Redirects").flatMap(Int.init) ?? 0
+    let count =
+      task.currentRequest?.value(forHTTPHeaderField: "X-Omarchy-Redirects").flatMap(Int.init) ?? 0
     next.setValue(String(count + 1), forHTTPHeaderField: "X-Omarchy-Redirects")
     completionHandler(next)
   }
@@ -41,10 +51,13 @@ func httpBytes(
   config.timeoutIntervalForResource = request.timeoutInterval
   config.httpCookieStorage = nil
   config.urlCache = nil
-  let session = URLSession(configuration: config, delegate: RedirectPolicy(keyPath: keyPath), delegateQueue: nil)
+  let session = URLSession(
+    configuration: config, delegate: RedirectPolicy(keyPath: keyPath), delegateQueue: nil)
   defer { session.invalidateAndCancel() }
   let (bytes, response) = try await session.bytes(for: request)
-  guard let response = response as? HTTPURLResponse else { throw RestoreFailure("Invalid HTTP response.") }
+  guard let response = response as? HTTPURLResponse else {
+    throw RestoreFailure("Invalid HTTP response.")
+  }
   try validate(response)
   var data = Data()
   data.reserveCapacity(maximum)
@@ -81,12 +94,15 @@ func fetchRange(_ source: SourceRecord, record: RangeRecord, base: Int) async th
         let encoding = response.value(forHTTPHeaderField: "Content-Encoding") ?? ""
         try require(
           response.statusCode == 206
-            && response.value(forHTTPHeaderField: "Content-Range") == "bytes \(start)-\(end)/\(source.size_bytes)"
+            && response.value(forHTTPHeaderField: "Content-Range")
+              == "bytes \(start)-\(end)/\(source.size_bytes)"
             && response.value(forHTTPHeaderField: "Content-Length") == String(record.size)
             && (encoding.isEmpty || encoding == "identity"),
           "Apple did not return the exact requested firmware range.")
       }
-      try require(data.count == record.size && data.sha256 == record.sha256, "Firmware range size or SHA-256 mismatch.")
+      try require(
+        data.count == record.size && data.sha256 == record.sha256,
+        "Firmware range size or SHA-256 mismatch.")
       return data
     } catch {
       try Task.checkCancellation()

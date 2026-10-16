@@ -5,7 +5,9 @@ import Darwin
 import Foundation
 
 func metadata(_ data: Data) throws -> [String: Data] {
-  try require(try data.part(0, 4) == Data("AEA1".utf8) && data.little(4, 4) == 1, "Unsupported AEA header/profile.")
+  try require(
+    try data.part(0, 4) == Data("AEA1".utf8) && data.little(4, 4) == 1,
+    "Unsupported AEA header/profile.")
   let length = try data.little(8, 4)
   try require(length > 0 && length <= 1024 * 1024, "Invalid AEA metadata length.")
   let body = try data.part(12, length)
@@ -34,7 +36,8 @@ func unwrap(_ md: [String: Data], releaseKey: Data) throws -> Data {
     let object = try JSONSerialization.jsonObject(with: response) as? [String: String],
     let encoded = object["enc-request"], let sealed = object["wrapped-key"],
     let enc = Data(base64Encoded: encoded), enc.count == 65, enc.base64EncodedString() == encoded,
-    let wrapped = Data(base64Encoded: sealed), wrapped.count == 48, wrapped.base64EncodedString() == sealed
+    let wrapped = Data(base64Encoded: sealed), wrapped.count == 48,
+    wrapped.base64EncodedString() == sealed
   else { throw RestoreFailure("Invalid FCS encapsulation or wrapped key.") }
   var recipient = try HPKE.Recipient(
     privateKey: privateKey, ciphersuite: .P256_SHA256_AES_GCM_256,
@@ -49,11 +52,14 @@ func derive(_ key: Data, salt: Data = Data(), info: Data, size: Int) -> Data {
     inputKeyMaterial: SymmetricKey(data: key), salt: salt, info: info, outputByteCount: size)
   return derived.withUnsafeBytes { Data($0) }
 }
-func indexedInfo(_ name: String, _ index: Int) -> Data { Data(name.utf8) + littleBytes(index, count: 4) }
+func indexedInfo(_ name: String, _ index: Int) -> Data {
+  Data(name.utf8) + littleBytes(index, count: 4)
+}
 func authenticate(_ material: Data, data: Data, salt: Data = Data(), expected: Data) throws {
   let message = salt + data + littleBytes(salt.count, count: 8)
   try require(
-    HMAC<SHA256>.isValidAuthenticationCode(expected, authenticating: message, using: SymmetricKey(data: material.prefix(32))),
+    HMAC<SHA256>.isValidAuthenticationCode(
+      expected, authenticating: message, using: SymmetricKey(data: material.prefix(32))),
     "AEA range authentication failed.")
 }
 func ctr(_ material: Data, data: Data) throws -> Data {
@@ -104,19 +110,24 @@ public func decodeImage(_ input: URL, digest: String, output: URL) async throws 
   }
   try target.synchronize()
   try target.close()
-  try require(copied == size && hash.finalize().map { String(format: "%02x", $0) }.joined() == digest,
-              "Recovery input digest mismatch.")
+  try require(
+    copied == size && hash.finalize().map { String(format: "%02x", $0) }.joined() == digest,
+    "Recovery input digest mismatch.")
   let stream = try FileHandle(forReadingFrom: staged)
   defer { try? stream.close() }
   let md = try metadata(try stream.read(upToCount: 1024 * 1024 + 12) ?? Data())
-  guard let rawURL = md["com.apple.wkms.fcs-key-url"], let url = String(data: rawURL, encoding: .utf8)
+  guard let rawURL = md["com.apple.wkms.fcs-key-url"],
+    let url = String(data: rawURL, encoding: .utf8)
   else { throw RestoreFailure("Missing FCS key URL.") }
   let key = try await unwrap(md, releaseKey: fetchKey(url))
   let keyPath = work.appendingPathComponent("archive.key")
   try writePrivate(key, to: keyPath)
   let decoded = work.appendingPathComponent("BaseSystem.dmg")
-  try runNative("/usr/bin/aea", ["decrypt", "-i", staged.path, "-o", decoded.path, "-key", keyPath.path])
+  try runNative(
+    "/usr/bin/aea", ["decrypt", "-i", staged.path, "-o", decoded.path, "-key", keyPath.path])
   try runNative("/usr/bin/hdiutil", ["imageinfo", "-plist", decoded.path])
-  try require(chmod(decoded.path, 0o600) == 0 && link(decoded.path, output.path) == 0,
-              "Cannot publish Recovery image without replacing an existing output.")
+  try Task.checkCancellation()
+  try require(
+    chmod(decoded.path, 0o600) == 0 && link(decoded.path, output.path) == 0,
+    "Cannot publish Recovery image without replacing an existing output.")
 }

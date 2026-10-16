@@ -10,8 +10,12 @@ import RestoreImageCore
       print("restore-image firmware-ranges verify-stage1")
       return
     }
-    guard args.count == 3 || (args.count == 4 && ["firmware-ranges", "verify-stage1"].contains(args[0])) else {
-      FileHandle.standardError.write(Data("usage: omarchy-restore-image INPUT_AEA INPUT_SHA256 OUTPUT_DMG\n".utf8))
+    guard
+      args.count == 3
+        || (args.count == 4 && ["firmware-ranges", "verify-stage1"].contains(args[0]))
+    else {
+      FileHandle.standardError.write(
+        Data("usage: omarchy-restore-image INPUT_AEA INPUT_SHA256 OUTPUT_DMG\n".utf8))
       exit(64)
     }
     let task = Task {
@@ -19,11 +23,13 @@ import RestoreImageCore
         try verifyStage1(URL(fileURLWithPath: args[1]), digest: args[2], size: args[3])
       } else if args.count == 4 {
         try await withDeadline(seconds: 240) {
-          try await extractFirmwareRanges(URL(fileURLWithPath: args[1]), digest: args[2], output: URL(fileURLWithPath: args[3]))
+          try await extractFirmwareRanges(
+            URL(fileURLWithPath: args[1]), digest: args[2], output: URL(fileURLWithPath: args[3]))
         }
       } else {
         try await withDeadline(seconds: 1800) {
-          try await decodeImage(URL(fileURLWithPath: args[0]), digest: args[1], output: URL(fileURLWithPath: args[2]))
+          try await decodeImage(
+            URL(fileURLWithPath: args[0]), digest: args[1], output: URL(fileURLWithPath: args[2]))
         }
       }
     }
@@ -36,9 +42,9 @@ import RestoreImageCore
       return source
     }
     defer { sources.forEach { $0.cancel() } }
-    do { try await task.value }
-    catch {
-      FileHandle.standardError.write(Data("omarchy-restore-image: \(error.localizedDescription)\n".utf8))
+    do { try await task.value } catch {
+      FileHandle.standardError.write(
+        Data("omarchy-restore-image: \(error.localizedDescription)\n".utf8))
       exit((error as? RestoreFailure)?.fallback == true ? 75 : 1)
     }
   }
