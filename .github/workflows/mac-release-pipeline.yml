@@ -6,7 +6,7 @@ name: Mac release pipeline
 #   build       mac-image.yml: builds and attests the image (no secrets)
 #   acceptance  mac-acceptance.yml: the VM harness's fresh-install scenarios
 #               on that exact sha256, on the VM runner (the `runner` input;
-#               the M2 lab's ephemeral self-hosted runner until Namespace).
+#               Namespace's Apple-backed Linux ARM64 runner).
 #               Writes the evidence record, attests it when it passed, and
 #               fails unless it passed.
 #   catalog-inputs  the engine and app blocks from .github/mac-release-pipeline.json;
@@ -49,7 +49,7 @@ on:
         type: boolean
         default: true
       runner:
-        description: The VM acceptance job's runs-on as JSON; empty for mac-acceptance.yml's default (the M2 lab runner until Namespace)
+        description: The VM acceptance job's runs-on as JSON; empty for mac-acceptance.yml's default (Namespace's Apple-backed Linux ARM64 runner)
         type: string
         default: ''
 

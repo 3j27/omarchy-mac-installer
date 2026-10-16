@@ -30,11 +30,11 @@ name: Mac image acceptance
 #   failure  the workflow fails unless the record passes and is attested, so
 #            the pipeline stops
 #
-# Runner: until Namespace's Apple-backed Linux ARM64 runners are enabled for
-# Omacom, the default is the M2 Max lab Mac registered as an ephemeral
-# self-hosted runner for one job (docs/mac-acceptance-runner.md). Moving to
-# Namespace changes only the `runner` default. No secrets: the job's token
-# reads this repository's artifacts and attestations and nothing else.
+# Runner: Namespace's Apple-backed Linux ARM64 runner, the ARM runner with
+# KVM (docs/mac-acceptance-runner.md). It is Ubuntu, so the harness runs in an
+# Arch Linux ARM container (scripts/mac-acceptance-container). No secrets: the
+# job's token reads this repository's artifacts and attestations and nothing
+# else.
 
 on:
   workflow_call:
@@ -53,10 +53,10 @@ on:
         required: false
         default: ''
       runner:
-        description: The VM job's runs-on as JSON; empty for the default (the M2 lab runner until Namespace replaces it)
+        description: The VM job's runs-on as JSON; empty for the default (Namespace's Apple-backed Linux ARM64 runner)
         type: string
         required: false
-        default: '["self-hosted","linux","ARM64","omarchy-m2-lab"]'
+        default: '["namespace-profile-arm64-linux-apple-12x32"]'
       scenarios:
         description: Harness scenarios, comma-separated (fresh-install is first-boot, conversion and second-boot)
         type: string
@@ -87,9 +87,9 @@ on:
         type: string
         required: true
       runner:
-        description: The VM job's runs-on as JSON (the M2 lab runner until Namespace replaces it)
+        description: The VM job's runs-on as JSON (Namespace's Apple-backed Linux ARM64 runner)
         type: string
-        default: '["self-hosted","linux","ARM64","omarchy-m2-lab"]'
+        default: '["namespace-profile-arm64-linux-apple-12x32"]'
       scenarios:
         description: Harness scenarios, comma-separated
         type: string
@@ -101,7 +101,7 @@ env:
   HARNESS_REPOSITORY: omacom/omarchy-mac-pkgs
   # omarchy-mac-pkgs main, 2026-10-14 (Merge pull request #34). Bump by hand
   # after the harness changes; the evidence record names it.
-  HARNESS_COMMIT: 222f7a8599bbdd287ac6a95362cd51c5b024baae
+  HARNESS_COMMIT: d846557b2405f9dc0bc774bef03656f3a1dcd0a6
 
 defaults:
   run:
@@ -131,8 +131,8 @@ jobs:
           IMAGE_RUN_ID: ${{ inputs.image-run-id }}
           RUNNER_INPUT: ${{ inputs.runner }}
           SCENARIOS: ${{ inputs.scenarios }}
-          # The M2 lab Mac's ephemeral runner; Namespace replaces it.
-          DEFAULT_RUNNER: '["self-hosted","linux","ARM64","omarchy-m2-lab"]'
+          # Namespace's Apple-backed Linux ARM64 runner: the ARM runner with KVM.
+          DEFAULT_RUNNER: '["namespace-profile-arm64-linux-apple-12x32"]'
         run: |
           set -euo pipefail
           if [[ $EVENT == pull_request || $EVENT == pull_request_target ]]; then
@@ -272,7 +272,10 @@ jobs:
         run: |
           # The bash shell runs with -e; this step must reach its end.
           set +e -uo pipefail
-          "$ROOT/harness/tools/acceptance/mac-image/run" --image "$ROOT/image" --scenario "$SCENARIOS" &
+          # In an Arch Linux ARM container: the runner is Ubuntu, the harness
+          # was written for an Arch host.
+          scripts/mac-acceptance-container "$ROOT/harness/tools/acceptance/mac-image/run" \
+            --image "$ROOT/image" --scenario "$SCENARIOS" &
           pid=$!
           # Cleanup removes the udev rule the harness names after its PID.
           echo "HARNESS_PID=$pid" >>"$GITHUB_ENV"
@@ -378,7 +381,7 @@ jobs:
             sudo -n umount -R -l "$target"
           done
           sudo -n dmsetup ls --target crypt 2>/dev/null | awk -v prefix="omarchy-vm-$VM_RUN_ID-" 'index($1, prefix) == 1 { print $1 }' |
-            while read -r mapper; do sudo -n cryptsetup close "$mapper"; done
+            while read -r mapper; do sudo -n dmsetup remove "$mapper"; done
           losetup -l -n -O NAME,BACK-FILE 2>/dev/null | awk -v root="$ROOT/" 'index($2, root) == 1 { print $1 }' |
             while read -r loop; do sudo -n losetup -d "$loop"; done
           if [[ -n ${HARNESS_PID:-} ]]; then
