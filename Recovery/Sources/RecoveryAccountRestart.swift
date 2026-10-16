@@ -14,7 +14,8 @@ enum RecoveryAccountRestart {
     guard try isTargetDefault() else {
       throw RecoveryFailure(
         message:
-          "Select this installation in Apple menu → Startup Disk before restarting. Your Mac has not been restarted.")
+          "Select this installation in Apple menu → Startup Disk before restarting. Your Mac has not been restarted."
+      )
     }
     var deferred = receipt
     deferred["recoveryAccountDeferred"] = true

@@ -631,7 +631,9 @@ enum RecoveryActions {
     let record = try RecoveryAccountInstaller.inspect(accountTarget())
     if let record, record.phase == "finalized" {
       try RecoveryAccountInstaller.requireOwnership(record)
-      if var installed = try? installed(), installed["recoveryAccountDeferred"] as? Bool == true {
+      if var installed = try? installed(),
+        installed["recoveryAccountDeferred"] as? Bool == true
+      {
         installed["recoveryAccountDeferred"] = false
         try run("/sbin/mount", ["-u", "-w", volume.path])
         try RecoveryFileTransaction.write(
