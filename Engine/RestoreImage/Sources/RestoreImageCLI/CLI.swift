@@ -41,7 +41,9 @@ import RestoreImageCore
       source.resume()
       return source
     }
-    defer { sources.forEach { $0.cancel() } }
+    defer {
+      for source in sources { source.cancel() }
+    }
     do { try await task.value } catch {
       FileHandle.standardError.write(
         Data("omarchy-restore-image: \(error.localizedDescription)\n".utf8))

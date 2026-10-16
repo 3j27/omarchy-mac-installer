@@ -15,24 +15,46 @@ struct RangeRecord: Codable, Hashable, Sendable {
   }
 }
 struct ClusterRecord: Codable, Sendable {
+  enum CodingKeys: String, CodingKey {
+    case offset
+    case size
+    case sha256
+    case cluster
+    case expectedMAC = "expected_mac"
+  }
   var offset: Int
   var size: Int
   var sha256: String
   var cluster: Int
-  var expected_mac: String
+  var expectedMAC: String
   var record: RangeRecord { RangeRecord(offset: offset, size: size, sha256: sha256) }
 }
 struct ImageRecord: Codable, Sendable {
-  var size_bytes: Int
+  enum CodingKeys: String, CodingKey {
+    case sizeBytes = "size_bytes"
+    case sha256
+  }
+  var sizeBytes: Int
   var sha256: String
 }
 struct SourceRecord: Codable, Sendable {
-  var size_bytes: Int
+  enum CodingKeys: String, CodingKey {
+    case sizeBytes = "size_bytes"
+    case sha256
+    case url
+  }
+  var sizeBytes: Int
   var sha256: String
   var url: String
 }
 struct SystemRecord: Codable, Sendable {
-  var size_bytes: Int
+  enum CodingKeys: String, CodingKey {
+    case sizeBytes = "size_bytes"
+    case sha256
+    case member
+    case decoded
+  }
+  var sizeBytes: Int
   var sha256: String
   var member: String
   var decoded: ImageRecord
@@ -47,39 +69,60 @@ struct StorageRecord: Codable, Sendable {
   var spans: [PlainSpan]
 }
 struct RangeFile: Codable, Sendable {
+  enum CodingKeys: String, CodingKey {
+    case source
+    case name
+    case transform
+    case compressed
+    case rawSHA256 = "raw_sha256"
+    case sha256
+    case size
+    case storage
+  }
   var source: String
   var name: String
   var transform: String
   var compressed: Bool
-  var raw_sha256: String
+  var rawSHA256: String
   var sha256: String
   var size: Int
   var storage: [StorageRecord]
 }
 struct RangeRecipe: Codable, Sendable {
+  enum CodingKeys: String, CodingKey {
+    case schema
+    case source
+    case systemImage = "system_image"
+    case memberOffset = "member_offset"
+    case zipHeader = "zip_header"
+    case prefix
+    case headers
+    case segments
+    case files
+  }
   var schema: Int
   var source: SourceRecord
-  var system_image: SystemRecord
-  var member_offset: Int
-  var zip_header: RangeRecord
+  var systemImage: SystemRecord
+  var memberOffset: Int
+  var zipHeader: RangeRecord
   var prefix: RangeRecord
   var headers: [ClusterRecord]
   var segments: [String: RangeRecord]
   var files: [RangeFile]
 
   func validate() throws {
-    let system = system_image
+    let system = systemImage
     try require(
-      schema == 1 && appleRangeURL(source.url) && source.size_bytes > 0
-        && source.size_bytes <= 128 << 30
+      schema == 1 && appleRangeURL(source.url) && source.sizeBytes > 0
+        && source.sizeBytes <= 128 << 30
         && validHash(source.sha256) && validHash(system.sha256) && validHash(system.decoded.sha256)
-        && system.size_bytes > 0 && system.size_bytes <= source.size_bytes
-        && system.decoded.size_bytes > 0 && system.decoded.size_bytes <= 128 << 30
-        && safeRelative(system.member) && member_offset >= 0
-        && member_offset <= source.size_bytes - system.size_bytes
-        && zip_header.valid(limit: source.size_bytes, maximum: 65536)
-        && zip_header.offset + zip_header.size == member_offset
-        && prefix.valid(limit: system.size_bytes, maximum: segmentBytes + 156)
+        && system.sizeBytes > 0 && system.sizeBytes <= source.sizeBytes
+        && system.decoded.sizeBytes > 0 && system.decoded.sizeBytes <= 128 << 30
+        && safeRelative(system.member) && memberOffset >= 0
+        && memberOffset <= source.sizeBytes - system.sizeBytes
+        && zipHeader.valid(limit: source.sizeBytes, maximum: 65536)
+        && zipHeader.offset + zipHeader.size == memberOffset
+        && prefix.valid(limit: system.sizeBytes, maximum: segmentBytes + 156)
         && prefix.offset == 0 && prefix.size >= 156
         && (1...128).contains(headers.count) && (1...128).contains(segments.count)
         && (1...128).contains(files.count), "Invalid firmware recipe identity or resource bounds.")
@@ -88,11 +131,11 @@ struct RangeRecipe: Codable, Sendable {
     for header in headers {
       try require(
         header.cluster >= 0
-          && header.cluster < (system.decoded.size_bytes + segmentBytes * clusterWidth - 1)
+          && header.cluster < (system.decoded.sizeBytes + segmentBytes * clusterWidth - 1)
             / (segmentBytes * clusterWidth)
           && !clusters.contains(header.cluster) && header.size == clusterHeaderBytes
-          && header.record.valid(limit: system.size_bytes, maximum: clusterHeaderBytes)
-          && header.offset >= prefix.size && validHash(header.expected_mac),
+          && header.record.valid(limit: system.sizeBytes, maximum: clusterHeaderBytes)
+          && header.offset >= prefix.size && validHash(header.expectedMAC),
         "Invalid firmware cluster descriptor.")
       clusters.insert(header.cluster)
       encrypted += header.size
@@ -100,9 +143,9 @@ struct RangeRecipe: Codable, Sendable {
     var ids = Set<Int>()
     for (key, record) in segments {
       guard let id = Int(key), id >= 0, String(id) == key,
-        id < (system.decoded.size_bytes + segmentBytes - 1) / segmentBytes,
+        id < (system.decoded.sizeBytes + segmentBytes - 1) / segmentBytes,
         clusters.contains(id / clusterWidth),
-        record.valid(limit: system.size_bytes, maximum: segmentBytes)
+        record.valid(limit: system.sizeBytes, maximum: segmentBytes)
       else { throw RestoreFailure("Invalid firmware segment descriptor.") }
       ids.insert(id)
       encrypted += record.size
@@ -116,7 +159,7 @@ struct RangeRecipe: Codable, Sendable {
     for file in files {
       try require(
         safeRelative(file.source) && safeRelative(file.name) && !names.contains(file.name)
-          && validHash(file.raw_sha256) && validHash(file.sha256)
+          && validHash(file.rawSHA256) && validHash(file.sha256)
           && (0...maxFileBytes).contains(file.size)
           && ["identity", "nvram"].contains(file.transform) && (1...2).contains(file.storage.count)
           && (file.compressed || file.storage.count == 1), "Invalid firmware file descriptor.")
@@ -134,7 +177,7 @@ struct RangeRecipe: Codable, Sendable {
         for span in storage.spans {
           try require(
             span.offset >= 0 && span.size > 0 && span.size <= storage.size
-              && span.offset <= system.decoded.size_bytes - span.size,
+              && span.offset <= system.decoded.sizeBytes - span.size,
             "Invalid firmware plaintext span.")
           size += span.size
           try require(size <= storage.size, "Firmware span sum exceeded.")

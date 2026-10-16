@@ -108,8 +108,8 @@ final class RestoreImageTests: XCTestCase, @unchecked Sendable {
       { $0.source.url = "https://example.org/archive" },
       { $0.segments.removeValue(forKey: $0.segments.keys.first!) },
       { $0.files[0].size = maxFileBytes + 1 },
-      { $0.files[0].storage[0].spans[0].offset = $0.system_image.decoded.size_bytes },
-      { $0.source.size_bytes = Int.max }, { $0.prefix.size = Int.max },
+      { $0.files[0].storage[0].spans[0].offset = $0.systemImage.decoded.sizeBytes },
+      { $0.source.sizeBytes = Int.max }, { $0.prefix.size = Int.max },
       { $0.headers[0].cluster = Int.max },
       { $0.segments["9223372036854775807"] = $0.segments.values.first! },
     ]

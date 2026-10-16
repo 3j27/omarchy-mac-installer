@@ -43,8 +43,8 @@ func decodeRanges(_ recipe: RangeRecipe, fetched: [RangeRecord: Data], archiveKe
     expected: root.part(0, 32))
   let rootPlain = try ctr(rootMaterial, data: root.part(32, 48))
   try require(
-    try rootPlain.little(0, 8) == recipe.system_image.decoded.size_bytes
-      && rootPlain.little(8, 8) == recipe.system_image.size_bytes
+    try rootPlain.little(0, 8) == recipe.systemImage.decoded.sizeBytes
+      && rootPlain.little(8, 8) == recipe.systemImage.sizeBytes
       && rootPlain.little(16, 4) == segmentBytes && rootPlain.little(20, 4) == clusterWidth
       && rootPlain[24] == UInt8(ascii: "e") && rootPlain[25] == 2,
     "AEA image parameters differ from recipe.")
@@ -53,7 +53,7 @@ func decodeRanges(_ recipe: RangeRecipe, fetched: [RangeRecord: Data], archiveKe
     guard let data = fetched[header.record] else { throw RestoreFailure("Missing AEA cluster.") }
     let clusterKey = derive(main, info: indexedInfo("AEA_CK", header.cluster), size: 32)
     let material = derive(clusterKey, info: Data("AEA_CHEK".utf8), size: 80)
-    let expected = try unhex(header.expected_mac)
+    let expected = try unhex(header.expectedMAC)
     if header.cluster == 0 {
       try require(
         try expected == root.part(80, 32) && header.offset == recipe.prefix.size,
@@ -71,10 +71,10 @@ func decodeRanges(_ recipe: RangeRecipe, fetched: [RangeRecord: Data], archiveKe
       let plainSize = try entry.little(0, 4)
       let size = try entry.little(4, 4)
       let expectedSize = min(
-        segmentBytes, max(0, recipe.system_image.decoded.size_bytes - id * segmentBytes))
+        segmentBytes, max(0, recipe.systemImage.decoded.sizeBytes - id * segmentBytes))
       try require(
         plainSize == expectedSize && size <= plainSize && (plainSize == 0 || size > 0)
-          && offset <= recipe.system_image.size_bytes - size, "Invalid AEA segment bounds.")
+          && offset <= recipe.systemImage.sizeBytes - size, "Invalid AEA segment bounds.")
       if recipe.segments[String(id)] != nil {
         descriptions[id] = DecodedSegment(
           offset: offset, size: size, plainSize: plainSize,
@@ -135,7 +135,7 @@ func assembleRangeFiles(_ recipe: RangeRecipe, decoded: [Int: Data], output: URL
       storage.append(data)
     }
     var result = try file.compressed ? decompressStorage(storage) : storage[0]
-    try require(result.sha256 == file.raw_sha256, "Source firmware SHA-256 mismatch.")
+    try require(result.sha256 == file.rawSHA256, "Source firmware SHA-256 mismatch.")
     if file.transform == "nvram" {
       try require(result.allSatisfy { $0 <= 127 }, "Non-ASCII NVRAM.")
       var normalized = ""
@@ -173,7 +173,7 @@ public func extractFirmwareRanges(_ path: URL, digest: String, output: URL) asyn
   let start = Date()
   let decoded: [Int: Data]
   do {
-    let header = try await fetchRange(recipe.source, record: recipe.zip_header, base: 0)
+    let header = try await fetchRange(recipe.source, record: recipe.zipHeader, base: 0)
     try require(
       try header.part(0, 4) == Data([0x50, 0x4b, 3, 4]) && header.little(8, 2) == 0,
       "System image is not a stored ZIP member.")
@@ -181,12 +181,12 @@ public func extractFirmwareRanges(_ path: URL, digest: String, output: URL) asyn
     let extraSize = try header.little(28, 2)
     try require(
       try header.count == 30 + nameSize + extraSize
-        && header.part(30, nameSize) == Data(recipe.system_image.member.utf8),
+        && header.part(30, nameSize) == Data(recipe.systemImage.member.utf8),
       "ZIP member identity mismatch.")
     let records =
       [recipe.prefix] + recipe.headers.map(\.record)
       + recipe.segments.keys.sorted().compactMap { recipe.segments[$0] }
-    let total = recipe.zip_header.size + records.reduce(0) { $0 + $1.size }
+    let total = recipe.zipHeader.size + records.reduce(0) { $0 + $1.size }
     FileHandle.standardError.write(
       Data(
         String(
@@ -197,7 +197,7 @@ public func extractFirmwareRanges(_ path: URL, digest: String, output: URL) asyn
       var next = 0
       func submit(_ record: RangeRecord) {
         group.addTask {
-          (record, try await fetchRange(recipe.source, record: record, base: recipe.member_offset))
+          (record, try await fetchRange(recipe.source, record: record, base: recipe.memberOffset))
         }
       }
       while next < min(6, records.count) {

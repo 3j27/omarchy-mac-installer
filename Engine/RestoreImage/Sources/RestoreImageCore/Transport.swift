@@ -95,7 +95,7 @@ func fetchRange(_ source: SourceRecord, record: RangeRecord, base: Int) async th
         try require(
           response.statusCode == 206
             && response.value(forHTTPHeaderField: "Content-Range")
-              == "bytes \(start)-\(end)/\(source.size_bytes)"
+              == "bytes \(start)-\(end)/\(source.sizeBytes)"
             && response.value(forHTTPHeaderField: "Content-Length") == String(record.size)
             && (encoding.isEmpty || encoding == "identity"),
           "Apple did not return the exact requested firmware range.")

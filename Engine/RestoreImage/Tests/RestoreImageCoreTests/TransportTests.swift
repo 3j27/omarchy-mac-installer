@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import XCTest
+
 @testable import RestoreImageCore
 
 private final class RangeServer: @unchecked Sendable {
@@ -13,19 +14,25 @@ private final class RangeServer: @unchecked Sendable {
 
   init(_ variant: String) throws {
     self.variant = variant
-    fd = socket(AF_INET, SOCK_STREAM, 0)
-    guard fd >= 0 else { throw RestoreFailure("Cannot create fixture socket.") }
+    let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+    fd = descriptor
+    guard descriptor >= 0 else { throw RestoreFailure("Cannot create fixture socket.") }
     var address = sockaddr_in()
     address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
     address.sin_family = sa_family_t(AF_INET)
     address.sin_addr.s_addr = inet_addr("127.0.0.1")
     let bound = withUnsafePointer(to: &address) {
-      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+      }
     }
-    guard bound == 0 && listen(fd, 8) == 0 else { close(fd); throw RestoreFailure("Cannot bind fixture socket.") }
+    guard bound == 0 && listen(descriptor, 8) == 0 else {
+      close(descriptor)
+      throw RestoreFailure("Cannot bind fixture socket.")
+    }
     var size = socklen_t(MemoryLayout<sockaddr_in>.size)
     _ = withUnsafeMutablePointer(to: &address) {
-      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &size) }
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(descriptor, $0, &size) }
     }
     port = UInt16(bigEndian: address.sin_port)
     DispatchQueue.global().async { [self] in
@@ -33,7 +40,8 @@ private final class RangeServer: @unchecked Sendable {
         let client = accept(fd, nil, nil)
         if client < 0 { break }
         var enabled: Int32 = 1
-        _ = setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))
+        _ = setsockopt(
+          client, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))
         var request = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
         while request.count < 16384 {
@@ -47,13 +55,18 @@ private final class RangeServer: @unchecked Sendable {
         let body = variant == "changed" ? "fail" : variant == "length" ? "extra" : "test"
         let extent = variant == "extent" ? "bytes 0-3/20" : "bytes 7-10/20"
         let length = variant == "length" ? 5 : 4
-        let extra = variant == "encoding" ? "Content-Encoding: gzip\r\n" : variant == "redirect" ? "Location: http://127.0.0.1:\(port)/other\r\n" : ""
-        let headers = "HTTP/1.1 \(status) Fixture\r\nContent-Range: \(extent)\r\nContent-Length: \(length)\r\n\(extra)Connection: close\r\n\r\n"
+        let extra =
+          variant == "encoding"
+          ? "Content-Encoding: gzip\r\n"
+          : variant == "redirect" ? "Location: http://127.0.0.1:\(port)/other\r\n" : ""
+        let headers =
+          "HTTP/1.1 \(status) Fixture\r\nContent-Range: \(extent)\r\nContent-Length: \(length)\r\n\(extra)Connection: close\r\n\r\n"
         func sendAll(_ data: Data) {
           data.withUnsafeBytes { bytes in
             var offset = 0
             while offset < data.count {
-              let count = send(client, bytes.baseAddress!.advanced(by: offset), data.count - offset, 0)
+              let count = send(
+                client, bytes.baseAddress!.advanced(by: offset), data.count - offset, 0)
               if count <= 0 { break }
               offset += count
             }
@@ -66,7 +79,10 @@ private final class RangeServer: @unchecked Sendable {
       }
     }
   }
-  func stop() { shutdown(fd, SHUT_RDWR); close(fd) }
+  func stop() {
+    shutdown(fd, SHUT_RDWR)
+    close(fd)
+  }
   func received() -> [String] { lock.withLock { requests } }
 }
 
@@ -75,7 +91,8 @@ final class TransportTests: XCTestCase, @unchecked Sendable {
     for variant in ["valid", "200", "extent", "length", "encoding", "changed", "redirect"] {
       let server = try RangeServer(variant)
       defer { server.stop() }
-      let source = SourceRecord(size_bytes: 20, sha256: Data().sha256, url: "http://127.0.0.1:\(server.port)/image")
+      let source = SourceRecord(
+        sizeBytes: 20, sha256: Data().sha256, url: "http://127.0.0.1:\(server.port)/image")
       let record = RangeRecord(offset: 2, size: 4, sha256: Data("test".utf8).sha256)
       do {
         let result = try await fetchRange(source, record: record, base: 5)
@@ -96,13 +113,18 @@ final class TransportTests: XCTestCase, @unchecked Sendable {
     defer { server.stop() }
     let task = Task {
       try await fetchRange(
-        SourceRecord(size_bytes: 20, sha256: Data().sha256, url: "http://127.0.0.1:\(server.port)/image"),
+        SourceRecord(
+          sizeBytes: 20, sha256: Data().sha256, url: "http://127.0.0.1:\(server.port)/image"),
         record: RangeRecord(offset: 2, size: 4, sha256: Data("test".utf8).sha256), base: 5)
     }
     try await Task.sleep(for: .milliseconds(100))
     task.cancel()
-    do { _ = try await task.value; XCTFail("Cancelled range returned bytes") }
-    catch { XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled) }
+    do {
+      _ = try await task.value
+      XCTFail("Cancelled range returned bytes")
+    } catch {
+      XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled)
+    }
     XCTAssertEqual(server.received().count, 1)
   }
 }

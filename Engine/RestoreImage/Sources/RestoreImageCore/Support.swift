@@ -94,7 +94,9 @@ func privateDirectory(beside output: URL, prefix: String) throws -> URL {
     output.deletingLastPathComponent().appendingPathComponent(prefix + "XXXXXX").path.utf8CString)
   let made = pattern.withUnsafeMutableBufferPointer { mkdtemp($0.baseAddress!) }
   try require(made != nil, "Cannot create private staging directory.")
-  return URL(fileURLWithPath: String(decoding: pattern.dropLast().map { UInt8(bitPattern: $0) }, as: UTF8.self))
+  return URL(
+    fileURLWithPath: String(
+      decoding: pattern.dropLast().map { UInt8(bitPattern: $0) }, as: UTF8.self))
 }
 func writePrivate(_ data: Data, to path: URL) throws {
   let fd = open(path.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
