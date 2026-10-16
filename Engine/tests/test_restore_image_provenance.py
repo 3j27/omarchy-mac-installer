@@ -22,6 +22,8 @@ class RestoreProvenanceTests(unittest.TestCase):
             binary = engine / 'overlay/bin/omarchy-restore-image'
             binary.parent.mkdir(parents=True)
             binary.write_bytes(b'synthetic executable')
+            (root / 'LICENSE').write_text('synthetic license')
+            binary.with_suffix('.LICENSE').write_text('synthetic license')
             paths = [root / 'Package.swift', root / 'build.sh', root / 'Sources/main.swift']
             for path in paths:
                 path.write_text('synthetic source')

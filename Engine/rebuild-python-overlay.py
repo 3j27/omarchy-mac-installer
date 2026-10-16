@@ -107,7 +107,7 @@ def rebuild(checkout, base, output):
         if sha256((root / item['path']).read_bytes()) != item['sha256']:
             raise ValueError('source lock digest mismatch: ' + item['path'])
     overlay = {Path(name).name: (root / name).read_bytes() for name in sorted(expected)}
-    # Executables the Python overlay runs ship under bin/, which the base already carries empty.
+    # Bundled tools and their license notices ship under bin/, present in the base.
     tools = {item['path'] for item in records if item['destination'].startswith('bin/')}
     if tools != {str(p.relative_to(root)) for p in (root / 'overlay/bin').glob('*')}:
         raise ValueError('bundled tool inventory differs from source lock')
@@ -165,7 +165,7 @@ def rebuild(checkout, base, output):
                     result.addfile(member, archive.extractfile(member) if member.isfile() else None)
                 for name, content in sorted(overlay.items()):
                     member = tarfile.TarInfo('./' + name)
-                    member.mode = 0o755 if name.startswith('bin/') else 0o644
+                    member.mode = 0o755 if name.startswith('bin/') and not name.endswith('.LICENSE') else 0o644
                     member.mtime = 1786436181
                     member.size = len(content)
                     result.addfile(member, io.BytesIO(content))

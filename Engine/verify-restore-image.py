@@ -21,6 +21,8 @@ def verify(engine: Path) -> None:
                 for p in paths]
     if record.get('sources') != expected:
         raise ValueError('Swift restore-image source differs from its build record')
+    if (engine / 'overlay/bin/omarchy-restore-image.LICENSE').read_bytes() != (root / 'LICENSE').read_bytes():
+        raise ValueError('bundled restore-image license differs from its source notice')
     binary = engine / 'overlay/bin/omarchy-restore-image'
     if (binary.stat().st_size != record.get('binary_size')
             or hashlib.sha256(binary.read_bytes()).hexdigest() != record.get('binary_sha256')):

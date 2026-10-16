@@ -16,11 +16,11 @@
       )
       XCTAssertEqual(
         ValidationEngineArtifactLocator.expectedDigest,
-        "sha256:43e150e0ba315f4d3984937bbf3c169ad5043e86dc4fd5d396dec682080c42d9"
+        "sha256:0df40b586c1fdad30371d7c1965b211c5292a1830832bbecaeb6f6f236f5b5f0"
       )
       XCTAssertEqual(
         ValidationEngineArtifactLocator.expectedSizeBytes,
-        18_030_353
+        18_031_036
       )
     }
 
