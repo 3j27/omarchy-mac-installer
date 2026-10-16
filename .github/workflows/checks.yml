@@ -95,7 +95,21 @@ jobs:
       - name: Check Swift formatting
         run: xcrun swift-format lint --strict --recursive Package.swift Sources Plugins Tests 2>&1 | tee "$RUNNER_TEMP/installer-ci/swift-format.log"
       - name: Check Recovery Swift formatting
-        run: xcrun swift-format lint --strict --recursive Recovery/Package.swift Recovery/Sources Recovery/Tests 2>&1 | tee "$RUNNER_TEMP/installer-ci/recovery-swift-format.log"
+        run: xcrun swift-format lint --strict --recursive Recovery/Package.swift Recovery/Sources Recovery/Tests Engine/RestoreImage 2>&1 | tee "$RUNNER_TEMP/installer-ci/recovery-swift-format.log"
+      - name: Format suggestions for changed Swift sources
+        if: always()
+        run: |
+          xcrun swift-format format --in-place --recursive Package.swift Sources Plugins Tests Recovery/Package.swift Recovery/Sources Recovery/Tests Engine/RestoreImage
+          git diff -- '*.swift' > "$RUNNER_TEMP/installer-ci/swift-format.patch"
+      - name: Run restore-image Swift tests
+        if: ${{ !cancelled() }}
+        run: |
+          xcodebuildmcp swift-package test --package-path "$PWD/Engine/RestoreImage" --configuration debug 2>&1 | tee "$RUNNER_TEMP/installer-ci/restore-image-debug.log"
+          xcodebuildmcp swift-package test --package-path "$PWD/Engine/RestoreImage" --configuration release 2>&1 | tee "$RUNNER_TEMP/installer-ci/restore-image-release.log"
+          xcodebuildmcp swift-package build --package-path "$PWD/Engine/RestoreImage" --configuration release 2>&1 | tee "$RUNNER_TEMP/installer-ci/restore-image-build.log"
+          mkdir -p "$RUNNER_TEMP/installer-ci/restore-image-bin"
+          binary_dir=$(swift build --package-path Engine/RestoreImage -c release --show-bin-path)
+          cp "$binary_dir/omarchy-restore-image" "$RUNNER_TEMP/installer-ci/restore-image-bin/"
       - name: Run debug Swift tests
         run: xcodebuildmcp swift-package test --package-path "$PWD" --configuration debug 2>&1 | tee "$RUNNER_TEMP/installer-ci/swift-debug.log"
       - name: Run release Swift tests

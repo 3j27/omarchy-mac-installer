@@ -637,7 +637,8 @@ enum RecoveryActions {
         installed["recoveryAccountDeferred"] = false
         try run("/sbin/mount", ["-u", "-w", volume.path])
         try RecoveryFileTransaction.write(
-          JSONSerialization.data(withJSONObject: installed, options: [.prettyPrinted, .sortedKeys]),
+          JSONSerialization.data(
+            withJSONObject: installed, options: [.prettyPrinted, .sortedKeys]),
           to: receipt)
       }
     }
