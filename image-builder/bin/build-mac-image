@@ -819,10 +819,15 @@ available_base() {
 # is pulled in, and the set resolves at all.
 precheck_transaction() {
   local resolved refused name
+  # This universal image admits Neo: stock audio is not a functional fallback.
+  for name in aurora-audio alsa-ucm-conf-aurora speakerguardd omarchy-aurora-firmware; do
+    jq -e --arg name "$name" '.packages[] | select(.name == $name and .group == "support")' \
+      "$candidates/import.json" >/dev/null || fail "Neo support package is missing: $name"
+  done
   available_base
   resolved=$(target_pacman -Sp --print-format '%r %n %v' "${BOOTSTRAP[@]}" "${PLATFORM_PACKAGES[@]}" \
     "$(qualified omarchy)" "$(qualified omarchy-settings)" "${base_names[@]}" $(qualified "${APPLE_AUDIO[@]}") \
-    $(qualified "${apple_names[@]}" $(candidate_names boot)) 2>>"$logs/precheck.log") ||
+    $(qualified "${apple_names[@]}" $(candidate_names boot) $(candidate_names support)) 2>>"$logs/precheck.log") ||
     fail "the package set does not resolve against the pinned databases (logs/precheck.log)"
   printf '%s\n' "$resolved" >"$logs/precheck.log"
   while read -r name; do
@@ -930,7 +935,7 @@ install_runtime() {
 install_apple_set() {
   local installed name version
   mount_api
-  target_pacman -S $(qualified "${apple_names[@]}" $(candidate_names boot)) "${PLATFORM_PACKAGES[@]}" \
+  target_pacman -S $(qualified "${apple_names[@]}" $(candidate_names boot) $(candidate_names support)) "${PLATFORM_PACKAGES[@]}" \
     $(qualified "${APPLE_AUDIO[@]}") >>"$logs/install.log" 2>&1 || fail "could not install the Apple set (logs/install.log)"
   unmount_api
   installed=$(pacman --dbpath "$target/var/lib/pacman" -Q)

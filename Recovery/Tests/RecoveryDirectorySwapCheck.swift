@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct AccountSetupFailure: Error {
@@ -18,6 +19,12 @@ struct AccountSetupFailure: Error {
         let target = root.appendingPathComponent("var")
         try fm.createDirectory(at: source, withIntermediateDirectories: false)
         try Data("new".utf8).write(to: source.appendingPathComponent("new.plist"))
+        let nested = source.appendingPathComponent("nested")
+        try fm.createDirectory(at: nested, withIntermediateDirectories: false)
+        try Data("nested".utf8).write(to: nested.appendingPathComponent("metadata.plist"))
+        try fm.createSymbolicLink(
+          at: nested.appendingPathComponent("dangling"),
+          withDestinationURL: root.appendingPathComponent("not-present"))
         if original {
           try fm.createDirectory(at: target, withIntermediateDirectories: false)
           try Data("old".utf8).write(to: target.appendingPathComponent("stale.plist"))
@@ -44,6 +51,22 @@ struct AccountSetupFailure: Error {
         precondition(!fm.fileExists(atPath: target.appendingPathComponent("stale.plist").path))
         let bytes = try Data(contentsOf: target.appendingPathComponent("new.plist"))
         precondition(bytes == Data("new".utf8))
+        try RecoveryDirectorySwap.commit(target: target, operation: "second")
+        let (backup, next) = RecoveryDirectorySwap.paths(target: target, operation: "second")
+        precondition(!fm.fileExists(atPath: backup.path) && !fm.fileExists(atPath: next.path))
+        try RecoveryDirectorySwap.commit(target: target, operation: "second")
+        do {
+          try RecoveryDirectorySwap.replace(
+            source: source, target: target, operation: "special", wasPresent: true,
+            copy: { _, next in
+              try fm.createDirectory(at: next, withIntermediateDirectories: false)
+              precondition(mkfifo(next.appendingPathComponent("pipe").path, 0o600) == 0)
+            })
+          preconditionFailure("Special copied file published")
+        } catch is AccountSetupFailure {}
+        let kept = try Data(contentsOf: target.appendingPathComponent("new.plist"))
+        precondition(kept == Data("new".utf8))
+        try RecoveryDirectorySwap.restore(target: target, operation: "special", wasPresent: true)
       }
     }
     print(

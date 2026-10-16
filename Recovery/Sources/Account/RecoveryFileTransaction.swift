@@ -116,13 +116,24 @@ public final class RecoveryFileTransaction {
   }
 
   public func commit(relocated: [String: URL] = [:]) throws {
-    // A native update may replace a file and thereby drop its old schg flag.
-    for entry in entries where entry.present && entry.metadata {
-      let target = relocated[entry.path]?.path ?? entry.path
-      guard chflags(target, entry.flags) == 0 else {
-        throw AccountSetupFailure("Cannot restore the target metadata flags.")
+    // Flush new outputs too: updatePreboot may create files that did not exist
+    // in the snapshot. Absence/removal is committed by flushing the parent.
+    for entry in entries {
+      let target = URL(fileURLWithPath: relocated[entry.path]?.path ?? entry.path)
+      var info = stat()
+      let present = lstat(target.path, &info) == 0
+      guard present || errno == ENOENT,
+        !present || (info.st_mode & S_IFMT) == S_IFREG
+      else { throw AccountSetupFailure("A committed target is not a regular file.") }
+      if present {
+        if entry.present && entry.metadata {
+          guard chflags(target.path, entry.flags) == 0 else {
+            throw AccountSetupFailure("Cannot restore the target metadata flags.")
+          }
+        }
+        try Self.flush(target)
       }
-      try Self.flush(URL(fileURLWithPath: target))
+      try Self.flushDirectory(target.deletingLastPathComponent())
     }
     try Self.write(Data("committed\n".utf8), to: directory.appendingPathComponent("status"))
   }
@@ -184,6 +195,29 @@ public final class RecoveryFileTransaction {
     guard fd >= 0 else { throw AccountSetupFailure("Cannot open saved rollback data.") }
     defer { close(fd) }
     guard fsync(fd) == 0 else { throw AccountSetupFailure("Cannot flush saved rollback data.") }
+  }
+
+  public static func flushTree(_ path: URL) throws {
+    var info = stat()
+    guard lstat(path.path, &info) == 0 else {
+      throw AccountSetupFailure("Cannot inspect copied metadata before publication.")
+    }
+    switch info.st_mode & S_IFMT {
+    case S_IFREG:
+      try flush(path)
+    case S_IFDIR:
+      let children = try FileManager.default.contentsOfDirectory(
+        at: path, includingPropertiesForKeys: nil)
+      for child in children {
+        try flushTree(child)
+      }
+      try flushDirectory(path)
+    case S_IFLNK:
+      // The containing directory commits the link itself; never follow it.
+      break
+    default:
+      throw AccountSetupFailure("Copied metadata contains an unsupported file type.")
+    }
   }
 
   public static func flushDirectory(_ path: URL) throws {

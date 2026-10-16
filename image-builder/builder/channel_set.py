@@ -137,14 +137,14 @@ def resolve(entries, policy, channel):
         require(entry is not None, f'the channel database does not list {name}')
         require(role == name or role in provided(entry), f'{name} does not provide {role}')
         chosen.append((role, 'runtime', entry))
-    for name in policy['boot_packages']:
+    for name in policy['boot_packages'] + policy.get('support_packages', []):
         entry = entries.get(name)
         require(entry is not None, f'the channel database does not list {name}')
-        chosen.append((name, 'boot', entry))
+        chosen.append((name, 'support' if name in policy.get('support_packages', []) else 'boot', entry))
     names = [entry['NAME'][0] for _, _, entry in chosen]
     require(not set(names) & set(policy['refused_packages']), 'refused package in the set')
-    for _, _, entry in chosen:
-        require(entry['ARCH'][0] == 'aarch64', f"{entry['NAME'][0]} is not an aarch64 package")
+    for _, group, entry in chosen:
+        require(entry['ARCH'][0] in (('aarch64', 'any') if group == 'support' else ('aarch64',)), f"{entry['NAME'][0]} is not an aarch64 package")
     return chosen
 
 

@@ -56,7 +56,7 @@
     private static func appUpdateFiles(_ system: URL) -> [URL] {
       ["SystemVersion.plist", "SystemVersion-disabled.plist"].map {
         system.appendingPathComponent("System/Library/CoreServices/" + $0)
-      }
+      } + [system.appendingPathComponent(".IAPhysicalMedia")]
     }
 
     private static func resumeAppUpdate(system: URL, target: RecoveryAccountTarget) throws {
@@ -70,13 +70,15 @@
       guard journal.target == target,
         UUID(uuidString: String(journal.backup.dropLast(4))) != nil,
         journal.backup.hasSuffix(".app"), journal.snapshot.hasPrefix("app-update-"),
-        UUID(uuidString: String(journal.snapshot.dropFirst("app-update-".count))) != nil
+        UUID(uuidString: String(journal.snapshot.dropFirst("app-update-".count))) != nil,
+        [2, 3].contains(journal.originalFiles.count)
       else {
         throw AccountSetupFailure("An interrupted Recovery app update belongs to another target.")
       }
       let snapshot = state.appendingPathComponent(journal.snapshot)
       let transaction = try RecoveryFileTransaction.resume(
-        directory: snapshot, files: appUpdateFiles(system),
+        directory: snapshot,
+        files: Array(appUpdateFiles(system).prefix(journal.originalFiles.count)),
         originalFiles: journal.originalFiles.map { URL(fileURLWithPath: $0) })
       let status = try? Data(contentsOf: snapshot.appendingPathComponent("status"))
       if status != Data("committed\n".utf8) {
@@ -186,6 +188,21 @@
         try RecoveryFileTransaction.flushDirectory(backup.deletingLastPathComponent())
         try fm.moveItem(at: candidate, to: destination)
         try RecoveryFileTransaction.flushDirectory(system)
+        let receipt = system.appendingPathComponent(recoveryReceiptPath)
+        if let bytes = try? RecoveryAccountInstaller.protectedRead(receipt, limit: 65536),
+          let value = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+          value["recoveryAccountDeferred"] as? Bool == true
+        {
+          let saved = try RecoveryAccountInstaller.protectedRead(
+            system.appendingPathComponent("IAPhysicalMedia-disabled.plist"), limit: 65536)
+          guard
+            let launch = try PropertyListSerialization.propertyList(from: saved, format: nil)
+              as? [String: Any],
+            launch["AppName"] as? String == InstallerProductIdentity.recoveryAppBundleName
+          else { throw AccountSetupFailure("The deferred Recovery launcher is unavailable.") }
+          try RecoveryFileTransaction.write(
+            saved, to: system.appendingPathComponent(".IAPhysicalMedia"))
+        }
         let movesVersion =
           fm.fileExists(atPath: files[0].path)
           && fm.fileExists(atPath: system.appendingPathComponent(".IAPhysicalMedia").path)
@@ -348,9 +365,11 @@
     static let recoveryReceiptPath = "Aurora/Recovery/State/installation.json"
 
     static func isFinishedRecoveryReceipt(_ data: Data, hasPendingOperation: Bool = false) -> Bool {
-      !hasPendingOperation
-        && (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["status"] as? String
-          == "installed"
+      guard !hasPendingOperation,
+        let receipt = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      else { return false }
+      return receipt["status"] as? String == "installed"
+        && receipt["recoveryAccountDeferred"] as? Bool != true
     }
 
     /// Whether Recovery completed the installation on `target`. The System

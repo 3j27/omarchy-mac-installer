@@ -47,12 +47,25 @@ class CandidateSetTest(unittest.TestCase):
 
     def test_signed_set_creates_readonly_snapshot(self):
         summary = self.verify()
-        self.assertEqual(len(summary["packages"]), 9)
+        self.assertEqual(len(summary["packages"]), 13)
         self.assertEqual(summary["signer"], self.signer.fingerprint)
         self.assertEqual((self.work / "output").stat().st_mode & 0o777, 0o555)
         imported = json.loads((self.work / "output/import.json").read_text())
-        self.assertEqual({p["group"] for p in imported["packages"]}, {"runtime", "boot"})
+        self.assertEqual({p["group"] for p in imported["packages"]}, {"runtime", "boot", "support"})
         self.assertFalse((self.work / "output/candidate-signing-key.asc").exists())
+
+    def test_architecture_independent_support_still_requires_a_signed_source(self):
+        directory, receipt = self.variant(arches={"aurora-audio": "any", "alsa-ucm-conf-aurora": "any"})
+        summary = self.verify(directory, receipt)
+        self.assertEqual({p["name"] for p in summary["packages"] if p["group"] == "support"},
+                         set(fixtures.POLICY["support_packages"]))
+
+    def test_missing_support_is_rejected_even_with_stock_audio_closure(self):
+        directory, receipt = self.variant(
+            names=[n for n in fixtures.VERSIONS if n != "aurora-audio"] + ["asahi-audio"],
+            versions={"asahi-audio": "4.1.1-1"})
+        with self.assertRaisesRegex(ValueError, "missing aurora-audio"):
+            self.verify(directory, receipt)
 
     def test_output_is_created_exclusively(self):
         (self.work / "output").mkdir()
@@ -117,7 +130,7 @@ class CandidateSetTest(unittest.TestCase):
             self.verify(directory, receipt)
 
     def test_missing_or_extra_package(self):
-        directory, receipt = self.variant(names=[n for n in fixtures.VERSIONS if n != "uboot-asahi"])
+        directory, receipt = self.variant(names=[n for n in fixtures.VERSIONS if n != "uboot-aurora"])
         with self.assertRaisesRegex(ValueError, "wrong package set"):
             self.verify(directory, receipt)
 
@@ -130,13 +143,13 @@ class CandidateSetTest(unittest.TestCase):
             channel=("omarchy-mac-boot", "linux-aurora", "linux-aurora-headers"), arches={"omarchy-keyring": "any"})
         summary = self.verify(directory, receipt)
         packages = {p["name"]: p for p in summary["packages"]}
-        self.assertEqual(len(packages), 12)
+        self.assertEqual(len(packages), 16)
         self.assertTrue(summary["candidate_only"])
         self.assertEqual({n: p["origin"] for n, p in packages.items() if p["group"] == "runtime"},
                          {"omarchy": "commit", "omarchy-settings": "commit", "omarchy-mac": "commit",
                           "omarchy-mac-boot": "channel " + "d" * 40})
         self.assertEqual(packages["linux-aurora"]["origin"], "channel")
-        self.assertEqual(packages["uboot-asahi"]["origin"], "pull-request")
+        self.assertEqual(packages["uboot-aurora"]["origin"], "pull-request")
         self.assertEqual({n for n, p in packages.items() if p["group"] == "closure"}, set(versions))
         self.assertEqual(packages["asdcontrol"]["filename"], "asdcontrol-1.0.6.0-2-aarch64.pkg.tar.xz")
 
@@ -157,7 +170,7 @@ class CandidateSetTest(unittest.TestCase):
                 url="https://example.invalid/edge/aarch64/hyprland-0.56.2-3-aarch64.pkg.tar.xz"))),
              "unknown closure package source: hyprland"),
             ("runtime from a channel", dict(channel=("omarchy-mac",)), "mixed package sources: omarchy-mac"),
-            ("boot package any-arch", dict(arches={"uboot-asahi": "any"}), "package metadata mismatch: uboot-asahi"),
+            ("boot package any-arch", dict(arches={"uboot-aurora": "any"}), "package metadata mismatch: uboot-aurora"),
         )
         for name, change, pattern in cases:
             with self.subTest(name):

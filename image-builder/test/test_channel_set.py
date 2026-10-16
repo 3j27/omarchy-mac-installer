@@ -72,6 +72,20 @@ class ChannelSetTest(unittest.TestCase):
                          "the frozen set is read-only")
         self.assertEqual(fixtures.test_image_pin.pinned(summary), [], "a public image carries no test image pin")
 
+    def test_support_can_be_any_arch_but_is_still_required(self):
+        entries = {}
+        for role, name in fixtures.POLICY["channel"]["runtime_packages"].items():
+            entries[name] = {"NAME": [name], "ARCH": ["aarch64"], "PROVIDES": [role]}
+        for name in fixtures.POLICY["boot_packages"]:
+            entries[name] = {"NAME": [name], "ARCH": ["aarch64"]}
+        for name in fixtures.POLICY["support_packages"]:
+            entries[name] = {"NAME": [name], "ARCH": ["any"]}
+        chosen = channel_set.resolve(entries, fixtures.POLICY, fixtures.POLICY["channel"])
+        self.assertEqual(sum(group == "support" for _, group, _ in chosen), 4)
+        del entries["aurora-audio"]
+        with self.assertRaisesRegex(ValueError, "does not list aurora-audio"):
+            channel_set.resolve(entries, fixtures.POLICY, fixtures.POLICY["channel"])
+
     def test_files_lists_the_archives_the_set_needs(self):
         database, sha256 = self.snapshot()
         result = subprocess.run([sys.executable, str(ROOT / "builder/channel_set.py"), "files", "--db", str(database),
@@ -94,14 +108,14 @@ class ChannelSetTest(unittest.TestCase):
 
     def test_a_tampered_package_is_refused(self):
         database, sha256 = self.snapshot()
-        archive = next((self.work / "edge/packages").glob("uboot-asahi-*.xz"))
+        archive = next((self.work / "edge/packages").glob("uboot-aurora-*.xz"))
         archive.write_bytes(archive.read_bytes() + b"\0")
         self.refused("is not the archive the channel database lists", database, sha256)
 
     def test_a_tampered_package_signed_again_is_refused(self):
         database, sha256 = self.snapshot()
-        archive = next((self.work / "edge/packages").glob("m1n1-aurora-*.xz"))
-        fixtures.write_archive(archive, "m1n1-aurora", fixtures.VERSIONS["m1n1-aurora"],
+        archive = next((self.work / "edge/packages").glob("aura-*.xz"))
+        fixtures.write_archive(archive, "aura", fixtures.VERSIONS["aura"],
                                {"usr/lib/asahi-boot/m1n1.bin": b"another m1n1"}, [])
         self.channel.sign(archive)
         self.refused("is not the archive the channel database lists", database, sha256)
@@ -118,9 +132,9 @@ class ChannelSetTest(unittest.TestCase):
         self.refused("omarchy-dev does not provide omarchy", database, sha256)
 
     def test_a_database_without_a_set_package_is_refused(self):
-        database, sha256 = self.snapshot(entry_edit=lambda name, text: text.replace("%NAME%\nuboot-asahi", "%NAME%\nuboot")
-                                         if name == "uboot-asahi" else text)
-        self.refused("uboot-asahi", database, sha256)
+        database, sha256 = self.snapshot(entry_edit=lambda name, text: text.replace("%NAME%\nuboot-aurora", "%NAME%\nuboot")
+                                         if name == "uboot-aurora" else text)
+        self.refused("uboot-aurora", database, sha256)
 
     def test_archive_metadata_must_match_the_database(self):
         database, sha256 = self.snapshot(entry_edit=lambda name, text: text.replace("%ARCH%\naarch64", "%ARCH%\nany")

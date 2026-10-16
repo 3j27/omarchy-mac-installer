@@ -184,7 +184,7 @@ run_with_spinner() {
 }
 
 bputil_now() {
-    bputil -nc -v "$VGID" -u "$OWNER" -p "$PASSWORD" >/tmp/bputil.log 2>&1
+    bputil -nca -v "$VGID" -u "$OWNER" -p "$PASSWORD" >/tmp/bputil.log 2>&1
 }
 
 read_password() {
@@ -293,7 +293,7 @@ while :; do
     tries=$((tries + 1))
     if [ "$tries" -ge 3 ]; then
         echo "macOS asks itself now. Type your user name and password."
-        while ! bputil -nc -v "$VGID"; do
+        while ! bputil -nca -v "$VGID"; do
             echo "That didn't work. Press Enter to try again."
             read -r _
         done
@@ -469,9 +469,7 @@ def fill_aurora_stage1(image, uuid, path, window_ms):
 
 def board_stage1(device_class, os_firmware, members=(), *, common_allowed=False):
     """The Aurora Stage 1 this Mac and OS firmware boot through, or None."""
-    if COMMON_STAGE1.member in members:
-        if not common_allowed:
-            raise AsahiAdapterError("common Stage 1 requires explicit signed-template qualification")
+    if common_allowed and COMMON_STAGE1.member in members:
         return COMMON_STAGE1
     board = BOARD_STAGE1.get(device_class)
     if board is None or board.os_firmware not in (None, os_firmware):
@@ -511,12 +509,11 @@ def install_board_stage1(
         common_image = read_member(COMMON_STAGE1.member)
     except KeyError:
         common_image = None
-    if common_image is not None and not common_allowed:
-        raise AsahiAdapterError("common Stage 1 requires explicit signed-template qualification")
-    board = COMMON_STAGE1 if common_image is not None else board_stage1(device_class, os_firmware)
+    use_common = common_allowed and common_image is not None
+    board = COMMON_STAGE1 if use_common else board_stage1(device_class, os_firmware)
     if board is None:
         return
-    image = common_image if common_image is not None else read_board_stage1(board, read_member, next_object)
+    image = common_image if use_common else read_board_stage1(board, read_member, next_object)
     filled = fill_aurora_stage1(image, esp_uuid.lower(), next_object, board.window_ms)
     with open(boot_object, "wb") as fd:
         fd.write(filled)
@@ -532,10 +529,10 @@ ESP_STAGE2 = "esp/m1n1/boot.bin"
 BOARD_STAGE2 = {"j700ap": "esp/m1n1/boot-j700.bin"}
 
 
-def esp_board_layout(device_class, members):
+def esp_board_layout(device_class, members, *, common_allowed=False):
     """Each payload ESP member's path on this board's ESP; absent ones are not installed."""
     members = set(members)
-    common = COMMON_STAGE1.member in members
+    common = common_allowed and COMMON_STAGE1.member in members
     if common and ESP_STAGE2 not in members:
         raise AsahiAdapterError(f"this common image has no {ESP_STAGE2}")
     own = None if common else BOARD_STAGE2.get(device_class)
@@ -550,7 +547,8 @@ def esp_board_layout(device_class, members):
             raise AsahiAdapterError("ESP member is outside the ESP source")
         if member == own:
             layout[member] = ESP_STAGE2[len(prefix):]
-        elif (member in BOARD_STAGE2.values()
+        elif (member == COMMON_STAGE1.member and not common
+              or member in BOARD_STAGE2.values()
               or (common and member in {board.member for board in BOARD_STAGE1.values()})
               or (own is not None and member == ESP_STAGE2)):
             continue
@@ -559,9 +557,9 @@ def esp_board_layout(device_class, members):
     return layout
 
 
-def install_esp_board_layout(device_class, members, esp_root):
+def install_esp_board_layout(device_class, members, esp_root, *, common_allowed=False):
     """Turn the copied payload ESP into this board's ESP."""
-    layout = esp_board_layout(device_class, members)
+    layout = esp_board_layout(device_class, members, common_allowed=common_allowed)
     prefix = ESP_SOURCE + "/"
     installed = set(layout.values())
     for member in sorted(set(members)):
@@ -1244,15 +1242,15 @@ class AsahiStage1Adapter:
         self.installer.ins.load_ipsw(ipsw)
         self.os_firmware = ipsw.version.split(maxsplit=1)[0]
         esp_members = self._esp_members()
-        self.common_stage1 = common_stage1_allowed(
+        self.common_stage1 = COMMON_STAGE1.member in esp_members and common_stage1_allowed(
             self.template, self.installer.sysinfo.device_class, self.os_firmware)
         board = board_stage1(self.installer.sysinfo.device_class, self.os_firmware, esp_members,
                              common_allowed=self.common_stage1)
         if board is not None:
             read_board_stage1(board, self.osins.pkg.read, self.template["next_object"])
         device_class = self.installer.sysinfo.device_class
-        esp_board_layout(device_class, esp_members)
-        stage2 = ESP_STAGE2 if COMMON_STAGE1.member in esp_members else BOARD_STAGE2.get(device_class)
+        esp_board_layout(device_class, esp_members, common_allowed=self.common_stage1)
+        stage2 = ESP_STAGE2 if self.common_stage1 else BOARD_STAGE2.get(device_class)
         if stage2 is not None and self.osins.pkg.getinfo(stage2).file_size <= 0:
             raise AsahiAdapterError(f"this image has an empty {stage2}")
         self.installer.osins = self.osins
@@ -1426,6 +1424,7 @@ class AsahiStage1Adapter:
             self.installer.sysinfo.device_class,
             self._esp_members(),
             self.installer.dutil.mount(self.osins.efi_part.name),
+            common_allowed=self.common_stage1,
         )
         if self.native_recovery_gui:
             omarchy_recovery.stage(
@@ -1868,6 +1867,7 @@ class AsahiStage1Adapter:
             layout = esp_board_layout(
                 self.installer.sysinfo.device_class,
                 (member.filename for member in members),
+                common_allowed=self.common_stage1,
             )
         else:
             layout = {

@@ -18,11 +18,11 @@
   /// An installation engine fix ships in a catalog without rebuilding
   /// and re-notarizing the app. Nothing may require them to be equal.
   public struct ValidationEngineArtifactLocator: Sendable {
-    public static let version = "v0.9.2-omarchy.43"
-    public static let fileName = "installer-v0.9.2-omarchy.43.tar.gz"
+    public static let version = "v0.9.2-omarchy.44"
+    public static let fileName = "installer-v0.9.2-omarchy.44.tar.gz"
     public static let expectedDigest =
-      "sha256:f4b339dd4b1f732449f071c6fa284ccb26be2cf182abd0085661f1abb0a3b2b5"
-    public static let expectedSizeBytes: UInt64 = 23_860_038
+      "sha256:2c52000b8aa10bd60c391d5877802c1e929e2abd8e9eabf564a01ab5a24ae143"
+    public static let expectedSizeBytes: UInt64 = 23_860_046
 
     public init() {}
 

@@ -146,3 +146,9 @@ The zip's own sha256 cannot be here, since root.img holds this file. To map a re
 ## Sources
 
 `bin/` is mx-mac's image builder from maralcbr/omarchy-pkgs `asahi-quattro` at `7e2f6cfe` (`bin/build-mac-image`, `bin/mac-image-inputs`, `bin/mac-image-check`, and `mac-image-finalize` as `builder/finalize-root`), adapted to the candidate set. `builder/candidate_set.py`, `builder/apple_limine.py` and `builder/verify_installed_system.py` come from the candidate importer, Limine contract and installed-system verifier of this repository's #2.
+
+## Aurora package source
+
+Images admitting Neo require the authenticated edge candidates `aurora-audio`, `alsa-ucm-conf-aurora`, `speakerguardd`, and `omarchy-aurora-firmware`. Their recipes and firmware ordering assets live in `omacom/omarchy-pkgs` (PR #1101); this repository does not rebuild private copies. Support packages retain signature, archive digest, source, and metadata checks; only this category accepts architecture `any`. Missing support fails before package transactions. Boot payload owners are the canonical `aura` and `uboot-aurora` packages.
+
+`omarchy-aurora-firmware` currently requires a systemd initramfs and rejects unsupported busybox hook sets at build time. Its canonical package also contains regulatory.db admission and rate-limited unsupported-country fallback. Aura remains blocked from package publication until the exact source pin has native build, matched Stage 1/Stage 2 boot, repair and upgrade evidence; this installer does not bypass that gate.

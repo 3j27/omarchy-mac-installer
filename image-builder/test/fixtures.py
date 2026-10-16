@@ -56,8 +56,12 @@ VERSIONS = {
     "omarchy-mac-boot": "20260921-10",
     "linux-aurora": "7.0.0.aurora1-1",
     "linux-aurora-headers": "7.0.0.aurora1-1",
-    "m1n1-aurora": "1.6.1.aurora1-1",
-    "uboot-asahi": "2026.07.asahi2-1",
+    "aura": "0.1.0.r20261014-2",
+    "aurora-audio": "4.1.aurora2-1",
+    "alsa-ucm-conf-aurora": "10.aurora2-1",
+    "speakerguardd": "0.1.0.aurora2-1",
+    "omarchy-aurora-firmware": "20261014-2",
+    "uboot-aurora": "2026.07.asahi2-1",
     "limine-mkinitcpio-hook": "1.39.0-2",
 }
 
@@ -93,8 +97,8 @@ def default_contents(layout: str | None = None) -> dict[str, dict[str, bytes]]:
         },
         "linux-aurora-headers": {f"usr/lib/modules/{RELEASE}/build/Makefile": b"# headers\n",
                                  f"usr/lib/modules/{RELEASE}/source": "build"},
-        "m1n1-aurora": {"usr/lib/asahi-boot/m1n1.bin": b"m1n1 stage 1 payload"},
-        "uboot-asahi": {
+        "aura": {"usr/lib/asahi-boot/m1n1.bin": b"m1n1 stage 1 payload"},
+        "uboot-aurora": {
             "usr/lib/asahi-boot/u-boot-nodtb.bin": b"u-boot for apple silicon" * 8,
             **{f"usr/lib/asahi-boot/dtb/{model}.dtb": b"uboot " + model.encode() for model in MODELS},
         },
@@ -186,7 +190,7 @@ def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, n
         filename = f"{name}-{version.replace(':', '.')}-{arch}.pkg.tar.xz"
         write_archive(directory / filename, name, version, contents.get(name, {}), depends(name, versions), arch)
         runtime = name in POLICY["runtime_packages"]
-        planned = runtime or name in POLICY["boot_packages"]
+        planned = runtime or name in POLICY["boot_packages"] + POLICY["support_packages"]
         if name in channel or not planned:
             source = channel_source(f"{name}-{version}-{arch}.pkg.tar.xz")
         else:
@@ -473,8 +477,8 @@ def make_root(root: Path, candidates: Path, layout: str | None = None) -> None:
     for path in (f"usr/lib/modules/{RELEASE}/vmlinuz", f"usr/lib/modules/{RELEASE}/pkgbase",
                  *[f"usr/lib/modules/{RELEASE}/dtbs/{m}.dtb" for m in (*MODELS, "s8000-n66")]):
         write(root, path, member("linux-aurora", path))
-    m1n1 = member("m1n1-aurora", "usr/lib/asahi-boot/m1n1.bin")
-    uboot = member("uboot-asahi", "usr/lib/asahi-boot/u-boot-nodtb.bin")
+    m1n1 = member("aura", "usr/lib/asahi-boot/m1n1.bin")
+    uboot = member("uboot-aurora", "usr/lib/asahi-boot/u-boot-nodtb.bin")
     write(root, "usr/lib/asahi-boot/m1n1.bin", m1n1)
     write(root, "usr/lib/asahi-boot/u-boot-nodtb.bin", uboot)
     dtbs = sorted((f"{m}.dtb" for m in (*MODELS, "s8000-n66")), key=str.encode)
@@ -509,6 +513,7 @@ def make_root(root: Path, candidates: Path, layout: str | None = None) -> None:
                                          "alsa-ucm-conf-asahi", "asahi-audio", "vulkan-asahi", "asahi-bless", "iwd",
                                          "networkmanager", "bluez", "wireplumber")}
     provides = {p["name"]: (p["role"],) for p in summary["packages"] if p.get("role", p["name"]) != p["name"]}
+    provides.update({"aura": ("m1n1-aurora",), "uboot-aurora": ("uboot-asahi",)})
     for name, version in {**versions, **others}.items():
         local_package(root, name, version, owners.get(name, []), provides.get(name, ()))
     state = root / "var/lib/omarchy"

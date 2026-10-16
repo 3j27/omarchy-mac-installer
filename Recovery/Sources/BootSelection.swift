@@ -30,3 +30,9 @@ struct BootSelection: Codable {
     self.nestedVirtualization = machoEnabled && nestedVirtualization
   }
 }
+
+enum RecoveryBootPolicy {
+  static func authorizationArguments(groupUUID: String) -> [String] {
+    ["-nca", "-v", groupUUID]
+  }
+}

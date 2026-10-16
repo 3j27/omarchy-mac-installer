@@ -35,6 +35,15 @@ class AuroraPackageRolesTests(unittest.TestCase):
         result = self.inspect({"asahi-audio": ("impostor", ["asahi-audio=100"])} )
         self.assertIn("packages-required-present", result.failed)
 
+    def test_neo_support_packages_are_mandatory_authenticated_candidates(self):
+        import json
+        policy = json.loads((ROOT / "image-builder/builder/candidate-trust/policy.json").read_text())
+        self.assertEqual(set(policy["support_packages"]), {
+            "aurora-audio", "alsa-ucm-conf-aurora", "speakerguardd", "omarchy-aurora-firmware",
+        })
+        self.assertFalse((ROOT / "image-builder/audio").exists())
+        self.assertFalse((ROOT / "image-builder/firmware-ordering").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

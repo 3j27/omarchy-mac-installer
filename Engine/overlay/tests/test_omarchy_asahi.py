@@ -1191,7 +1191,7 @@ class Step2ScriptTests(unittest.TestCase):
         # One prompt, kept whole: leading and trailing spaces are part of it.
         self.assertEqual(text.count("read -r PASSWORD"), 1)
         self.assertIn("IFS= read -r PASSWORD", text)
-        self.assertIn('bputil -nc -v "$VGID" -u "$OWNER" -p "$PASSWORD"', text)
+        self.assertIn('bputil -nca -v "$VGID" -u "$OWNER" -p "$PASSWORD"', text)
         # kmutil runs on a hidden terminal, recording its own process ID.
         self.assertIn('script -q -t 0 "$kmutil_log"', text)
         self.assertIn("echo $$ >/tmp/kmutil.pid; exec kmutil configure-boot -c boot.bin --raw --entry-point 2048", text)
@@ -1347,7 +1347,7 @@ class Step2ScriptTests(unittest.TestCase):
         self.assertIn("macOS asks itself now", result.stdout)
         attempts = Path(f"{calls}.bputil").read_text().splitlines()
         self.assertEqual(len(attempts), 4)
-        self.assertEqual(attempts[-1], "-nc -v 0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F0")
+        self.assertEqual(attempts[-1], "-nca -v 0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F0")
 
     def test_a_kmutil_that_fails_is_handed_to_the_owner(self):
         started = time.monotonic()
@@ -1661,7 +1661,7 @@ class EncryptedRecoveryFirmwareTests(unittest.TestCase):
     def test_an_encrypted_image_is_attached_decrypted_on_any_running_macos(self):
         installer = self.make(b"AEA1" + b"\0" * 60)
         self.assertEqual(self.collect(installer), "pkg")
-        decrypted = str(self.work / "decrypted-0-arm64eBaseSystem.dmg")
+        decrypted = str((self.work / "decrypted-0-arm64eBaseSystem.dmg").resolve())
         self.assertEqual(Path(decrypted).read_bytes(), b"plainkoly")
         self.assertEqual(self.runs, [
             ["hdiutil", "attach", "-quiet", "-readonly", "-mountpoint", "recovery", decrypted],
@@ -1890,13 +1890,25 @@ class BoardStage1Tests(unittest.TestCase):
                 self.assertIn(self.UUID.encode(), image)
                 self.assertIn(b";m1n1/boot.bin", image)
 
-    def test_common_stage1_presence_alone_does_not_authorize_it(self):
-        package = {"esp/aurora/stage1.bin": j700_stage1(window=5000)}
-        with tempfile.TemporaryDirectory() as root:
-            target = self.write_generic(root)
-            with self.assertRaisesRegex(AsahiAdapterError, "signed-template qualification"):
-                install_board_stage1("j700ap", "26.6.2", package.__getitem__, self.UUID, str(target))
-            self.assertEqual(target.read_bytes(), b"asahi stage 1")
+    def test_unqualified_common_stage1_keeps_per_board_and_upstream_fallbacks(self):
+        import struct
+        package = {"esp/aurora/stage1.bin": b"unused common image",
+                   "esp/aurora/stage1-j700.bin": j700_stage1(),
+                   "esp/aurora/stage1-j613.bin": j700_stage1()}
+        for board, firmware, expected in (
+            ("j700ap", "26.6.2", b"AURORA-S1-CFG01"),
+            ("j613ap", "26.6.2", b"AURORA-S1-CFG01"),
+            ("j613ap", "14.8.3", b"asahi stage 1"),
+            ("j314sap", "26.6.2", b"asahi stage 1"),
+            ("j413ap", "26.6.2", b"asahi stage 1"),
+        ):
+            with self.subTest(board=board, firmware=firmware), tempfile.TemporaryDirectory() as root:
+                target = self.write_generic(root)
+                install_board_stage1(board, firmware, package.__getitem__, self.UUID, str(target))
+                self.assertIn(expected, target.read_bytes())
+                if board == "j700ap":
+                    self.assertEqual(struct.unpack_from("<I", target.read_bytes(),
+                                     target.read_bytes().index(b"AURORA-S1-CFG01") + 20)[0], 5000)
 
     def test_invalid_common_stage1_cannot_fall_back_to_legacy(self):
         for blob in (b"", b"malformed"):
@@ -1928,14 +1940,14 @@ class EspBoardLayoutTests(unittest.TestCase):
         expected = {name: name[4:] for name in members}
         for board in ("j700ap", "j613ap", "j314sap", "j274ap"):
             with self.subTest(board=board):
-                self.assertEqual(esp_board_layout(board, members), expected)
+                self.assertEqual(esp_board_layout(board, members, common_allowed=True), expected)
                 # Leftovers from older image recipes must not override the
                 # common Stage2 or be deployed alongside the common Stage1.
-                self.assertEqual(esp_board_layout(board, members + self.MEMBERS), expected)
+                self.assertEqual(esp_board_layout(board, members + self.MEMBERS, common_allowed=True), expected)
 
     def test_common_image_requires_common_stage2(self):
         with self.assertRaisesRegex(AsahiAdapterError, "common image has no esp/m1n1/boot.bin"):
-            esp_board_layout("j700ap", ["esp/aurora/stage1.bin", "esp/m1n1/boot-j700.bin"])
+            esp_board_layout("j700ap", ["esp/aurora/stage1.bin", "esp/m1n1/boot-j700.bin"], common_allowed=True)
 
     def test_a_neo_installs_its_stage2_as_m1n1_boot_bin(self):
         self.assertEqual(esp_board_layout("j700ap", self.MEMBERS), {

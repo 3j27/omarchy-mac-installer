@@ -419,7 +419,8 @@ enum RecoveryActions {
           try transaction.clearImmutableFlags()
           progress(0.3, "Authorizing the boot environment")
           try authorized(
-            "/usr/bin/bputil", ["-nc", "-v", groupUUID], owner: owner, password: password)
+            "/usr/bin/bputil", RecoveryBootPolicy.authorizationArguments(groupUUID: groupUUID),
+            owner: owner, password: password)
         },
         installBundle: {
           if journal.replacedISC {
@@ -474,6 +475,9 @@ enum RecoveryActions {
             hiddenVersion.standardizedFileURL.path: visibleVersion,
           ])
         })
+      if journal.replacedISC {
+        try RecoveryDirectorySwap.commit(target: iscVar, operation: journal.operation)
+      }
       try fm.removeItem(at: pendingInstallation)
       try RecoveryFileTransaction.flushDirectory(state)
     } catch {
@@ -627,6 +631,13 @@ enum RecoveryActions {
     let record = try RecoveryAccountInstaller.inspect(accountTarget())
     if let record, record.phase == "finalized" {
       try RecoveryAccountInstaller.requireOwnership(record)
+      if var installed = try? installed(), installed["recoveryAccountDeferred"] as? Bool == true {
+        installed["recoveryAccountDeferred"] = false
+        try run("/sbin/mount", ["-u", "-w", volume.path])
+        try RecoveryFileTransaction.write(
+          JSONSerialization.data(withJSONObject: installed, options: [.prettyPrinted, .sortedKeys]),
+          to: receipt)
+      }
     }
     return record
   }
@@ -647,6 +658,7 @@ enum RecoveryActions {
     try RecoveryAccountRestart.perform(
       receipt: record,
       hasPendingInstallation: FileManager.default.fileExists(atPath: pendingInstallation.path),
+      isTargetDefault: targetIsDefaultBoot,
       persist: {
         try run("/sbin/mount", ["-u", "-w", volume.path])
         try RecoveryFileTransaction.write(
@@ -669,7 +681,9 @@ enum RecoveryActions {
     // Startup Disk can leave a matching APFS credential before ownership is
     // granted. Reconcile that proven credential before sending the user back.
     // With no credential yet, finalize leaves the prepared account unchanged.
-    return try RecoveryAccountInstaller.finalize(target, password: password)
+    let final = try RecoveryAccountInstaller.finalize(target, password: password)
+    if final.phase == "finalized" { _ = try recoveryAccount() }
+    return final
   }
 }
 

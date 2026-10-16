@@ -239,8 +239,8 @@ def check_refused(root: Path, policy: dict) -> str:
 def check_installed_payloads(root: Path, candidates: Candidates) -> str:
     release = candidates.kernel_release()
     expected = {
-        "usr/lib/asahi-boot/m1n1.bin": "m1n1-aurora",
-        "usr/lib/asahi-boot/u-boot-nodtb.bin": "uboot-asahi",
+        "usr/lib/asahi-boot/m1n1.bin": "aura",
+        "usr/lib/asahi-boot/u-boot-nodtb.bin": "uboot-aurora",
         f"usr/lib/modules/{release}/vmlinuz": KERNEL,
     }
     expected.update({path: KERNEL for path in candidates.dtbs()})
@@ -255,7 +255,7 @@ def m1n1_stage2(root: Path, candidates: Candidates, report: dict) -> str:
     """m1n1/boot.bin is the set's m1n1, then every Aurora device tree in C
     order, then the set's U-Boot gzipped, then m1n1 options only."""
     data = limine.regular(root / "boot/efi/m1n1/boot.bin")
-    m1n1 = candidates.member("m1n1-aurora", "usr/lib/asahi-boot/m1n1.bin")
+    m1n1 = candidates.member("aura", "usr/lib/asahi-boot/m1n1.bin")
     require(data.startswith(m1n1), "m1n1/boot.bin does not start with the set's m1n1")
     offset = len(m1n1)
     names = candidates.dtbs()
@@ -266,7 +266,7 @@ def m1n1_stage2(root: Path, candidates: Candidates, report: dict) -> str:
         offset += len(dtb)
     require(data[offset:offset + 4] != b"\xd0\x0d\xfe\xed", "m1n1/boot.bin carries a device tree the set's kernel lacks")
     uboot, rest = limine.gunzip_prefix(data[offset:])
-    require(uboot == candidates.member("uboot-asahi", "usr/lib/asahi-boot/u-boot-nodtb.bin"),
+    require(uboot == candidates.member("uboot-aurora", "usr/lib/asahi-boot/u-boot-nodtb.bin"),
             "m1n1/boot.bin's U-Boot is not the set's")
     options = m1n1_options(root)
     require(rest == options, "m1n1/boot.bin does not end with exactly the image's m1n1 options")
@@ -331,7 +331,7 @@ def check_candidate_files(root: Path, candidates: Candidates, report: dict) -> s
             subprocess.run(["rm", "-rf", str(unpacked)], check=True)
     report["candidate_files"] = counts
     require(not changed, f"{len(changed)} files differ from the set: " + ", ".join(sorted(changed)[:12]))
-    return f"all {counts} files and links of the {len(planned)} runtime and boot packages carry the set's bytes and modes"
+    return f"all {counts} files and links of the {len(planned)} required packages carry the set's bytes and modes"
 
 
 def mtree_digests(root: Path, package: str) -> dict[str, str]:
@@ -351,7 +351,7 @@ def mtree_digests(root: Path, package: str) -> dict[str, str]:
 def check_supported_models(root: Path, candidates: Candidates, report: dict) -> str:
     """Every Mac U-Boot supports has its Aurora device tree in stage 2."""
     kernel_dtbs = {PurePosixPath(p).name for p in candidates.dtbs()}
-    models = sorted(PurePosixPath(p).name for p in candidates.listing("uboot-asahi")
+    models = sorted(PurePosixPath(p).name for p in candidates.listing("uboot-aurora")
                     if PurePosixPath(p).match("usr/lib/asahi-boot/dtb/*.dtb"))
     require(models, "the set's U-Boot names no Mac")
     missing = [name for name in models if name not in kernel_dtbs]

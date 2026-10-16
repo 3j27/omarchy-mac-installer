@@ -22,6 +22,8 @@ enum RecoveryDirectorySwap {
       throw AccountSetupFailure("An earlier iSC metadata copy needs recovery first.")
     }
     try copy(source, next)
+    try RecoveryFileTransaction.flushTree(next)
+    try RecoveryFileTransaction.flushDirectory(next.deletingLastPathComponent())
     try checkpoint("copied")
     if wasPresent { try fm.moveItem(at: target, to: backup) }
     try RecoveryFileTransaction.flushDirectory(target.deletingLastPathComponent())
@@ -41,6 +43,14 @@ enum RecoveryDirectorySwap {
       try fm.removeItem(at: target)
     }
     if fm.fileExists(atPath: next.path) { try fm.removeItem(at: next) }
+    try RecoveryFileTransaction.flushDirectory(target.deletingLastPathComponent())
+  }
+  static func commit(target: URL, operation: String) throws {
+    let fm = FileManager.default
+    let (backup, next) = paths(target: target, operation: operation)
+    for path in [backup, next] where fm.fileExists(atPath: path.path) {
+      try fm.removeItem(at: path)
+    }
     try RecoveryFileTransaction.flushDirectory(target.deletingLastPathComponent())
   }
 }

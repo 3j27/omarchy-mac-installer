@@ -66,8 +66,8 @@ REVISION_FILES = {
 # Boot payloads the image is assembled and inspected from, and the one package
 # that may carry each.
 REQUIRED_OWNERS = {
-    'usr/lib/asahi-boot/m1n1.bin': 'm1n1-aurora',
-    'usr/lib/asahi-boot/u-boot-nodtb.bin': 'uboot-asahi',
+    'usr/lib/asahi-boot/m1n1.bin': 'aura',
+    'usr/lib/asahi-boot/u-boot-nodtb.bin': 'uboot-aurora',
     'usr/lib/omarchy/initcpio/omarchy-mac-encrypt': 'omarchy-mac-boot',
     'usr/lib/omarchy/mac-first-boot/omarchy-mac-first-boot': 'omarchy-mac-boot',
     'usr/share/libalpm/scripts/limine-apple-gate': 'limine-mkinitcpio-hook',
@@ -242,6 +242,7 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
     require(root.is_dir() and not root.is_symlink(), 'unsafe input directory')
     policy = load_policy(trust)
     runtime, boot = set(policy['runtime_packages']), set(policy['boot_packages'])
+    support = set(policy.get('support_packages', []))
     destination.mkdir(mode=0o700)  # Exclusive: a failed import is never reused.
     for name in ('signing.json', 'signing.json.sig', 'manifest.json'):
         copy_file(root, name, destination)
@@ -270,8 +271,8 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
         names = [p['name'] for p in packages]
         require(len(set(names)) == len(names), 'duplicate package in the set')
         require(not set(names) & set(policy['refused_packages']), 'refused package in the set')
-        require(runtime | boot <= set(names), 'wrong package set: missing '
-                + ', '.join(sorted(runtime | boot - set(names))))
+        require(runtime | boot | support <= set(names), 'wrong package set: missing '
+                + ', '.join(sorted((runtime | boot | support) - set(names))))
         declared = data.get('platform_sources', {})
         require(isinstance(declared, dict), 'invalid platform sources')
         for name, commit in declared.items():
@@ -316,7 +317,7 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
                             and HEX40.fullmatch(revision) is not None, 'mixed package sources: ' + name)
                     origins[name] = 'channel ' + revision
                 commits[name] = revision
-            elif name in boot:
+            elif name in boot | support:
                 require((origin.get('repository') == policy['boot_repository']
                          and HEX40.fullmatch(origin.get('commit', '')) is not None) or from_channel(origin, filename),
                         'unknown boot package source: ' + name)
@@ -351,7 +352,7 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
         'manifest_sha256': receipt['manifest_sha256'],
         'set_sha256': data['set_sha256'],
         'packages': [{'name': p['name'], 'version': p['version'], 'filename': p['filename'], 'sha256': p['sha256'],
-                      'group': 'runtime' if p['name'] in runtime else 'boot' if p['name'] in boot else 'closure',
+                      'group': 'runtime' if p['name'] in runtime else 'boot' if p['name'] in boot else 'support' if p['name'] in support else 'closure',
                       'origin': origins[p['name']],
                       **({'source_commit': commits[p['name']]} if p['name'] in runtime else {})} for p in packages],
     }

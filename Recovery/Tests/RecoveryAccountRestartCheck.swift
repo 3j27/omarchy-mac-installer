@@ -10,7 +10,7 @@ struct RecoveryFailure: Error { let message: String }
     ]
     var calls = [String]()
     try RecoveryAccountRestart.perform(
-      receipt: original, hasPendingInstallation: false,
+      receipt: original, hasPendingInstallation: false, isTargetDefault: { true },
       persist: { updated in
         calls.append("persist")
         precondition(updated["recoveryAccountDeferred"] as? Bool == true)
@@ -23,7 +23,7 @@ struct RecoveryFailure: Error { let message: String }
     ] {
       do {
         try RecoveryAccountRestart.perform(
-          receipt: receipt, hasPendingInstallation: pending,
+          receipt: receipt, hasPendingInstallation: pending, isTargetDefault: { true },
           persist: { _ in preconditionFailure("Unfinished setup changed") },
           restart: { preconditionFailure("Unfinished setup restarted") })
         preconditionFailure("Unfinished setup accepted")
@@ -31,7 +31,7 @@ struct RecoveryFailure: Error { let message: String }
     }
     do {
       try RecoveryAccountRestart.perform(
-        receipt: original, hasPendingInstallation: false,
+        receipt: original, hasPendingInstallation: false, isTargetDefault: { true },
         persist: { _ in throw Injected.failure },
         restart: { preconditionFailure("Unsaved deferral restarted") })
       preconditionFailure("Write failure lost")
@@ -39,11 +39,29 @@ struct RecoveryFailure: Error { let message: String }
     calls = []
     do {
       try RecoveryAccountRestart.perform(
-        receipt: original, hasPendingInstallation: false,
+        receipt: original, hasPendingInstallation: false, isTargetDefault: { true },
         persist: { _ in calls.append("persist") }, restart: { throw Injected.failure })
       preconditionFailure("Restart failure lost")
     } catch Injected.failure {}
     precondition(calls == ["persist"])
+    do {
+      try RecoveryAccountRestart.perform(
+        receipt: original, hasPendingInstallation: false, isTargetDefault: { false },
+        persist: { _ in preconditionFailure("Wrong boot target persisted") },
+        restart: { preconditionFailure("Wrong boot target restarted") })
+      preconditionFailure("Unselected target accepted")
+    } catch is RecoveryFailure {}
+    var reads = 0
+    do {
+      try RecoveryAccountRestart.perform(
+        receipt: original, hasPendingInstallation: false,
+        isTargetDefault: {
+          reads += 1
+          return reads == 1
+        }, persist: { _ in },
+        restart: { preconditionFailure("Changed boot target restarted") })
+      preconditionFailure("Changed target accepted")
+    } catch is RecoveryFailure {}
     print("PASS restart ordering, deferred account resume and no restart before committed setup")
   }
 }

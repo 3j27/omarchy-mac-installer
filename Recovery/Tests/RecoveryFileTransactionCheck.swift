@@ -68,6 +68,13 @@ struct AccountSetupFailure: Error {
     let status = try Data(contentsOf: commitBackup.appendingPathComponent("status"))
     precondition(status == Data("committed\n".utf8))
     precondition(chflags(moved.path, 0) == 0)
+    let newCommit = root.appendingPathComponent("new-commit")
+    let newSnapshot = root.appendingPathComponent("new-snapshot")
+    let newTransaction = try RecoveryFileTransaction(directory: newSnapshot, files: [newCommit])
+    try Data("newly created".utf8).write(to: newCommit)
+    try newTransaction.commit()
+    let newStatus = try Data(contentsOf: newSnapshot.appendingPathComponent("status"))
+    precondition(newStatus == Data("committed\n".utf8))
     print(
       "PASS file rollback bytes, original absence, mode, interruption resume and target binding")
   }

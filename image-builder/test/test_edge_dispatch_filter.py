@@ -123,7 +123,7 @@ class EdgeDispatchFilterTest(unittest.TestCase):
                                   self.repos if repos else None)
 
     def test_a_channel_set_package_is_relevant(self):
-        for name in ("linux-aurora", "m1n1-aurora", "uboot-asahi", "omarchy-dev", "omarchy-settings-dev",
+        for name in ("linux-aurora", "aura", "uboot-aurora", "omarchy-dev", "omarchy-settings-dev",
                      "omarchy-mac", "omarchy-mac-boot"):
             decision = self.decide(name, "claude-code")
             self.assertTrue(decision["relevant"], name)
