@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Stage the native Recovery app against the actual newly created volumes.
 
-The app template is an authenticated engine input. Its per-install config and
-raw payloads are added only after stage 1 and the ESP have been finalized, then
-the copied app is ad-hoc signed again before Recovery autolaunch is selected.
+The app template is an authenticated engine input and is copied unchanged.
+Per-install config and raw payloads live beside it on the stub volume, after
+stage 1 and the ESP have been finalized and before autolaunch is selected.
 No machine UUID, administrator name, credential or calibration is compiled in.
 """
 
@@ -21,6 +21,7 @@ import tempfile
 import uuid
 
 APP_NAME = "Omarchy Installer.app"
+INSTALL_DATA_DIRECTORY = "Aurora/Recovery/InstallData"
 PAYLOAD_DIRECTORY = "aurora/recovery"
 MANIFEST_NAME = "omarchy-recovery-app.json"
 STAGE2_PATH = "m1n1/boot.bin"
@@ -98,6 +99,8 @@ def validate_source(app_source, manifest_path, run=subprocess.run):
                 or info.get("CFBundleExecutable") != "OmarchyRecovery"
                 or info.get("CFBundleDisplayName") != "Omarchy Installer"):
             raise RecoveryError("native Recovery input is not a real enrollment build")
+        if info.get("OmarchyRecoveryDataLayout") != "external-install-data-v1":
+            raise RecoveryError("native Recovery input uses an unsupported installation data layout")
         strings = (app_source / "Contents/Resources/en.lproj/InfoPlist.strings").read_text()
         if '"CFBundleDisplayName" = "Omarchy Installer";' not in strings:
             raise RecoveryError("native Recovery app lacks its localized launch name")
@@ -137,6 +140,8 @@ def validate_payload(package):
         if (info.get("OmarchyRecoveryBuildMode") != "recovery"
                 or info.get("CFBundleExecutable") != "OmarchyRecovery"):
             raise RecoveryError("native Recovery payload must be a real recovery build")
+        if info.get("OmarchyRecoveryDataLayout") != "external-install-data-v1":
+            raise RecoveryError("native Recovery payload uses an unsupported installation data layout")
         if "Contents/MacOS/OmarchyRecovery" not in actual:
             raise RecoveryError("native Recovery executable is missing")
     except (OSError, KeyError, TypeError, json.JSONDecodeError, plistlib.InvalidFileException) as error:
@@ -223,52 +228,61 @@ def _atomic_bytes(path, data, mode=0o600):
             temporary.unlink(missing_ok=True)
 
 
-def _unsigned_executable(data, run):
-    """Remove signing metadata from a private copy, preserving all code bytes."""
-    with tempfile.TemporaryDirectory(prefix="omarchy-recovery-code-") as temporary:
-        executable = Path(temporary) / "OmarchyRecovery"
-        executable.write_bytes(data)
-        run(["/usr/bin/codesign", "--remove-signature", str(executable)], check=True)
-        return executable.read_bytes()
+def _verify_staged_app(app, template, run):
+    if app_inventory(app) != template:
+        raise RecoveryError("existing Recovery application differs from its template")
+    run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)], check=True)
 
 
-def _verify_staged_app(app, config, files, template, run, app_source):
-    if app.is_symlink() or not app.is_dir():
-        raise RecoveryError("unexpected existing Recovery app")
-    for name, expected in template["files"].items():
-        if name.startswith("Contents/_CodeSignature/"):
-            continue
-        path = app / name
-        if path.is_symlink():
-            raise RecoveryError("existing Recovery app contains a symbolic link")
-        data = path.read_bytes()
-        if expected != {"sha256": digest(data), "bytes": len(data)}:
-            if name != "Contents/MacOS/OmarchyRecovery":
-                raise RecoveryError("existing Recovery application differs from its template")
-            source = Path(app_source) / name
-            if source.is_symlink():
-                raise RecoveryError("Recovery executable template contains a symbolic link")
-            original = source.read_bytes()
-            if expected != {"sha256": digest(original), "bytes": len(original)}:
-                raise RecoveryError("Recovery executable template changed during publication")
-            # Adding the per-install resources requires re-signing the bundle.
-            # codesign updates the signature inside the Mach-O executable too.
-            # Compare authenticated code without those signatures, then verify
-            # the complete staged bundle's current signature below.
-            if _unsigned_executable(data, run) != _unsigned_executable(original, run):
-                raise RecoveryError("existing Recovery application differs from its template")
-    resources = app / "Contents/Resources"
-    if json.loads((resources / "install-config.json").read_text()) != config:
+def _install_data_root(system):
+    root = Path(system)
+    for component in INSTALL_DATA_DIRECTORY.split("/"):
+        root = root / component
+        if root.is_symlink() or (root.exists() and not root.is_dir()):
+            raise RecoveryError("unsafe Recovery installation data path")
+    return root
+
+
+def _verify_install_data(root, config, files, manifest):
+    expected = {"install-config.json", "AuraPayloads/manifest.json"}
+    expected.update("AuraPayloads/" + name for name in files)
+    actual = set()
+    for path in root.rglob("*"):
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise RecoveryError("unsafe Recovery installation data entry")
+        if path.is_file():
+            actual.add(path.relative_to(root).as_posix())
+    if actual != expected:
+        raise RecoveryError("existing Recovery installation data is incomplete or changed")
+    if json.loads((root / "install-config.json").read_text()) != config:
         raise RecoveryError("existing Recovery app belongs to another installation")
-    manifest = json.loads((resources / "AuraPayloads/manifest.json").read_text())
-    expected = {name: {"sha256": digest(data), "bytes": len(data)} for name, data in files.items()}
-    if manifest.get("files") != expected:
+    if json.loads((root / "AuraPayloads/manifest.json").read_text()) != manifest:
         raise RecoveryError("existing Recovery startup bundle differs from this operation")
     for name, data in files.items():
-        target = resources / "AuraPayloads" / name
-        if target.is_symlink() or target.read_bytes() != data:
+        if (root / "AuraPayloads" / name).read_bytes() != data:
             raise RecoveryError("existing Recovery payload is incomplete or changed")
-    run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)], check=True)
+
+
+def _flush_directory(path):
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _flush_tree(root):
+    # Persist copied files and child entries before exposing either root.
+    paths = sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True) + [root]
+    for path in paths:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        if path.is_dir():
+            flags |= getattr(os, "O_DIRECTORY", 0)
+        fd = os.open(path, flags)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 def _payload(path, maximum=256 << 20):
@@ -327,6 +341,13 @@ def stage(installer, esp_uuid, esp_root, app_source=None,
         'exec "$resources/../../../Omarchy Installer.app/Contents/MacOS/OmarchyRecovery" "$@"\n'
     )
     files = {"raw/aura-raw.bin": stage1, "raw/boot.bin": stage2, **firmware}
+    install_data = _install_data_root(system)
+    payload_manifest = {
+        "schema": 2, "defaultMode": "raw", "nestedVirtualization": False,
+        "modes": {"raw": {"espPath": STAGE2_PATH}},
+        "vendorFirmware": sorted(firmware),
+        "files": {name: {"sha256": digest(data), "bytes": len(data)} for name, data in files.items()},
+    }
     identity = {"configuration": config,
                 "files": {name: digest(data) for name, data in files.items()},
                 "template": digest(json.dumps(app_inventory(app_source), sort_keys=True).encode())}
@@ -347,39 +368,50 @@ def stage(installer, esp_uuid, esp_root, app_source=None,
                    "marker": base64.b64encode(marker.read_bytes()).decode(),
                    "markerMode": marker.stat().st_mode & 0o777}
     if destination.exists():
-        _verify_staged_app(destination, config, files, template, run, app_source)
-        if not pending.exists():
-            _atomic_bytes(pending, json.dumps(journal, sort_keys=True).encode())
-    if not destination.exists():
+        _verify_staged_app(destination, template, run)
+    if install_data.exists():
+        _verify_install_data(install_data, config, files, payload_manifest)
+    if not destination.exists() or not install_data.exists():
         with tempfile.TemporaryDirectory(prefix=".omarchy-recovery-stage-", dir=system) as temporary:
             app = Path(temporary) / APP_NAME
-            shutil.copytree(app_source, app)
-            (app / "Contents/MacOS/OmarchyRecovery").chmod(0o755)
-            resources = app / "Contents/Resources"
-            _json(resources / "install-config.json", config)
-            payloads = resources / "AuraPayloads"
-            if payloads.exists():
-                raise RecoveryError("Recovery template must not carry another installation's payloads")
-            (payloads / "raw").mkdir(parents=True)
-            (payloads / "vendorfw").mkdir()
-            files = {"raw/aura-raw.bin": stage1, "raw/boot.bin": stage2, **firmware}
-            for name, data in files.items():
-                (payloads / name).parent.mkdir(parents=True, exist_ok=True)
-                (payloads / name).write_bytes(data)
-            _json(payloads / "manifest.json", {
-                "schema": 2, "defaultMode": "raw", "nestedVirtualization": False,
-                "modes": {"raw": {"espPath": STAGE2_PATH}},
-                "vendorFirmware": sorted(firmware),
-                "files": {name: {"sha256": digest(data), "bytes": len(data)} for name, data in files.items()},
-            })
-            run(["/usr/bin/codesign", "--force", "--sign", "-", str(app)], check=True)
-            run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)], check=True)
-            # Record the exact identity before publishing any of the three targets.
-            # An interrupted run may finish only this same authenticated bundle.
+            if not destination.exists():
+                shutil.copytree(app_source, app)
+                (app / "Contents/MacOS/OmarchyRecovery").chmod(0o755)
+                _verify_staged_app(app, template, run)
+                _flush_tree(app)
+            data_stage = Path(temporary) / "InstallData"
+            if not install_data.exists():
+                data_stage.mkdir(mode=0o700)
+                _json(data_stage / "install-config.json", config)
+                payloads = data_stage / "AuraPayloads"
+                for name, data in files.items():
+                    target = payloads / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(data)
+                    target.chmod(0o600)
+                _json(payloads / "manifest.json", payload_manifest)
+                _verify_install_data(data_stage, config, files, payload_manifest)
+                _flush_tree(data_stage)
+            # The same journal binds both immutable app and separate data. A
+            # partial publication resumes without changing the signed bundle.
             _atomic_bytes(pending, json.dumps(journal, sort_keys=True).encode())
-            os.replace(app, destination)
+            if data_stage.exists():
+                parent = system
+                for component in INSTALL_DATA_DIRECTORY.split("/")[:-1]:
+                    parent = parent / component
+                    parent.mkdir(mode=0o700, exist_ok=True)
+                    _flush_directory(parent.parent)
+                _install_data_root(system)
+                os.replace(data_stage, install_data)
+                _flush_directory(install_data.parent)
+            if app.exists():
+                os.replace(app, destination)
+                _flush_directory(system)
     try:
-        _verify_staged_app(destination, config, files, template, run, app_source)
+        if not pending.exists():
+            _atomic_bytes(pending, json.dumps(journal, sort_keys=True).encode())
+        _verify_staged_app(destination, template, run)
+        _verify_install_data(_install_data_root(system), config, files, payload_manifest)
         _atomic_bytes(legacy_step2, launcher.encode(), 0o755)
         _atomic_bytes(marker, plistlib.dumps(launch), journal["markerMode"])
     except Exception:

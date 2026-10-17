@@ -7,6 +7,81 @@
   @testable import OmarchyAppleInstallerTrustCore
 
   final class RecoveryAccountTests: XCTestCase {
+    func testExternalRecoveryConfigurationDoesNotFallBackFromAnIncompleteBaseline() throws {
+      let fm = FileManager.default
+      let system = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      try fm.createDirectory(at: system, withIntermediateDirectories: true)
+      defer { try? fm.removeItem(at: system) }
+      let appName = "Omarchy Installer.app"
+      let legacy = system.appendingPathComponent(
+        appName + "/Contents/Resources/install-config.json")
+      XCTAssertEqual(
+        try RecoveryInstallData.configuration(system: system, appName: appName), legacy)
+      let external = try RecoveryInstallData.directory(system: system)
+      try fm.createDirectory(at: external, withIntermediateDirectories: true)
+      XCTAssertEqual(
+        try RecoveryInstallData.configuration(system: system, appName: appName),
+        external.appendingPathComponent("install-config.json"))
+      try fm.removeItem(at: external)
+      try fm.createSymbolicLink(at: external, withDestinationURL: system)
+      XCTAssertThrowsError(try RecoveryInstallData.directory(system: system))
+    }
+
+    func testLegacyRecoveryDataMigratesWithoutChangingTheSignedBundleOrAccountState() throws {
+      let fm = FileManager.default
+      let system = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      let resources = system.appendingPathComponent("Omarchy Installer.app/Contents/Resources")
+      let payloads = resources.appendingPathComponent("AuraPayloads")
+      try fm.createDirectory(at: payloads, withIntermediateDirectories: true)
+      defer { try? fm.removeItem(at: system) }
+      let config = try JSONSerialization.data(withJSONObject: [
+        "schema": 2, "systemUUID": target.systemUUID, "groupUUID": target.groupUUID,
+        "prebootUUID": target.prebootUUID,
+      ])
+      try config.write(to: resources.appendingPathComponent("install-config.json"))
+      let names = [
+        "raw/aura-raw.bin", "raw/boot.bin", "vendorfw/firmware.tar",
+        "vendorfw/firmware.cpio", "vendorfw/manifest.txt",
+      ]
+      var entries: [String: [String: Any]] = [:]
+      for name in names {
+        let path = payloads.appendingPathComponent(name)
+        let data = Data(name.utf8)
+        try fm.createDirectory(
+          at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: path)
+        entries[name] = [
+          "bytes": data.count,
+          "sha256": SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+        ]
+      }
+      let manifest = try JSONSerialization.data(withJSONObject: ["schema": 2, "files": entries])
+      try manifest.write(to: payloads.appendingPathComponent("manifest.json"))
+      let state = system.appendingPathComponent("Aurora/Recovery/State")
+      try fm.createDirectory(at: state, withIntermediateDirectories: true)
+      let sentinel = Data("account journal".utf8)
+      try sentinel.write(to: state.appendingPathComponent("keep.json"))
+      let output = try RecoveryInstallData.migrateLegacy(
+        system: system, appName: "Omarchy Installer.app", target: target, read: fixtureRead)
+      XCTAssertEqual(
+        try Data(contentsOf: output.appendingPathComponent("install-config.json")), config)
+      XCTAssertEqual(
+        try Data(contentsOf: resources.appendingPathComponent("install-config.json")), config)
+      XCTAssertEqual(try Data(contentsOf: state.appendingPathComponent("keep.json")), sentinel)
+      for name in names {
+        XCTAssertEqual(
+          try Data(contentsOf: output.appendingPathComponent("AuraPayloads/" + name)),
+          Data(name.utf8))
+        XCTAssertEqual(try Data(contentsOf: payloads.appendingPathComponent(name)), Data(name.utf8))
+      }
+      // A later app update uses the published baseline, even if the old app is gone.
+      try fm.removeItem(at: system.appendingPathComponent("Omarchy Installer.app"))
+      XCTAssertEqual(
+        try RecoveryInstallData.migrateLegacy(
+          system: system, appName: "Omarchy Installer.app", target: target, read: fixtureRead),
+        output)
+    }
+
     func testTokenAuthorityWaitsForNativePersistence() throws {
       let id = UUID().uuidString
       let hashes = [Data("fixture-hash".utf8)]

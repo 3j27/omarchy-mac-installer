@@ -12,9 +12,10 @@ enum RecoveryActions {
   // The engine writes this only after the new System volume and ESP exist.
   // Keep loading independent of diskutil so Recovery can show the window first.
   static let configuration: Result<InstallConfiguration, Error> = Result {
-    guard let resources = Bundle.main.resourceURL else { throw InstallConfigurationError.invalid }
     return try InstallConfiguration.decode(
-      Data(contentsOf: resources.appendingPathComponent("install-config.json")))
+      RecoveryAccountInstaller.protectedRead(
+        RecoveryInstallData.directory(system: volume).appendingPathComponent("install-config.json"),
+        limit: 65536))
   }
   static var volume: URL {
     #if OMARCHY_STEP2_PREVIEW
@@ -72,7 +73,9 @@ enum RecoveryActions {
       throw issue
     }
   }
-  static var resources: URL { Bundle.main.resourceURL! }
+  static func payloadRoot() throws -> URL {
+    try RecoveryInstallData.directory(system: volume).appendingPathComponent("AuraPayloads")
+  }
   static var state: URL { volume.appendingPathComponent("Aurora/Recovery/State") }
   static var receipt: URL { state.appendingPathComponent("installation.json") }
   static var pendingInstallation: URL { state.appendingPathComponent("installation.pending.json") }
@@ -259,7 +262,7 @@ enum RecoveryActions {
       }
   }
   static func manifest() throws -> [String: Any] {
-    let path = resources.appendingPathComponent("AuraPayloads/manifest.json")
+    let path = try payloadRoot().appendingPathComponent("manifest.json")
     guard let m = try JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any],
       m["schema"] as? Int == 2
     else { throw RecoveryFailure(message: "The recovery payload manifest is invalid.") }
@@ -267,7 +270,7 @@ enum RecoveryActions {
   }
   static func asset(_ name: String, manifest: [String: Any]) throws -> Data {
     try RecoveryBaseline.asset(
-      name, manifest: manifest, root: resources.appendingPathComponent("AuraPayloads"))
+      name, manifest: manifest, root: payloadRoot())
   }
   static func atomic(_ bytes: Data, to target: URL) throws {
     let fm = FileManager.default
@@ -350,7 +353,7 @@ enum RecoveryActions {
     let stage2 = try asset(selection.mode.stage2Path, manifest: m)
     // A successful setup must retain a usable per-device repair baseline.
     _ = try RecoveryBaseline.firmware(
-      manifest: m, root: resources.appendingPathComponent("AuraPayloads"))
+      manifest: m, root: payloadRoot())
     let modes = m["modes"] as? [String: [String: Any]]
     guard let entry = modes?[selection.mode.rawValue],
       let destination = entry["espPath"] as? String, destination == config.stage2Path
@@ -738,7 +741,7 @@ extension RecoveryActions {
         "The recovery baseline does not match the enrolled stage 1.")
       let bytes = try asset(mode.stage2Path, manifest: m)
       var files = try RecoveryBaseline.firmware(
-        manifest: m, root: resources.appendingPathComponent("AuraPayloads"))
+        manifest: m, root: payloadRoot())
       files[path] = bytes
       let destination = try esp()
       let backup = state.appendingPathComponent("recover-" + UUID().uuidString + ".before")

@@ -270,6 +270,32 @@ class AsahiStage1AdapterTests(unittest.TestCase):
         self.assertFalse(adapter.preflight_complete)
         self.assertEqual(dutil.add_calls, [])
 
+    def test_embedded_layout_recovery_app_is_refused_before_partitioning(self):
+        files = {
+            "Contents/Info.plist": plistlib.dumps({
+                "OmarchyRecoveryBuildMode": "recovery", "CFBundleExecutable": "OmarchyRecovery",
+            }),
+            "Contents/MacOS/OmarchyRecovery": b"old embedded-layout app",
+        }
+        prefix = "esp/aurora/recovery/"
+        manifest = {"schema": 1, "buildMode": "recovery", "files": {
+            name: {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+            for name, data in files.items()
+        }}
+        with zipfile.ZipFile(self.payload, "a") as archive:
+            for name, data in files.items():
+                archive.writestr(prefix + "Omarchy Installer.app/" + name, data)
+            archive.writestr(prefix + "omarchy-recovery-app.json", json.dumps(manifest))
+        metadata = self._target_metadata()
+        metadata["recovery_gui"] = "omarchy-native-v1"
+        self._write_metadata([metadata])
+        dutil = FakeDiskUtil([[self.free]])
+        adapter = self._adapter(FakeInstaller(dutil))
+        with self.assertRaisesRegex(AsahiAdapterError, "data layout"):
+            adapter.preflight(self.plan)
+        self.assertFalse(adapter.preflight_complete)
+        self.assertEqual(dutil.add_calls, [])
+
     def test_unknown_recovery_contract_is_not_silently_ignored(self):
         metadata = self._target_metadata()
         metadata["recovery_gui"] = "not-a-real-build"

@@ -279,6 +279,7 @@ class Guard:
             "CFBundleExecutable": "OmarchyRecovery",
             "CFBundleDisplayName": self.values["INSTALLER_RECOVERY_APP_NAME"],
             "OmarchyRecoveryBuildMode": "recovery",
+            "OmarchyRecoveryDataLayout": "external-install-data-v1",
         }
         for key, value in expected.items():
             if info.get(key) != value:

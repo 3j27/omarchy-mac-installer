@@ -122,6 +122,7 @@ class ReleaseGuardTest(unittest.TestCase):
             "CFBundleExecutable": "OmarchyRecovery",
             "CFBundleDisplayName": VALUES["INSTALLER_RECOVERY_APP_NAME"],
             "OmarchyRecoveryBuildMode": "recovery",
+            "OmarchyRecoveryDataLayout": "external-install-data-v1",
         })
         (app / "Contents/MacOS/OmarchyRecovery").write_bytes(b'recovery executable fixture')
         return app

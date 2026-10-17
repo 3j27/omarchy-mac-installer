@@ -27,6 +27,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>CFBundleExecutable</key><string>OmarchyRecovery</string>
 <key>CFBundleIdentifier</key><string>org.aurorasilicon.omarchy.recovery.$MODE</string>
 <key>OmarchyRecoveryBuildMode</key><string>$MODE</string>
+<key>OmarchyRecoveryDataLayout</key><string>external-install-data-v1</string>
 <key>CFBundleName</key><string>Omarchy Installer</string>
 <key>CFBundleDisplayName</key><string>Omarchy Installer</string>
 <key>CFBundleDevelopmentRegion</key><string>en</string>

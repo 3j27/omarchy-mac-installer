@@ -201,6 +201,8 @@ fi
 [[ -d $recovery_template && ! -L $recovery_template ]] || fail "native Recovery template is missing"
 [[ $(/usr/bin/plutil -extract OmarchyRecoveryBuildMode raw -o - "$recovery_template/Contents/Info.plist") == recovery ]] \
   || fail "Recovery template is not a real Recovery build"
+[[ $(/usr/bin/plutil -extract OmarchyRecoveryDataLayout raw -o - "$recovery_template/Contents/Info.plist") == external-install-data-v1 ]] \
+  || fail "Recovery template uses an unsupported installation data layout"
 [[ ! -e "$recovery_template/Contents/Resources/install-config.json" \
   && ! -e "$recovery_template/Contents/Resources/AuraPayloads" ]] \
   || fail "Recovery template contains another installation's data"

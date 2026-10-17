@@ -92,6 +92,8 @@
           try RecoveryFileTransaction.flushDirectory(system)
           try RecoveryFileTransaction.flushDirectory(backup.deletingLastPathComponent())
         }
+        let identity = backup.appendingPathExtension("json")
+        if fm.fileExists(atPath: identity.path) { try fm.removeItem(at: identity) }
       }
       try fm.removeItem(at: pending)
       try RecoveryFileTransaction.flushDirectory(state)
@@ -122,6 +124,12 @@
       }
       _ = try AccountNativeCommand.checked(
         "/usr/bin/codesign", ["--verify", "--deep", "--strict", "-R=" + requirement, source.path])
+      guard
+        let templateInfo = try PropertyListSerialization.propertyList(
+          from: Data(contentsOf: source.appendingPathComponent("Contents/Info.plist")), format: nil)
+          as? [String: Any],
+        templateInfo["OmarchyRecoveryDataLayout"] as? String == "external-install-data-v1"
+      else { throw AccountSetupFailure("The Recovery template uses an incompatible data layout.") }
       let info = try AccountNativeCommand.disk(target.systemUUID)
       guard (info["VolumeUUID"] as? String)?.uppercased() == target.systemUUID,
         let mount = info["MountPoint"] as? String, mount.hasPrefix("/Volumes/")
@@ -134,15 +142,19 @@
       let destination = system.appendingPathComponent(
         InstallerProductIdentity.recoveryAppBundleName, isDirectory: true)
       try resumeAppUpdate(system: system, target: target)
-      let oldResources = destination.appendingPathComponent("Contents/Resources", isDirectory: true)
       let configuration = try RecoveryAccountInstaller.protectedRead(
-        oldResources.appendingPathComponent("install-config.json"), limit: 65536)
+        RecoveryInstallData.configuration(
+          system: system, appName: InstallerProductIdentity.recoveryAppBundleName), limit: 65536)
       guard let config = try JSONSerialization.jsonObject(with: configuration) as? [String: Any],
         config["systemUUID"] as? String == target.systemUUID,
         config["groupUUID"] as? String == target.groupUUID,
         config["prebootUUID"] as? String == target.prebootUUID
       else { throw AccountSetupFailure("The Recovery app does not match this installation.") }
       try RecoveryAccountInstaller.refreshMountedGroup(target)
+      // Complete a verified legacy-data migration before swapping the app. If
+      // an app update rolls back, the old bundle and this baseline both survive.
+      try RecoveryInstallData.migrateLegacy(
+        system: system, appName: InstallerProductIdentity.recoveryAppBundleName, target: target)
       let scratch = system.appendingPathComponent(
         ".omarchy-recovery-update-\(UUID().uuidString)", isDirectory: true)
       try fm.createDirectory(
@@ -154,16 +166,6 @@
       _ = try AccountNativeCommand.checked(
         "/usr/bin/codesign",
         ["--verify", "--deep", "--strict", "-R=" + requirement, candidate.path])
-      let resources = candidate.appendingPathComponent("Contents/Resources", isDirectory: true)
-      try configuration.write(
-        to: resources.appendingPathComponent("install-config.json"), options: .atomic)
-      try fm.copyItem(
-        at: oldResources.appendingPathComponent("AuraPayloads"),
-        to: resources.appendingPathComponent("AuraPayloads"))
-      _ = try AccountNativeCommand.checked(
-        "/usr/bin/codesign", ["--force", "--sign", "-", candidate.path])
-      _ = try AccountNativeCommand.checked(
-        "/usr/bin/codesign", ["--verify", "--deep", "--strict", candidate.path])
       let backup = system.appendingPathComponent(
         "Aurora/Recovery/AppBackups/\(UUID().uuidString).app", isDirectory: true)
       try fm.createDirectory(
@@ -183,6 +185,9 @@
             target: target, backup: backup.lastPathComponent, snapshot: snapshot.lastPathComponent,
             originalFiles: files.map(\.path))), to: pending)
       do {
+        // Keep the target binding beside the immutable backup, never inside it.
+        try RecoveryFileTransaction.write(
+          try JSONEncoder().encode(target), to: backup.appendingPathExtension("json"))
         try fm.moveItem(at: destination, to: backup)
         try RecoveryFileTransaction.flushDirectory(system)
         try RecoveryFileTransaction.flushDirectory(backup.deletingLastPathComponent())
@@ -215,8 +220,7 @@
         try resumeAppUpdate(system: system, target: target)
         throw original
       }
-      // Keep two previous GUI versions; payload/firmware baselines stay in the
-      // configured live app and are never taken from another installation.
+      // Keep two previous GUI versions. Per-install inputs stay in InstallData.
       let backups = backup.deletingLastPathComponent()
       let versions = try fm.contentsOfDirectory(
         at: backups, includingPropertiesForKeys: [.contentModificationDateKey],
@@ -232,6 +236,17 @@
             ?? .distantPast)
       }
       for obsolete in ordered.dropFirst(2) {
+        let identity = obsolete.appendingPathExtension("json")
+        if let bytes = try? RecoveryAccountInstaller.protectedRead(identity, limit: 65536),
+          let owner = try? JSONDecoder().decode(RecoveryAccountTarget.self, from: bytes),
+          owner.systemUUID == target.systemUUID, owner.groupUUID == target.groupUUID,
+          owner.prebootUUID == target.prebootUUID
+        {
+          try? fm.removeItem(at: obsolete)
+          try? fm.removeItem(at: identity)
+          continue
+        }
+        // Older backups predate the external baseline and carry their binding.
         let config = try? RecoveryAccountInstaller.protectedRead(
           obsolete.appendingPathComponent("Contents/Resources/install-config.json"), limit: 65536)
         if let config,
@@ -464,8 +479,9 @@
       guard let mount = system["MountPoint"] as? String else {
         throw AccountSetupFailure("Couldn’t mount the completed installation.")
       }
-      let path = URL(fileURLWithPath: mount).appendingPathComponent(
-        "\(InstallerProductIdentity.recoveryAppBundleName)/Contents/Resources/install-config.json")
+      let path = try RecoveryInstallData.configuration(
+        system: URL(fileURLWithPath: mount), appName: InstallerProductIdentity.recoveryAppBundleName
+      )
       let configBytes = try RecoveryAccountInstaller.protectedRead(path, limit: 65536)
       guard let config = try JSONSerialization.jsonObject(with: configBytes) as? [String: Any],
         config["schema"] as? Int == 2,
