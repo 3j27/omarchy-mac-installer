@@ -30,6 +30,7 @@ INITRD_FILES = (
     *INITRD_EXECUTABLES,
     "usr/lib/omarchy/initcpio/omarchy-mac-encrypt",
     "usr/lib/systemd/system/omarchy-mac-encrypt.service",
+    "usr/lib/systemd/system/sysroot.mount.d/10-omarchy-mac-encrypt-required.conf",
     "usr/lib/systemd/system/cryptsetup.target",
     r"usr/lib/systemd/system/run-systemd-cryptsetup-keydev\x2droot.mount.d/omarchy-mac-encrypt.conf",
     "usr/lib/omarchy/initcpio/omarchy-vendorfw-initrd.sh",
