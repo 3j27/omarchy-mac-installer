@@ -5,7 +5,7 @@
     "fileName": "installer-v0.9.2-omarchy.49.tar.gz",
     "sizeBytes": 18037482,
     "sha256": "180f4a77ba815d8580bd50d6ea140cae97dfce2ce42cbaf88424d3a1268b7a0c",
-    "downstreamRevision": "b504bc8291c721e7c70609ac0d79d5f26ca08175"
+    "downstreamRevision": "ca3ecd51cddfce66ec9fca92342767a5f53eed96"
   },
   "installer": {
     "minimumVersion": "2.2.0",
