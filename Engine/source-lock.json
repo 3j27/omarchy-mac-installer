@@ -141,7 +141,7 @@
     }
   },
   "downstream_overlay": {
-    "version": "v0.9.2-omarchy.47",
+    "version": "v0.9.2-omarchy.48",
     "capability": "candidate_bound_full_os_stage_one_authenticated_recovery",
     "engine_modes": [
       "inspect",
@@ -296,7 +296,7 @@
       {
         "path": "overlay/src/omarchy_recovery.py",
         "destination": "src/omarchy_recovery.py",
-        "sha256": "6ebf12af54f99a3c7225bc4a9a854975145e34ca41dfdf8cd6d24a142fd10c53"
+        "sha256": "bbd65dc2afdbeeded0e5c7a5ab23a7bbed3aec44f59179a15d8011e492905bf9"
       },
       {
         "path": "overlay/src/omarchy_apple_aea.py",
@@ -311,7 +311,7 @@
       {
         "path": "overlay/bin/omarchy-restore-image",
         "destination": "bin/omarchy-restore-image",
-        "sha256": "b761dc30ec21199432436c4655972154e7cb281fb9d43fc0f62e3ee71f20db49"
+        "sha256": "b5081d2db95db5c0b1ce21b1dbc46b84c827b454226f684dc0ca340f213053e4"
       },
       {
         "path": "overlay/tests/test_omarchy_als.py",
@@ -326,7 +326,7 @@
       {
         "path": "overlay/tests/test_omarchy_recovery.py",
         "destination": "tests/test_omarchy_recovery.py",
-        "sha256": "a3bfacec8d838d61d848bd0f9e5e4e1019987722394dd59fdb56524cb0d3924a"
+        "sha256": "ac365f0624aa2e5e893a2d3b3711cd9ebde6588e2790a75c09e9eeddf8ffbdce"
       },
       {
         "path": "overlay/bin/omarchy-restore-image.LICENSE",
@@ -350,7 +350,7 @@
     },
     {
       "path": "rebuild-python-overlay.py",
-      "sha256": "94d4a64a5199fca0dec143561a45b1eafe2d3889d99dbe77879513550cbdb10e"
+      "sha256": "ae0dca474916178bacadd024e24f80ef1839449f4957f109aa91c3d57a583c90"
     },
     {
       "path": "RestoreImage/LICENSE",
@@ -362,7 +362,7 @@
     },
     {
       "path": "RestoreImage/README.md",
-      "sha256": "cfdab30200396aeea7dcde316f981f67e9d0270249bf2c9ff3cc7a7ee07268f0"
+      "sha256": "199b958a3ba569ddc7cd374395e990c28cd14fbc9545f3874bde714704bfc3db"
     },
     {
       "path": "RestoreImage/Reference/generate.sh",
@@ -386,7 +386,7 @@
     },
     {
       "path": "RestoreImage/Sources/RestoreImageCore/Compression.swift",
-      "sha256": "cc95e825acfaba525d43c737a52eddd61bf6bc8b16bfe7b96275f013de5edf76"
+      "sha256": "b9473b3cfd034258cbbdb799117e9c3b6c8daa642e060f06703c85847660f069"
     },
     {
       "path": "RestoreImage/Sources/RestoreImageCore/Ranges.swift",
@@ -418,7 +418,7 @@
     },
     {
       "path": "RestoreImage/Tests/RestoreImageCoreTests/RestoreImageTests.swift",
-      "sha256": "f2873fdb28b89bb500211bf729afe84e97e1afee4257ad1709f5cd38e871127f"
+      "sha256": "f5072556e2adbbdff56ed9fff434892546e6e7aa8ec2ca18d61a11eee5084cd3"
     },
     {
       "path": "RestoreImage/Tests/RestoreImageCoreTests/TransportTests.swift",
@@ -426,11 +426,11 @@
     },
     {
       "path": "RestoreImage/build-record.json",
-      "sha256": "fd29705a84bd647628f7925557fd91722a86effcf753f54c99f9f782d2923895"
+      "sha256": "c62bfb99513c74e281425a9527df7513f26fd4e39f5248a625b82f233b614c0c"
     },
     {
       "path": "RestoreImage/build.sh",
-      "sha256": "278023c7aaea2413890acceff72a09fc787210acf4169c2f839157badd436337"
+      "sha256": "489d2952fef0107b853686583a48cff792387a78f8d8846b21e21ccfe55c5d38"
     },
     {
       "path": "verify-restore-image.py",
@@ -458,9 +458,9 @@
     }
   ],
   "validation_artifact": {
-    "filename": "installer-v0.9.2-omarchy.47.tar.gz",
-    "size_bytes": 18036181,
-    "sha256": "1970c7fa502aef1332668ea6dd155589974ce7b6d50a7ffb4610377c60ec8acf",
+    "filename": "installer-v0.9.2-omarchy.48.tar.gz",
+    "size_bytes": 18033572,
+    "sha256": "fdd0d9ec2f5989cf642dcf4fea43f12de7b5945d74241199547de6ba37cbb9f3",
     "reproducibility_scope": "two-identical-python-overlay-repacks-authenticated-base",
     "signature": "absent",
     "metadata_sha256": "2e6181ce6b6e17c11039e04bfadade8d10ae0e11889885ad8c9960b68f179a5d"
@@ -501,7 +501,7 @@
   },
   "restore_image_source": {
     "repository": "https://github.com/aurora-silicon/omarchy-mac",
-    "commit": "dd74786ada1082ad8e4ff128057384ac882f12e0",
+    "commit": "711594174a95c79deb8a720857d98aea7fc05a6c",
     "path": "Engine/RestoreImage",
     "build_record": "RestoreImage/build-record.json"
   }
