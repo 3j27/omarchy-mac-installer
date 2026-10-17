@@ -18,7 +18,7 @@ for variant in first second; do
     --configuration release --jobs "$jobs" --triple arm64-apple-macosx14.0 \
     -Xswiftc -file-prefix-map -Xswiftc "$package=/Sources/RestoreImage" \
     -Xswiftc -gnone -Xswiftc -Xfrontend -Xswiftc -no-serialize-debugging-options \
-    -Xlinker -oso_prefix -Xlinker "$stage/$variant/" -Xlinker -no_uuid
+    -Xlinker -oso_prefix -Xlinker "$stage/$variant/"
   cp "$stage/$variant/arm64-apple-macosx/release/omarchy-restore-image" "$stage/$variant.bin"
 done
 if ! cmp "$stage/first.bin" "$stage/second.bin"; then

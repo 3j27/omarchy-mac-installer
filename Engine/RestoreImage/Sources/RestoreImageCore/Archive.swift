@@ -90,9 +90,11 @@ func ctr(_ material: Data, data: Data) throws -> Data {
 }
 
 public func decodeImage(_ input: URL, digest: String, output: URL) async throws {
-  try require(validHash(digest) && !exists(output), "Invalid digest or output already exists.")
-  let work = try privateDirectory(beside: output, prefix: ".omarchy-restore-")
-  defer { try? FileManager.default.removeItem(at: work) }
+  try require(validHash(digest), "Invalid input digest.")
+  let workspace = try RestoreWorkspace(beside: output)
+  let work = workspace.url
+  defer { withExtendedLifetime(workspace) {} }
+  try require(!exists(output), "Output already exists.")
   let (source, size) = try openRegular(input, maximum: 128 << 30)
   defer { try? source.close() }
   let staged = work.appendingPathComponent("BaseSystem.dmg.aea")
@@ -124,8 +126,9 @@ public func decodeImage(_ input: URL, digest: String, output: URL) async throws 
   try writePrivate(key, to: keyPath)
   let decoded = work.appendingPathComponent("BaseSystem.dmg")
   try runNative(
-    "/usr/bin/aea", ["decrypt", "-i", staged.path, "-o", decoded.path, "-key", keyPath.path])
-  try runNative("/usr/bin/hdiutil", ["imageinfo", "-plist", decoded.path])
+    "/usr/bin/aea", ["decrypt", "-i", staged.path, "-o", decoded.path, "-key", keyPath.path],
+    lease: workspace.lease)
+  try runNative("/usr/bin/hdiutil", ["imageinfo", "-plist", decoded.path], lease: workspace.lease)
   try Task.checkCancellation()
   try require(
     chmod(decoded.path, 0o600) == 0 && link(decoded.path, output.path) == 0,

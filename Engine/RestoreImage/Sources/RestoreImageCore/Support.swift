@@ -115,10 +115,14 @@ public func verifyStage1(_ input: URL, digest: String, size: String) throws {
   try require(data.count == size && data.sha256 == digest, "Raw Stage 1 is missing or changed.")
 }
 
-func runNative(_ executable: String, _ arguments: [String], timeout: TimeInterval = 1800) throws {
+func runNative(
+  _ executable: String, _ arguments: [String], timeout: TimeInterval = 1800,
+  lease: FileHandle? = nil
+) throws {
   let process = Process()
   process.executableURL = URL(fileURLWithPath: executable)
   process.arguments = arguments
+  process.standardInput = lease ?? FileHandle.nullDevice
   process.standardOutput = FileHandle.nullDevice
   process.standardError = FileHandle.standardError
   try process.run()
