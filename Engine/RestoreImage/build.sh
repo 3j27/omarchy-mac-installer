@@ -6,6 +6,22 @@ if (( $# != 1 )) || [[ $(uname -s) != "Darwin" || $(uname -m) != "arm64" ]]; the
   exit 1
 fi
 package=$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)
+# The bundled executable is reproduced in CI. Refuse a different compiler/SDK
+# before building rather than pinning bytes no other producer can reproduce.
+python3 - "$package/build-record.json" <<'PYTOOLS'
+import json
+import subprocess
+import sys
+from pathlib import Path
+record = json.loads(Path(sys.argv[1]).read_text())
+swift = subprocess.check_output(['xcrun', 'swift', '--version'], text=True).strip()
+sdk = subprocess.check_output(['xcrun', '--show-sdk-version'], text=True).strip()
+if (swift.splitlines()[0] != record['swift'].splitlines()[0]
+        or sdk != record['sdk']):
+    raise SystemExit('RestoreImage toolchain differs from build-record.json; '
+                     'select the recorded Swift compiler and SDK with DEVELOPER_DIR')
+print(swift.splitlines()[0] + '; SDK ' + sdk)
+PYTOOLS
 mkdir -p "$1"
 output=$(cd "$1" && pwd -P)
 jobs=${OMARCHY_BUILD_JOBS:-10}
@@ -14,12 +30,12 @@ stage=$(mktemp -d "$output/.restore-image-build.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 export ZERO_AR_DATE=1
 for variant in first second; do
-  swift build --build-system native --package-path "$package" --scratch-path "$stage/$variant" \
+  xcrun swift build --build-system native --package-path "$package" --scratch-path "$stage/$variant" \
     --configuration release --jobs "$jobs" --triple arm64-apple-macosx14.0 \
     -Xswiftc -file-prefix-map -Xswiftc "$package=/Sources/RestoreImage" \
     -Xswiftc -gnone -Xswiftc -Xfrontend -Xswiftc -no-serialize-debugging-options \
     -Xlinker -oso_prefix -Xlinker "$stage/$variant/"
-  binary_directory=$(swift build --build-system native --package-path "$package" \
+  binary_directory=$(xcrun swift build --build-system native --package-path "$package" \
     --scratch-path "$stage/$variant" --configuration release \
     --triple arm64-apple-macosx14.0 --show-bin-path)
   cp "$binary_directory/omarchy-restore-image" "$stage/$variant.bin"

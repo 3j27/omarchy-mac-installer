@@ -2,8 +2,8 @@
   "schema": 1,
   "reference_repository": "https://github.com/erykwieliczko/macos-firmware-extract",
   "reference_commit": "71b413af680edec1808a709cb7addfbde5c21cfc",
-  "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx26.0",
-  "sdk": "27.0",
+  "swift": "Apple Swift version 6.3.2 (swiftlang-6.3.2.1.108 clang-2100.1.1.101)\nTarget: arm64-apple-macosx26.0",
+  "sdk": "26.5",
   "target": "arm64-apple-macosx14.0",
   "reproducibility": "two-identical-clean-builds-same-host-pinned-toolchain",
   "sources": [
@@ -13,7 +13,7 @@
     },
     {
       "path": "build.sh",
-      "sha256": "489d2952fef0107b853686583a48cff792387a78f8d8846b21e21ccfe55c5d38"
+      "sha256": "de28517738c69512dc066699ea24ea040b0e020f26204a847f6077b8a767f823"
     },
     {
       "path": "Sources/RestoreImageCLI/CLI.swift",
@@ -48,6 +48,6 @@
       "sha256": "45008e07ab13a7c03959aae7ed6ff49d4fc5068a63760f78c1de9dc8a810c6b8"
     }
   ],
-  "binary_sha256": "b5081d2db95db5c0b1ce21b1dbc46b84c827b454226f684dc0ca340f213053e4",
-  "binary_size": 466392
+  "binary_sha256": "f443d4c4477b9d80800390d2398655c64406022754d4ab34cea577a8ffa0b64c",
+  "binary_size": 470648
 }

@@ -4,12 +4,13 @@ This Swift port lives with the installer and implements `omarchy-restore-image` 
 
 The implementation and recipe format derive from [Eryk Wieliczko's macos-firmware-extract](https://github.com/erykwieliczko/macos-firmware-extract/tree/71b413af680edec1808a709cb7addfbde5c21cfc) (MIT). Original implementation copyright Eryk Wieliczko; Swift changes copyright Aurora Silicon contributors. The pinned reference imports the original production helper from installer revision `bae75007c3b6247e5a14a2f653c15693092a7841`. Development-only commands are intentionally absent.
 
-Build and test on macOS with Xcode. The shipped helper’s reproducibility build selects the recorded Swift 6.3.3 / macOS 26.5 SDK toolchain:
+Build and test on macOS with Xcode. The shipped helper’s reproducibility build uses Xcode 26.5, Apple Swift 6.3.2 and the macOS 26.5 SDK, matching the CI producer:
 
 ```sh
 swift test --package-path Engine/RestoreImage
 swift test --package-path Engine/RestoreImage -c release
 swift build --package-path Engine/RestoreImage -c release
+DEVELOPER_DIR=/Applications/Xcode_26.5.app/Contents/Developer bash Engine/RestoreImage/build.sh out/restore-image
 ```
 
 The command-line interface remains:
@@ -31,4 +32,4 @@ APFS LZVN chunks may contain padding after their end-of-stream instruction. The 
 
 The linker emits its content-derived UUID, which current macOS requires.
 
-`build.sh OUTPUT_DIRECTORY` selects SwiftPM's native build backend, queries its binary output path, performs two clean release builds using the same toolchain, requires byte identity, and writes the executable plus a source/toolchain/digest manifest. The engine's source lock records those inputs and the resulting binary. This establishes repeatability on that recorded toolchain; it does not claim reproducibility across different Xcode versions.
+`build.sh OUTPUT_DIRECTORY` rejects a compiler or SDK that differs from `build-record.json` before building. It invokes Swift through `xcrun`, selects SwiftPM's native build backend, queries its binary output path, performs two clean release builds using the same toolchain, requires byte identity, and writes the executable plus a source/toolchain/digest manifest. The engine's source lock records those inputs and the resulting binary. This establishes repeatability on that recorded toolchain; it does not claim reproducibility across different Xcode versions.

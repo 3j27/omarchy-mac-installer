@@ -3,7 +3,9 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -14,6 +16,31 @@ SPEC.loader.exec_module(MODULE)
 
 
 class RestoreProvenanceTests(unittest.TestCase):
+    def test_producer_rejects_compiler_or_sdk_drift_before_building(self):
+        record = json.loads((ENGINE / 'RestoreImage/build-record.json').read_text())
+        for swift, sdk in [('wrong compiler', record['sdk']), (record['swift'], 'wrong SDK')]:
+            with self.subTest(swift=swift, sdk=sdk), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'build.sh').write_bytes((ENGINE / 'RestoreImage/build.sh').read_bytes())
+                (root / 'build-record.json').write_text(json.dumps(record))
+                tools = root / 'tools'
+                tools.mkdir()
+                (tools / 'uname').write_text(
+                    '#!/bin/sh\ncase "$1" in -s) echo Darwin;; -m) echo arm64;; esac\n')
+                (tools / 'xcrun').write_text(
+                    '#!/bin/sh\ncase "$*" in "swift --version") printf "%s\\n" "$TEST_SWIFT";; '
+                    '--show-sdk-version) printf "%s\\n" "$TEST_SDK";; *) exit 97;; esac\n')
+                for tool in tools.iterdir():
+                    tool.chmod(0o755)
+                output = root / 'output'
+                result = subprocess.run(['bash', str(root / 'build.sh'), str(output)],
+                                        env={**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'],
+                                             'TEST_SWIFT': swift, 'TEST_SDK': sdk},
+                                        capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('toolchain differs from build-record.json', result.stderr)
+                self.assertFalse(output.exists())
+
     def test_source_and_binary_are_bound_to_build_record(self):
         with tempfile.TemporaryDirectory() as directory:
             engine = Path(directory)
