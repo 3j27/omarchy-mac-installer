@@ -102,8 +102,6 @@ class Candidates:
         manifest = json.loads((directory / "manifest.json").read_text())
         require(manifest.get("hardware_profile", "legacy") == self.hardware_profile,
                 "hardware profile differs from the authenticated manifest")
-        require(self.kind != "channel" or self.hardware_profile == "legacy",
-                "channel images must retain the legacy hardware profile")
         require(self.kind in ("candidate", "channel"), f"the set is of an unknown kind: {self.kind}")
         self.roles = {p.get("role", p["name"]): p["name"] for p in self.summary["packages"]}
         self._listings: dict[str, list[str]] = {}

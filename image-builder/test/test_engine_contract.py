@@ -98,13 +98,13 @@ def engine_metadata(package: str) -> dict:
     return metadata
 
 
-def written_metadata(package: str, out: Path, hardware_profile: str = "legacy") -> dict:
+def written_metadata(package: str, out: Path, hardware_profile: str = "legacy", recovery_digest: str = "") -> dict:
     """The installer_data.json build-mac-image writes for PACKAGE."""
     candidates = out.parent / "metadata-set"
     candidates.mkdir(exist_ok=True)
     (candidates / "import.json").write_text(json.dumps({"hardware_profile": hardware_profile}))
-    subprocess.run(["bash", "-c", 'source "$1" && candidates="$4" && write_installer_data "$2" "$3"', "bash",
-                    str(ROOT / "bin/build-mac-image"), package, str(out), str(candidates)], check=True)
+    subprocess.run(["bash", "-c", 'source "$1" && candidates="$4" && field() { printf %s "$recovery_digest"; }; recovery_digest="$5"; write_installer_data "$2" "$3"', "bash",
+                    str(ROOT / "bin/build-mac-image"), package, str(out), str(candidates), recovery_digest], check=True)
     return json.loads(out.read_text())
 
 
@@ -153,6 +153,26 @@ class EngineContractTest(unittest.TestCase):
         self.assertEqual(engine_admits(metadata, payload, "j700ap"), [["26.6.2"]])
         with self.assertRaisesRegex(omarchy_asahi.AsahiAdapterError, "not qualified"):
             engine_admits(metadata, payload, "j314sap")
+
+    def test_native_recovery_input_passes_builder_and_engine_admission(self):
+        recovery = self.out / "recovery"
+        digest = fixtures.make_recovery_app(recovery)
+        metadata = self.out / "installer_data.json"
+        self.assertEqual(written_metadata(NAME, metadata, "neo", digest),
+                         check.expected_metadata(NAME, "neo", native_recovery=True))
+        payload = self.out / NAME
+        fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID,
+                               hardware_profile="neo", recovery_app=recovery)
+        check.check_payload("edge", payload, metadata, hardware_profile="neo", recovery_digest=digest)
+        self.assertEqual(engine_admits(metadata, payload, "j700ap"), [["26.6.2"]])
+        executable = recovery / fixtures.recovery_app.APP / "Contents/MacOS/OmarchyRecovery"
+        executable.write_bytes(b"changed executable")
+        fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID,
+                               hardware_profile="neo", recovery_app=recovery)
+        with self.assertRaisesRegex(check.CheckError, "Recovery"):
+            check.check_payload("edge", payload, metadata, hardware_profile="neo", recovery_digest=digest)
+        with self.assertRaisesRegex(omarchy_asahi.AsahiAdapterError, "Recovery"):
+            engine_admits(metadata, payload, "j700ap")
 
     def test_neo_missing_or_empty_board_boot_payloads_are_rejected(self):
         metadata = self.out / "installer_data.json"

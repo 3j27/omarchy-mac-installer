@@ -73,7 +73,10 @@
         "aurora-audio",
         "alsa-ucm-conf-aurora",
         "speakerguardd",
-        "omarchy-aurora-firmware"
+        "omarchy-aurora-firmware",
+        "mesa-aurora",
+        "vulkan-aurora",
+        "aurora-bless"
       ]
     }
   }

@@ -54,6 +54,8 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "builder"))
+import recovery_app  # noqa: E402
 ROOT_UUID = "4f4d5801-524f-4f54-8000-000000000001"
 BOOT_UUID = "4f4d5801-424f-4f54-8000-000000000001"
 ESP_UUID = "4F4D-5801"
@@ -129,11 +131,12 @@ def require(condition: bool, message: str) -> None:
         raise CheckError(message)
 
 
-def expected_metadata(package: str, hardware_profile: str = "legacy") -> dict:
+def expected_metadata(package: str, hardware_profile: str = "legacy", native_recovery: bool = False) -> dict:
     require(hardware_profile in ("legacy", "neo"), "unknown hardware profile")
     return {
         "os_list": [
             {
+                **({"recovery_gui": "omarchy-native-v1"} if native_recovery else {}),
                 "boot_object": "m1n1.bin",
                 "default_os_name": "Omarchy",
                 "icon": ICON,
@@ -211,7 +214,7 @@ def check_plaintext_root(header: bytes, where: str) -> None:
 
 
 def check_payload(lane: str, package: Path, installer_data: Path, profile: str = "release",
-                  hardware_profile: str | None = None) -> dict[str, str]:
+                  hardware_profile: str | None = None, recovery_digest: str | None = None) -> dict[str, str]:
     check_profile(lane, profile)
     name = package.name
     match = PAYLOAD_NAME.fullmatch(name)
@@ -227,7 +230,10 @@ def check_payload(lane: str, package: Path, installer_data: Path, profile: str =
             "installer_data must name exactly one OS")
     if hardware_profile is None:
         hardware_profile = "neo" if metadata.get("os_list", [{}])[0].get("allowed_device_classes") == ["j700ap"] else "legacy"
-    require(metadata == expected_metadata(name, hardware_profile), f"{installer_data} is not the installer_data for {name}")
+    native_recovery = metadata.get("os_list", [{}])[0].get("recovery_gui") == "omarchy-native-v1"
+    require(recovery_digest is None or native_recovery == bool(recovery_digest),
+            "Recovery metadata does not match the pinned inputs")
+    require(metadata == expected_metadata(name, hardware_profile, native_recovery), f"{installer_data} is not the installer_data for {name}")
 
     try:
         archive = zipfile.ZipFile(package)
@@ -255,6 +261,14 @@ def check_payload(lane: str, package: Path, installer_data: Path, profile: str =
                 f"unexpected member {info.filename}",
             )
             members[info.filename] = info
+        if native_recovery:
+            try:
+                recovery_app.validate_zip(archive, recovery_digest)
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                raise CheckError(f"invalid native Recovery payload: {error}") from error
+        else:
+            require(not any(n.startswith(recovery_app.PREFIX) for n in members),
+                    "Recovery app present without native Recovery metadata")
         required = set(REQUIRED_MEMBERS)
         if hardware_profile == "neo":
             required.update(("esp/aurora/stage1-j700.bin", "esp/m1n1/boot-j700.bin"))
@@ -773,8 +787,11 @@ def check_provenance(lane: str, directory: Path) -> None:
     hardware_profile = fields.get("hardware_profile", ["legacy"])[0]
     require(report.get("hardware_profile", "legacy") == hardware_profile,
             "INSPECTION hardware profile does not match PROVENANCE")
-    require(not channel or hardware_profile == "legacy", "channel images must retain the legacy hardware profile")
-    check_payload(lane, payload, installer_data, profile, hardware_profile)
+    require(hardware_profile in ("legacy", "neo"), "invalid hardware profile")
+    require(not channel or hardware_profile == fields.get("input.hardware_profile", ["legacy"])[0],
+            "channel hardware profile does not match the pinned inputs")
+    check_payload(lane, payload, installer_data, profile, hardware_profile,
+                  fields.get("input.recovery_app_manifest_sha256", [""])[0])
 
 
 def is_channel(fields: dict[str, list[str]], prefix: str = "") -> bool:
@@ -871,7 +888,17 @@ def check_descriptor(lane: str, directory: Path) -> None:
     require(installer_data.is_file(), "installer_data.json is not beside IMAGE")
     require(provenance_fields.get("hardware_profile", ["legacy"]) == fields.get("hardware_profile", ["legacy"]),
             "IMAGE hardware profile does not match PROVENANCE")
-    digests = check_payload(lane, payload, installer_data, profile, fields.get("hardware_profile", ["legacy"])[0])
+    for record, label in ((fields, "IMAGE"), (provenance_fields, "PROVENANCE")):
+        if "hardware_profile" in record:
+            once(record, "hardware_profile", label)
+    require(not channel or fields.get("hardware_profile", ["legacy"]) == input_fields.get("hardware_profile", ["legacy"]),
+            "IMAGE hardware profile does not match the pinned inputs")
+    for key in ("recovery_app_manifest_sha256",):
+        require(fields.get(key) == input_fields.get(key)
+                and provenance_fields.get("input." + key) == input_fields.get(key),
+                f"IMAGE {key} does not match the pinned inputs")
+    digests = check_payload(lane, payload, installer_data, profile, fields.get("hardware_profile", ["legacy"])[0],
+                            input_fields.get("recovery_app_manifest_sha256", [""])[0])
     recorded = {}
     for value in fields.get("image_sha256", []):
         require("|" in value, "IMAGE has a malformed image_sha256")

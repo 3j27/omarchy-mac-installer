@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import struct
@@ -47,6 +48,7 @@ def load(name: str, relative: str):
 
 candidate_set = load("candidate_set", "builder/candidate_set.py")
 test_image_pin = load("test_image_pin", "builder/test_image_pin.py")
+recovery_app = load("recovery_app", "builder/recovery_app.py")
 POLICY = json.loads((ROOT / "builder/candidate-trust/policy.json").read_text())
 
 VERSIONS = {
@@ -69,6 +71,9 @@ NEO_VERSIONS.update({
     "alsa-ucm-conf-aurora": "10.aurora2-1",
     "speakerguardd": "0.1.0.aurora2-1",
     "omarchy-aurora-firmware": "20261014-2",
+    "mesa-aurora": "26.3.0_devel-1",
+    "vulkan-aurora": "26.3.0_devel-1",
+    "aurora-bless": "0.4.4.aurora2-1",
 })
 
 
@@ -264,9 +269,9 @@ def channel_trust(base: Path, candidate: Signer, channel: Signer) -> Path:
     return trust
 
 
-def channel_contents() -> dict[str, dict[str, bytes]]:
+def channel_contents(hardware_profile="legacy") -> dict[str, dict[str, bytes]]:
     """Each set package's files as edge builds them: the -dev runtime ships no source revision."""
-    contents = default_contents("e1b0e5e9b")
+    contents = default_contents("e1b0e5e9b", hardware_profile)
     for role in CHANNEL_NAMES:
         contents[role] = {path: data for path, data in contents[role].items() if "source-revision" not in path}
     return contents
@@ -280,18 +285,20 @@ def desc(name: str, version: str, filename: str, path: Path, arch: str, provides
 
 
 def make_channel(directory: Path, signer: Signer, *, versions=None, contents=None, extra=(), unsigned=(),
-                 signers=None, entry_edit=None) -> tuple[Path, str]:
+                 signers=None, entry_edit=None, hardware_profile="legacy") -> tuple[Path, str]:
     """An edge snapshot in DIRECTORY: packages/ holds every set archive and its detached signature by
     SIGNER (SIGNERS per name, none for UNSIGNED), and omarchy.db lists them, plus EXTRA (name, version)
     entries. ENTRY_EDIT(name, desc) may rewrite an entry. Returns the database and its sha256."""
-    versions = dict(CHANNEL_VERSIONS, **(versions or {}))
-    contents = contents or channel_contents()
+    base_versions = dict(NEO_VERSIONS if hardware_profile == "neo" else VERSIONS)
+    base_versions.update({role: version for role, version in CHANNEL_VERSIONS.items() if role in base_versions})
+    versions = dict(base_versions, **(versions or {}))
+    contents = contents or channel_contents(hardware_profile)
     packages = directory / "packages"
     packages.mkdir(parents=True)
     entries = directory / "entries"
     entries.mkdir()
     signers = signers or {}
-    for role in VERSIONS:
+    for role in base_versions:
         name = CHANNEL_NAMES.get(role, role)
         version = versions[role]
         filename = f"{name}-{version}-aarch64.pkg.tar.xz"
@@ -314,6 +321,30 @@ def make_channel(directory: Path, signer: Signer, *, versions=None, contents=Non
     return database, candidate_set.digest(database)
 
 
+def make_recovery_app(directory: Path, **info_changes) -> str:
+    """Synthetic bundle inventory, not a valid code signature or runnable app."""
+    files = {
+        "Contents/Info.plist": plistlib.dumps(dict({
+            "OmarchyRecoveryBuildMode": "recovery", "CFBundleExecutable": "OmarchyRecovery",
+            "CFBundleDisplayName": recovery_app.APP.removesuffix(".app"),
+            "OmarchyRecoveryDataLayout": "external-install-data-v1",
+        }, **info_changes)),
+        "Contents/MacOS/OmarchyRecovery": b"synthetic Recovery executable",
+        "Contents/Resources/en.lproj/InfoPlist.strings": ('"CFBundleDisplayName" = "' + recovery_app.APP.removesuffix(".app") + '";').encode(),
+        "Contents/_CodeSignature/CodeResources": b"synthetic signature resource inventory",
+    }
+    for name, data in files.items():
+        path = directory / recovery_app.APP / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    manifest = directory / "omarchy-recovery-app.json"
+    manifest.write_text(json.dumps({"schema": 1, "buildMode": "recovery", "files": {
+        name: {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        for name, data in files.items()
+    }}, sort_keys=True))
+    return candidate_set.digest(manifest)
+
+
 # ── payload ───────────────────────────────────────────────────────────────
 PAYLOAD_MEMBERS = ("esp", "boot.img", "root.img", "omarchy-volume.icns")
 
@@ -329,7 +360,7 @@ def payload_pe(extra: bytes) -> bytes:
 
 
 def write_payload(zip_path: Path, boot_uuid: str, root_uuid: str, omit: tuple[str, ...] = (),
-                  empty: tuple[str, ...] = (), grow: dict[str, int] | None = None, hardware_profile: str = "legacy") -> None:
+                  empty: tuple[str, ...] = (), grow: dict[str, int] | None = None, hardware_profile: str = "legacy", recovery_app: Path | None = None) -> None:
     """The payload zip build-mac-image packages, with small stand-ins for its images. OMIT drops members,
     EMPTY truncates them and GROW appends that many zero bytes to each member it names."""
     with tempfile.TemporaryDirectory() as temporary:
@@ -356,6 +387,8 @@ def write_payload(zip_path: Path, boot_uuid: str, root_uuid: str, omit: tuple[st
             (payload / "esp/aurora").mkdir()
             (payload / "esp/aurora/stage1-j700.bin").write_bytes(aura_stage1())
             shutil.copy(payload / "esp/m1n1/boot.bin", payload / "esp/m1n1/boot-j700.bin")
+        if recovery_app is not None:
+            shutil.copytree(recovery_app, payload / "esp/aurora/recovery")
         for member in omit:
             (payload / member).unlink()
         for member in empty:
@@ -504,11 +537,15 @@ def make_root(root: Path, candidates: Path, layout: str | None = None) -> None:
     uboot = member(candidate_set.required_owners(summary.get("hardware_profile", "legacy"))["usr/lib/asahi-boot/u-boot-nodtb.bin"], "usr/lib/asahi-boot/u-boot-nodtb.bin")
     write(root, "usr/lib/asahi-boot/m1n1.bin", m1n1)
     write(root, "usr/lib/asahi-boot/u-boot-nodtb.bin", uboot)
-    dtbs = sorted((f"{m}.dtb" for m in (*MODELS, "s8000-n66")), key=str.encode)
+    models = (*MODELS, "s8000-n66", *(("t8140-j700",) if summary.get("hardware_profile") == "neo" else ()))
+    dtbs = sorted((f"{m}.dtb" for m in models), key=str.encode)
     stage2 = m1n1 + b"".join(dtb(name.removesuffix(".dtb")) for name in dtbs)
     compressor = zlib.compressobj(wbits=31)
     stage2 += compressor.compress(uboot) + compressor.flush() + b"chosen.asahi,efi-system-partition=EFI\n"
     write(root, "boot/efi/m1n1/boot.bin", stage2)
+    if summary.get("hardware_profile") == "neo":
+        write(root, "boot/efi/m1n1/boot-j700.bin", stage2)
+        write(root, "boot/efi/aurora/stage1-j700.bin", member("aura", "usr/share/aura/stage1/aura-raw.bin"))
     write(root, "etc/m1n1.conf", "# m1n1 options\nchosen.asahi,efi-system-partition=EFI\nunknown=ignored\n")
     loader = pe_image({".text": b"Limine loader"})
     write(root, "usr/share/limine/BOOTAA64.EFI", loader)
@@ -536,7 +573,13 @@ def make_root(root: Path, candidates: Path, layout: str | None = None) -> None:
                                          "alsa-ucm-conf-asahi", "asahi-audio", "vulkan-asahi", "asahi-bless", "iwd",
                                          "networkmanager", "bluez", "wireplumber")}
     provides = {p["name"]: (p["role"],) for p in summary["packages"] if p.get("role", p["name"]) != p["name"]}
-    provides.update({"aura": ("m1n1-aurora",), "uboot-aurora": ("uboot-asahi",)})
+    replacements = {"aura": "m1n1-aurora", "uboot-aurora": "uboot-asahi", "mesa-aurora": "mesa",
+                    "vulkan-aurora": "vulkan-asahi", "aurora-bless": "asahi-bless",
+                    "aurora-audio": "asahi-audio", "alsa-ucm-conf-aurora": "alsa-ucm-conf-asahi"}
+    for name, role in replacements.items():
+        if name in versions:
+            provides[name] = (role,)
+            others.pop(role, None)
     for name, version in {**versions, **others}.items():
         local_package(root, name, version, owners.get(name, []), provides.get(name, ()))
     state = root / "var/lib/omarchy"

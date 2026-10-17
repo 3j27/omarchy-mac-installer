@@ -716,6 +716,7 @@ class RuntimeLayoutInspectionTest(unittest.TestCase):
 
 
 class ChannelImageInspectionTest(unittest.TestCase):
+    hardware_profile = "legacy"
     """A public image built from an edge channel set (builder/channel_set.py)."""
 
     @classmethod
@@ -725,10 +726,10 @@ class ChannelImageInspectionTest(unittest.TestCase):
         cls.candidate = fixtures.Signer(cls.base / "candidate")
         cls.channel = fixtures.Signer(cls.base / "channel", "Omarchy fixture <pkgs@example.invalid>")
         cls.trust = fixtures.channel_trust(cls.base, cls.candidate, cls.channel)
-        database, sha256 = fixtures.make_channel(cls.base / "edge", cls.channel)
+        database, sha256 = fixtures.make_channel(cls.base / "edge", cls.channel, hardware_profile=cls.hardware_profile)
         channel_set = fixtures.load("channel_set", "builder/channel_set.py")
         cls.set = cls.base / "set"
-        cls.summary = channel_set.snapshot(database, sha256, "edge", cls.base / "edge/packages", cls.set, cls.trust)
+        cls.summary = channel_set.snapshot(database, sha256, "edge", cls.base / "edge/packages", cls.set, cls.trust, cls.hardware_profile)
         cls.good = cls.base / "root"
         fixtures.make_root(cls.good, cls.set, "e1b0e5e9b")
 
@@ -795,6 +796,15 @@ class ChannelImageInspectionTest(unittest.TestCase):
     def test_the_factory_must_be_sealed_for_the_channel_set(self):
         fixtures.write(self.factory, "var/lib/omarchy/factory-sealed", "format=2\ncandidate_set=x\ncandidate_source_commit=y\n")
         self.assertFails("factory", "records another channel set")
+
+
+class NeoChannelImageInspectionTest(ChannelImageInspectionTest):
+    hardware_profile = "neo"
+
+    def test_supported_models_remain_neo_only(self):
+        report = self.inspect()
+        self.assertEqual(report["hardware_profile"], "neo")
+        self.assertEqual(report["supported_models"], ["t8140-j700"])
 
 
 class TestImagePinTest(unittest.TestCase):
