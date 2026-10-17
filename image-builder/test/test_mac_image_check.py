@@ -193,11 +193,21 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
             with self.subTest(mode=mode), self.assertRaisesRegex(check.CheckError, "names no single set"):
                 getattr(check, f"check_{mode}")("edge", self.out)
 
+    def test_payload_board_scope_must_match_the_recorded_hardware_profile(self):
+        self.build()
+        metadata = self.out / "installer_data.json"
+        metadata.write_text(json.dumps(check.expected_metadata(NAME, "neo")))
+        fixtures.write_payload(self.out / NAME, check.BOOT_UUID, check.ROOT_UUID, hardware_profile="neo")
+        check.check_payload("edge", self.out / NAME, metadata, hardware_profile="neo")
+        with self.assertRaisesRegex(check.CheckError, "not the installer_data"):
+            check.check_payload("edge", self.out / NAME, metadata, hardware_profile="legacy")
+
     def test_the_payload_passes_the_engine_contract(self):
         self.build()
         metadata = json.loads((self.out / "installer_data.json").read_text())
         engine = json.loads((ROOT.parent / "Engine/installer_data.json").read_text())
-        engine["os_list"][0]["package"] = NAME
+        engine["os_list"][0].update(package=NAME, allowed_device_classes=None,
+                                    excluded_device_classes=["j700ap"])
         self.assertEqual(metadata, engine)
 
     def test_a_public_image_is_named_for_its_lane_date_and_package_set(self):

@@ -201,7 +201,9 @@ public enum RecoveryAccountInstaller {
     for identifier in [target.systemUUID, target.dataUUID, target.prebootUUID] {
       var info = try AccountNativeCommand.disk(identifier)
       if (info["MountPoint"] as? String)?.isEmpty != false {
-        _ = try AccountNativeCommand.checked("/usr/sbin/diskutil", ["mount", identifier])
+        _ = try AccountNativeCommand.checked(
+          "/usr/sbin/diskutil",
+          writable ? ["mount", identifier] : ["mount", "readOnly", identifier])
         info = try AccountNativeCommand.disk(identifier)
       }
       guard (info["VolumeUUID"] as? String)?.uppercased() == identifier,
@@ -680,6 +682,9 @@ public enum RecoveryAccountInstaller {
         ctx.system.appendingPathComponent("System/Library/CoreServices/SystemVersion.plist"),
         ctx.system.appendingPathComponent(
           "System/Library/CoreServices/SystemVersion-disabled.plist"),
+        ctx.system.appendingPathComponent(".IAPhysicalMedia"),
+        ctx.system.appendingPathComponent("IAPhysicalMedia-disabled.plist"),
+        ctx.system.appendingPathComponent("Aurora/Recovery/State/installation.json"),
       ]
   }
 
@@ -691,13 +696,15 @@ public enum RecoveryAccountInstaller {
       FinalizationJournal.self, from: protectedRead(pending, limit: 65536))
     guard saved.target == target, validName(saved.username),
       saved.directory.hasPrefix("finalize-"),
-      UUID(uuidString: String(saved.directory.dropFirst("finalize-".count))) != nil
+      UUID(uuidString: String(saved.directory.dropFirst("finalize-".count))) != nil,
+      [9, 12].contains(saved.files.count)
     else {
       throw AccountSetupFailure("The interrupted account update targets another installation.")
     }
     let backup = ctx.state.deletingLastPathComponent().appendingPathComponent(saved.directory)
     let transaction = try RecoveryFileTransaction.resume(
-      directory: backup, files: finalizationFiles(ctx, username: saved.username),
+      directory: backup,
+      files: Array(finalizationFiles(ctx, username: saved.username).prefix(saved.files.count)),
       originalFiles: saved.files.map { URL(fileURLWithPath: $0) })
     let status = try? Data(contentsOf: backup.appendingPathComponent("status"))
     if status != Data("committed\n".utf8) { try transaction.restore() }
@@ -845,20 +852,10 @@ public enum RecoveryAccountInstaller {
             && $0["VolumeOwner"] as? Bool == true
         })
       else { throw AccountSetupFailure("Recovery ownership changed during finalization.") }
-      let visibleVersion = ctx.system.appendingPathComponent(
-        "System/Library/CoreServices/SystemVersion.plist")
-      let hiddenVersion = ctx.system.appendingPathComponent(
-        "System/Library/CoreServices/SystemVersion-disabled.plist")
-      let movesVersion =
-        FileManager.default.fileExists(atPath: visibleVersion.path)
-        && FileManager.default.fileExists(
-          atPath: ctx.system.appendingPathComponent(".IAPhysicalMedia").path)
-      try RecoveryVersionMetadata.hideForInitialRecovery(system: ctx.system)
+      let relocated = try RecoveryVersionMetadata.finishAccountSetup(system: ctx.system)
       record.phase = "finalized"
       try save(record, ctx)
-      try transaction.commit(
-        relocated: movesVersion
-          ? [visibleVersion.standardizedFileURL.path: hiddenVersion] : [:])
+      try transaction.commit(relocated: relocated)
       committed = true
       try FileManager.default.removeItem(at: pending)
       return record

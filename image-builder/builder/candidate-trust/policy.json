@@ -21,8 +21,8 @@
   "boot_packages": [
     "linux-aurora",
     "linux-aurora-headers",
-    "aura",
-    "uboot-aurora",
+    "m1n1-aurora",
+    "uboot-asahi",
     "limine-mkinitcpio-hook"
   ],
   "channel_runtime_packages": [
@@ -59,10 +59,22 @@
       "omarchy-mac-boot": "omarchy-mac-boot"
     }
   },
-  "support_packages": [
-    "aurora-audio",
-    "alsa-ucm-conf-aurora",
-    "speakerguardd",
-    "omarchy-aurora-firmware"
-  ]
+  "support_packages": [],
+  "hardware_profiles": {
+    "neo": {
+      "boot_packages": [
+        "linux-aurora",
+        "linux-aurora-headers",
+        "aura",
+        "uboot-aurora",
+        "limine-mkinitcpio-hook"
+      ],
+      "support_packages": [
+        "aurora-audio",
+        "alsa-ucm-conf-aurora",
+        "speakerguardd",
+        "omarchy-aurora-firmware"
+      ]
+    }
+  }
 }

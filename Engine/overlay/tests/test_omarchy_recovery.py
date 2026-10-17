@@ -113,6 +113,7 @@ class RecoveryTests(unittest.TestCase):
         config = json.loads((app / "Contents/Resources/install-config.json").read_text())
         self.assertEqual(config, result["configuration"])
         self.assertEqual(config["systemUUID"], SYSTEM)
+        self.assertFalse(config["allowCustomBootArguments"])
         self.assertEqual(config["espUUID"], ESP)
         self.assertEqual(config["volumeName"], self.system.name)
         payloads = app / "Contents/Resources/AuraPayloads"
@@ -132,6 +133,11 @@ class RecoveryTests(unittest.TestCase):
         self.assertTrue(self.boot.is_file())
         self.assertEqual(len(self.commands), 4)
         self.assertEqual(self.commands[1][1:4], ["--force", "--sign", "-"])
+
+    def test_neo_configuration_explicitly_allows_custom_boot_arguments(self):
+        self.installer.sysinfo = SimpleNamespace(device_class="j700ap")
+        result = self.stage()
+        self.assertTrue(result["configuration"]["allowCustomBootArguments"])
 
     def test_second_install_reuses_only_matching_native_app(self):
         first = self.stage()

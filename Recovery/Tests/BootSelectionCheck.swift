@@ -3,7 +3,10 @@ import Foundation
 @main struct BootSelectionCheck {
   static func main() throws {
     precondition(
-      RecoveryBootPolicy.authorizationArguments(groupUUID: "target") == ["-nca", "-v", "target"])
+      RecoveryBootPolicy.authorizationArguments(groupUUID: "target") == ["-nc", "-v", "target"])
+    precondition(
+      RecoveryBootPolicy.authorizationArguments(
+        groupUUID: "target", allowCustomBootArguments: true) == ["-nca", "-v", "target"])
     let initial = BootSelection()
     precondition(initial.mode == .raw && !initial.nestedVirtualization)
     let volume = "/Volumes/Volume With Spaces"

@@ -56,14 +56,20 @@ VERSIONS = {
     "omarchy-mac-boot": "20260921-10",
     "linux-aurora": "7.0.0.aurora1-1",
     "linux-aurora-headers": "7.0.0.aurora1-1",
+    "m1n1-aurora": "1.5.0-1",
+    "uboot-asahi": "2026.07.asahi2-1",
+    "limine-mkinitcpio-hook": "1.39.0-2",
+}
+
+NEO_VERSIONS = {name: version for name, version in VERSIONS.items() if name not in ("m1n1-aurora", "uboot-asahi")}
+NEO_VERSIONS.update({
     "aura": "0.1.0.r20261014-2",
+    "uboot-aurora": "2026.07.asahi2-1",
     "aurora-audio": "4.1.aurora2-1",
     "alsa-ucm-conf-aurora": "10.aurora2-1",
     "speakerguardd": "0.1.0.aurora2-1",
     "omarchy-aurora-firmware": "20261014-2",
-    "uboot-aurora": "2026.07.asahi2-1",
-    "limine-mkinitcpio-hook": "1.39.0-2",
-}
+})
 
 
 def dtb(model: str) -> bytes:
@@ -71,7 +77,12 @@ def dtb(model: str) -> bytes:
     return b"\xd0\x0d\xfe\xed" + struct.pack(">I", 8 + len(body)) + body
 
 
-def default_contents(layout: str | None = None) -> dict[str, dict[str, bytes]]:
+def aura_stage1() -> bytes:
+    body = struct.pack("<II40s192s", 1, 0, b"", b";m1n1/boot.bin")
+    return b"stage1" + b"AURORA-S1-CFG01\0" + body + struct.pack("<I", zlib.crc32(body)) + b"STACKBOT"
+
+
+def default_contents(layout: str | None = None, hardware_profile: str = "legacy") -> dict[str, dict[str, bytes]]:
     first_boot = b"#!/bin/bash\ncmp -s \"$steps\" <(printf '%s\\n' 'install/hardware/apple/limine-boot.sh')\n"
     contents = {
         "omarchy": {
@@ -97,13 +108,19 @@ def default_contents(layout: str | None = None) -> dict[str, dict[str, bytes]]:
         },
         "linux-aurora-headers": {f"usr/lib/modules/{RELEASE}/build/Makefile": b"# headers\n",
                                  f"usr/lib/modules/{RELEASE}/source": "build"},
-        "aura": {"usr/lib/asahi-boot/m1n1.bin": b"m1n1 stage 1 payload"},
-        "uboot-aurora": {
+        "m1n1-aurora": {"usr/lib/asahi-boot/m1n1.bin": b"m1n1 stage 1 payload"},
+        "uboot-asahi": {
             "usr/lib/asahi-boot/u-boot-nodtb.bin": b"u-boot for apple silicon" * 8,
             **{f"usr/lib/asahi-boot/dtb/{model}.dtb": b"uboot " + model.encode() for model in MODELS},
         },
         "limine-mkinitcpio-hook": {"usr/share/libalpm/scripts/limine-apple-gate": b"#!/bin/bash\n"},
     }
+    if hardware_profile == "neo":
+        contents["linux-aurora"][f"usr/lib/modules/{RELEASE}/dtbs/t8140-j700.dtb"] = dtb("t8140-j700")
+        contents["uboot-asahi"]["usr/lib/asahi-boot/dtb/t8140-j700.dtb"] = b"uboot j700"
+    contents["aura"] = {**contents["m1n1-aurora"],
+                        "usr/share/aura/stage1/aura-raw.bin": aura_stage1()}
+    contents["uboot-aurora"] = contents["uboot-asahi"]
     if layout:
         install = "usr/share/omarchy/install/"
         runtime = contents["omarchy"]
@@ -175,12 +192,14 @@ def channel_source(filename: str, lane: str = "edge") -> dict:
 
 
 def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, names=None,
-             manifest_edit=None, key_signer: Signer | None = None, channel=(), arches=None) -> str:
+             manifest_edit=None, key_signer: Signer | None = None, channel=(), arches=None, hardware_profile="legacy") -> str:
     """Writes a signed set into DIRECTORY; returns its receipt's sha256. Packages
     named in CHANNEL, and any outside the plan (the closure), come from edge."""
-    versions = dict(VERSIONS, **(versions or {}))
-    contents = contents or default_contents()
-    names = names or list(VERSIONS)
+    base_versions = NEO_VERSIONS if hardware_profile == "neo" else VERSIONS
+    policy = candidate_set.hardware_policy(POLICY, hardware_profile)
+    versions = dict(base_versions, **(versions or {}))
+    contents = contents or default_contents(hardware_profile=hardware_profile)
+    names = names or list(base_versions)
     arches = arches or {}
     directory.mkdir(parents=True)
     packages = []
@@ -190,7 +209,7 @@ def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, n
         filename = f"{name}-{version.replace(':', '.')}-{arch}.pkg.tar.xz"
         write_archive(directory / filename, name, version, contents.get(name, {}), depends(name, versions), arch)
         runtime = name in POLICY["runtime_packages"]
-        planned = runtime or name in POLICY["boot_packages"] + POLICY["support_packages"]
+        planned = runtime or name in policy["boot_packages"] + policy["support_packages"]
         if name in channel or not planned:
             source = channel_source(f"{name}-{version}-{arch}.pkg.tar.xz")
         else:
@@ -200,7 +219,7 @@ def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, n
             "name": name, "version": version, "arch": arch, "filename": filename,
             "sha256": candidate_set.digest(directory / filename), "source": source,
         })
-    manifest = {"schema": 1, "candidate_only": True, "set": "apple-test-fixture",
+    manifest = {"schema": 1, "hardware_profile": hardware_profile, "candidate_only": True, "set": "apple-test-fixture",
                 "source": {"repository": POLICY["source_repositories"][0], "commit": SOURCE}, "packages": packages}
     manifest["set_sha256"] = candidate_set.set_digest(manifest)
     if manifest_edit:
@@ -310,7 +329,7 @@ def payload_pe(extra: bytes) -> bytes:
 
 
 def write_payload(zip_path: Path, boot_uuid: str, root_uuid: str, omit: tuple[str, ...] = (),
-                  empty: tuple[str, ...] = (), grow: dict[str, int] | None = None) -> None:
+                  empty: tuple[str, ...] = (), grow: dict[str, int] | None = None, hardware_profile: str = "legacy") -> None:
     """The payload zip build-mac-image packages, with small stand-ins for its images. OMIT drops members,
     EMPTY truncates them and GROW appends that many zero bytes to each member it names."""
     with tempfile.TemporaryDirectory() as temporary:
@@ -333,6 +352,10 @@ def write_payload(zip_path: Path, boot_uuid: str, root_uuid: str, omit: tuple[st
                                                  "  protocol: efi\n  path: boot():/EFI/Linux/omarchy_linux-aurora.efi\n")
         (payload / "esp/m1n1/boot.bin").write_bytes(b"m1n1" * 64)
         shutil.copy(ROOT / "builder/omarchy-volume.icns", payload / "omarchy-volume.icns")
+        if hardware_profile == "neo":
+            (payload / "esp/aurora").mkdir()
+            (payload / "esp/aurora/stage1-j700.bin").write_bytes(aura_stage1())
+            shutil.copy(payload / "esp/m1n1/boot.bin", payload / "esp/m1n1/boot-j700.bin")
         for member in omit:
             (payload / member).unlink()
         for member in empty:
@@ -477,8 +500,8 @@ def make_root(root: Path, candidates: Path, layout: str | None = None) -> None:
     for path in (f"usr/lib/modules/{RELEASE}/vmlinuz", f"usr/lib/modules/{RELEASE}/pkgbase",
                  *[f"usr/lib/modules/{RELEASE}/dtbs/{m}.dtb" for m in (*MODELS, "s8000-n66")]):
         write(root, path, member("linux-aurora", path))
-    m1n1 = member("aura", "usr/lib/asahi-boot/m1n1.bin")
-    uboot = member("uboot-aurora", "usr/lib/asahi-boot/u-boot-nodtb.bin")
+    m1n1 = member(candidate_set.required_owners(summary.get("hardware_profile", "legacy"))["usr/lib/asahi-boot/m1n1.bin"], "usr/lib/asahi-boot/m1n1.bin")
+    uboot = member(candidate_set.required_owners(summary.get("hardware_profile", "legacy"))["usr/lib/asahi-boot/u-boot-nodtb.bin"], "usr/lib/asahi-boot/u-boot-nodtb.bin")
     write(root, "usr/lib/asahi-boot/m1n1.bin", m1n1)
     write(root, "usr/lib/asahi-boot/u-boot-nodtb.bin", uboot)
     dtbs = sorted((f"{m}.dtb" for m in (*MODELS, "s8000-n66")), key=str.encode)

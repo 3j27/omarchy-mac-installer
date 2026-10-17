@@ -32,6 +32,12 @@ The image is public: the `release` profile, no test image pin (`test_image_pin=`
 
 A build takes about 15 minutes and 25 GB of disk. On a host with a desktop session, an automounter (udiskie, gvfs) would mount the filesystems the build puts on loop devices, and ask for a password to do it: run the build as root or with passwordless sudo, and it hides every loop device from udisks with a transient udev rule while it runs. Without either, it refuses to run beside an automounter. devmon and udevil mount without udisks, so the build always refuses to run beside them.
 
+### Hardware scope
+
+Channel builds and candidate manifests without `hardware_profile` keep the existing `m1n1-aurora` / `uboot-asahi` boot chain. They exclude `j700ap` from installer admission even if a package happens to contain its DTB.
+
+A signed candidate manifest can select `"hardware_profile": "neo"`. Trusted policy then requires `aura`, `uboot-aurora`, `aurora-audio`, `alsa-ucm-conf-aurora`, `speakerguardd` and `omarchy-aurora-firmware`, with J700 DTBs in both kernel and U-Boot archives. The builder stages that package’s raw Stage 1 as `esp/aurora/stage1-j700.bin` and a byte-identical copy of the inspected Stage 2 as `esp/m1n1/boot-j700.bin`. Its firmware list is `26.6.2`. Such an image admits only `j700ap`; it does not qualify Aura on M1/M2/M3. The profile is bound by the authenticated manifest and recorded in import, inspection, IMAGE, PROVENANCE and the installer’s board restrictions. Neo remains blocked until those authenticated packages and their qualification are available; it does not block legacy channel builds.
+
 ### Image name
 
 The image is named `omarchy-mac-<lane>-<YYYY.MM.DD>-<package set id>` (`mac-image-check name edge OUT`): the date its inputs were resolved (the payload's date) and the first 12 hex digits of `package_set_sha256`, the digest of every installed package's name, version and archive sha256. A rebuild of the same packages on the same day gets the same name; any changed package changes it.

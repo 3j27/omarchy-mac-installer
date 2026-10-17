@@ -194,6 +194,7 @@ def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owne
         "schema": 2, "volumeName": name, "systemUUID": identifier(info.get("VolumeUUID")),
         "groupUUID": group, "prebootUUID": preboot_uuid, "espUUID": esp_uuid,
         "bootMode": "raw", "stage2Path": STAGE2_PATH, "bootstrap": bootstrap,
+        "allowCustomBootArguments": getattr(getattr(installer, "sysinfo", None), "device_class", "") == "j700ap",
     }
 
 

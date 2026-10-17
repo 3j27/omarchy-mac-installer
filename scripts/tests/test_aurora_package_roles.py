@@ -38,9 +38,12 @@ class AuroraPackageRolesTests(unittest.TestCase):
     def test_neo_support_packages_are_mandatory_authenticated_candidates(self):
         import json
         policy = json.loads((ROOT / "image-builder/builder/candidate-trust/policy.json").read_text())
-        self.assertEqual(set(policy["support_packages"]), {
+        self.assertEqual(set(policy["hardware_profiles"]["neo"]["support_packages"]), {
             "aurora-audio", "alsa-ucm-conf-aurora", "speakerguardd", "omarchy-aurora-firmware",
         })
+        self.assertEqual(policy["support_packages"], [])
+        self.assertIn("m1n1-aurora", policy["boot_packages"])
+        self.assertNotIn("aura", policy["boot_packages"])
         self.assertFalse((ROOT / "image-builder/audio").exists())
         self.assertFalse((ROOT / "image-builder/firmware-ordering").exists())
 

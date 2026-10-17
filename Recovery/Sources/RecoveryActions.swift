@@ -30,6 +30,9 @@ enum RecoveryActions {
   static var prebootUUID: String { (try? configuration.get().prebootUUID) ?? "" }
   static var espUUID: String { (try? configuration.get().espUUID) ?? "" }
   static var volumeName: String { (try? configuration.get().volumeName) ?? "Omarchy" }
+  static var allowsCustomBootArguments: Bool {
+    (try? configuration.get().allowCustomBootArguments) == true
+  }
   static var supportsMachO: Bool {
     #if OMARCHY_STEP2_PREVIEW
       return true
@@ -419,7 +422,9 @@ enum RecoveryActions {
           try transaction.clearImmutableFlags()
           progress(0.3, "Authorizing the boot environment")
           try authorized(
-            "/usr/bin/bputil", RecoveryBootPolicy.authorizationArguments(groupUUID: groupUUID),
+            "/usr/bin/bputil",
+            RecoveryBootPolicy.authorizationArguments(
+              groupUUID: groupUUID, allowCustomBootArguments: allowsCustomBootArguments),
             owner: owner, password: password)
         },
         installBundle: {
@@ -631,16 +636,6 @@ enum RecoveryActions {
     let record = try RecoveryAccountInstaller.inspect(accountTarget())
     if let record, record.phase == "finalized" {
       try RecoveryAccountInstaller.requireOwnership(record)
-      if var installed = try? installed(),
-        installed["recoveryAccountDeferred"] as? Bool == true
-      {
-        installed["recoveryAccountDeferred"] = false
-        try run("/sbin/mount", ["-u", "-w", volume.path])
-        try RecoveryFileTransaction.write(
-          JSONSerialization.data(
-            withJSONObject: installed, options: [.prettyPrinted, .sortedKeys]),
-          to: receipt)
-      }
     }
     return record
   }
@@ -684,9 +679,7 @@ enum RecoveryActions {
     // Startup Disk can leave a matching APFS credential before ownership is
     // granted. Reconcile that proven credential before sending the user back.
     // With no credential yet, finalize leaves the prepared account unchanged.
-    let final = try RecoveryAccountInstaller.finalize(target, password: password)
-    if final.phase == "finalized" { _ = try recoveryAccount() }
-    return final
+    return try RecoveryAccountInstaller.finalize(target, password: password)
   }
 }
 

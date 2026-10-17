@@ -123,11 +123,14 @@ class EdgeDispatchFilterTest(unittest.TestCase):
                                   self.repos if repos else None)
 
     def test_a_channel_set_package_is_relevant(self):
-        for name in ("linux-aurora", "aura", "uboot-aurora", "omarchy-dev", "omarchy-settings-dev",
+        for name in ("linux-aurora", "m1n1-aurora", "uboot-asahi", "omarchy-dev", "omarchy-settings-dev",
                      "omarchy-mac", "omarchy-mac-boot"):
             decision = self.decide(name, "claude-code")
             self.assertTrue(decision["relevant"], name)
             self.assertEqual(decision["matched"], [name])
+
+    def test_unpublished_neo_boot_chain_does_not_trigger_legacy_channel_images(self):
+        self.assertFalse(self.decide("aura", "uboot-aurora", "aurora-audio")["relevant"])
 
     def test_runtime_lists_builder_packages_and_their_dependencies_are_relevant(self):
         self.assertEqual(self.decide("zram-generator")["matched"], ["zram-generator"], "the runtime's aarch64 list")

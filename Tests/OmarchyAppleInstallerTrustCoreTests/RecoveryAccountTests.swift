@@ -1,5 +1,6 @@
 #if os(macOS)
   import CryptoKit
+  import Darwin
   import Foundation
   @testable import RecoveryAccountCore
   import XCTest
@@ -114,6 +115,96 @@
         XCTAssertThrowsError(try RecoveryVersionMetadata.validate(data))
       }
     }
+    private func fixtureRead(_ path: URL, _ limit: Int) throws -> Data {
+      let bytes = try Data(contentsOf: path)
+      guard !bytes.isEmpty && bytes.count <= limit else {
+        throw AccountSetupFailure("Invalid test fixture")
+      }
+      return bytes
+    }
+
+    func testDeferredHandoffFinalizationDisarmsLauncherAndRestoresVersion() throws {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      let core = root.appendingPathComponent("System/Library/CoreServices")
+      let state = root.appendingPathComponent("Aurora/Recovery/State")
+      try FileManager.default.createDirectory(at: core, withIntermediateDirectories: true)
+      try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let version = try PropertyListSerialization.data(
+        fromPropertyList: [
+          "ProductName": "macOS", "ProductVersion": "26.6.2",
+          "ProductBuildVersion": "25G83",
+        ], format: .xml, options: 0)
+      let enabled = core.appendingPathComponent("SystemVersion.plist")
+      let hidden = core.appendingPathComponent("SystemVersion-disabled.plist")
+      let marker = root.appendingPathComponent(".IAPhysicalMedia")
+      let disabled = root.appendingPathComponent("IAPhysicalMedia-disabled.plist")
+      let receipt = state.appendingPathComponent("installation.json")
+      let launch = try PropertyListSerialization.data(
+        fromPropertyList: ["AppName": InstallerProductIdentity.recoveryAppBundleName],
+        format: .xml, options: 0)
+      // Skip leaves the completed install visible, with its launcher disabled.
+      try RecoveryFileTransaction.write(version, to: enabled)
+      try RecoveryFileTransaction.write(launch, to: disabled)
+      try RecoveryFileTransaction.write(
+        JSONSerialization.data(withJSONObject: [
+          "status": "installed",
+          "recoveryAccountRequired": true, "recoveryAccountDeferred": true,
+        ]), to: receipt)
+      // The macOS handoff re-arms initial Recovery and hides its metadata.
+      try RecoveryFileTransaction.write(launch, to: marker)
+      try RecoveryVersionMetadata.hideForInitialRecovery(system: root, read: fixtureRead)
+      XCTAssertTrue(FileManager.default.fileExists(atPath: hidden.path))
+      let transaction = try RecoveryFileTransaction(
+        directory: root.appendingPathComponent("snapshot"),
+        files: [enabled, hidden, marker, disabled, receipt])
+      try transaction.clearImmutableFlags()
+      let relocated = try RecoveryVersionMetadata.finishAccountSetup(
+        system: root, read: fixtureRead)
+      try transaction.commit(relocated: relocated)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+      XCTAssertFalse(FileManager.default.fileExists(atPath: hidden.path))
+      XCTAssertEqual(try Data(contentsOf: enabled), version)
+      XCTAssertEqual(try Data(contentsOf: disabled), launch)
+      let record =
+        try JSONSerialization.jsonObject(with: Data(contentsOf: receipt)) as? [String: Any]
+      XCTAssertEqual(record?["recoveryAccountDeferred"] as? Bool, false)
+      XCTAssertEqual(record?["recoveryAccountRequired"] as? Bool, true)
+      // Repeated completion is harmless. File rollback restores the re-armed state.
+      try RecoveryVersionMetadata.finishAccountSetup(system: root, read: fixtureRead)
+      try transaction.restore()
+      XCTAssertEqual(try Data(contentsOf: marker), launch)
+      XCTAssertEqual(try Data(contentsOf: hidden), version)
+    }
+
+    func testAccountCompletionRestoresRelocatedVersionFlags() throws {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      let core = root.appendingPathComponent("System/Library/CoreServices")
+      try FileManager.default.createDirectory(at: core, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let hidden = core.appendingPathComponent("SystemVersion-disabled.plist")
+      let visible = core.appendingPathComponent("SystemVersion.plist")
+      let version = try PropertyListSerialization.data(
+        fromPropertyList: [
+          "ProductName": "macOS", "ProductVersion": "26.6.2",
+          "ProductBuildVersion": "25G83",
+        ], format: .xml, options: 0)
+      try RecoveryFileTransaction.write(version, to: hidden)
+      guard chflags(hidden.path, UInt32(UF_NODUMP)) == 0 else {
+        throw XCTSkip("The test filesystem does not support file flags")
+      }
+      let transaction = try RecoveryFileTransaction(
+        directory: root.appendingPathComponent("snapshot"), files: [hidden, visible])
+      try transaction.clearImmutableFlags()
+      let relocated = try RecoveryVersionMetadata.finishAccountSetup(
+        system: root, read: fixtureRead)
+      try transaction.commit(relocated: relocated)
+      var info = stat()
+      XCTAssertEqual(lstat(visible.path, &info), 0)
+      XCTAssertEqual(info.st_flags & UInt32(UF_NODUMP), UInt32(UF_NODUMP))
+      XCTAssertEqual(try Data(contentsOf: visible), version)
+    }
+
     let target = RecoveryAccountTarget(
       volumeName: "Omarchy", systemUUID: "11111111-1111-4111-8111-111111111111",
       dataUUID: "22222222-2222-4222-8222-222222222222",

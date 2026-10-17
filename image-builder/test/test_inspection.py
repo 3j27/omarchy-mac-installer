@@ -67,8 +67,8 @@ class InspectionTest(unittest.TestCase):
         return report
 
     def stage2(self, m1n1=None, dtbs=None, uboot=None, tail=b""):
-        m1n1 = m1n1 if m1n1 is not None else fixtures.default_contents()["aura"]["usr/lib/asahi-boot/m1n1.bin"]
-        uboot = uboot if uboot is not None else fixtures.default_contents()["uboot-aurora"]["usr/lib/asahi-boot/u-boot-nodtb.bin"]
+        m1n1 = m1n1 if m1n1 is not None else fixtures.default_contents()["m1n1-aurora"]["usr/lib/asahi-boot/m1n1.bin"]
+        uboot = uboot if uboot is not None else fixtures.default_contents()["uboot-asahi"]["usr/lib/asahi-boot/u-boot-nodtb.bin"]
         if dtbs is None:
             dtbs = sorted(["s8000-n66", *fixtures.MODELS], key=str.encode)
         compressor = zlib.compressobj(wbits=31)
@@ -84,6 +84,32 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(report["m1n1_stage2"]["device_trees"], 3)
         self.assertEqual(report["supported_models"], list(fixtures.MODELS))
         self.assertEqual(report["hardware_setup"], "build")
+
+    def test_incidental_neo_dtb_does_not_admit_neo_with_legacy_boot_chain(self):
+        candidates = inspection.Candidates(self.candidates)
+        boot_owner = candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"]
+        original = candidates.listing(boot_owner)
+        candidates._listings[boot_owner] = original + ["usr/lib/asahi-boot/dtb/t8140-j700.dtb"]
+        report = {}
+        inspection.check_supported_models(self.root, candidates, report)
+        self.assertNotIn("t8140-j700", report["supported_models"])
+
+    def test_neo_candidate_admits_only_neo_and_binds_its_profile(self):
+        directory = self.root.parent / "neo-input"
+        imported = self.root.parent / "neo-import"
+        receipt = fixtures.make_set(directory, self.signer, hardware_profile="neo")
+        fixtures.import_set(directory, imported, self.signer, receipt)
+        candidates = inspection.Candidates(imported)
+        report = {}
+        inspection.check_supported_models(self.root, candidates, report)
+        self.assertEqual(report["supported_models"], ["t8140-j700"])
+        summary = imported / "import.json"
+        summary.chmod(0o644)
+        value = __import__("json").loads(summary.read_text())
+        value["hardware_profile"] = "legacy"
+        summary.write_text(__import__("json").dumps(value))
+        with self.assertRaisesRegex(inspection.InspectionError, "authenticated manifest"):
+            inspection.Candidates(imported)
 
     def test_m1n1_stage2_mismatches(self):
         cases = {
@@ -146,7 +172,7 @@ class InspectionTest(unittest.TestCase):
 
     def test_mac_without_an_aurora_device_tree(self):
         contents = fixtures.default_contents()
-        contents["uboot-aurora"]["usr/lib/asahi-boot/dtb/t6020-j414s.dtb"] = b"uboot t6020"
+        contents["uboot-asahi"]["usr/lib/asahi-boot/dtb/t6020-j414s.dtb"] = b"uboot t6020"
         work = Path(tempfile.mkdtemp(dir=self.base))
         receipt = fixtures.make_set(work / "set", self.signer, contents=contents)
         fixtures.import_set(work / "set", work / "candidates", self.signer, receipt)
@@ -629,7 +655,7 @@ class ClosureInspectionTest(unittest.TestCase):
                 report = inspection.inspect(root, candidates, "edge", trust=signer.trust)
                 self.assertEqual(report["checks"]["candidate-files"]["result"], "passed", report["checks"]["candidate-files"])
                 self.assertEqual(report["checks"]["candidate-versions"]["result"], "passed")
-                self.assertIn("of the 13 required packages", report["checks"]["candidate-files"]["detail"])
+                self.assertIn("of the 9 required packages", report["checks"]["candidate-files"]["detail"])
                 (root / "usr/share/icons/Yaru/scalable/actions/go-next-symbolic.svg").unlink()
                 local = next((root / "var/lib/pacman/local").glob("yaru-icon-theme-*"))
                 (local / "desc").write_text((local / "desc").read_text().replace("26.04-1", "26.04-2"))
@@ -778,7 +804,7 @@ class TestImagePinTest(unittest.TestCase):
         return {"candidate_only": candidate_only, "packages": [
             {"name": "omarchy", "origin": "commit"}, {"name": "omarchy-settings", "origin": "commit"},
             {"name": "omarchy-mac", "origin": "commit"}, {"name": "omarchy-mac-boot", "origin": "channel " + "b" * 40},
-            {"name": "linux-aurora", "origin": "channel"}, {"name": "uboot-aurora", "origin": "pull-request"},
+            {"name": "linux-aurora", "origin": "channel"}, {"name": "uboot-asahi", "origin": "pull-request"},
             {"name": "hyprland", "origin": "channel"}]}
 
     def test_pins_only_what_the_source_commit_built(self):

@@ -97,6 +97,13 @@ class Candidates:
         self.summary = json.loads((directory / "import.json").read_text())
         self.packages = {p["name"]: p for p in self.summary["packages"]}
         self.kind = self.summary.get("kind", "candidate")
+        self.hardware_profile = self.summary.get("hardware_profile", "legacy")
+        self.boot_owners = candidate_set.required_owners(self.hardware_profile)
+        manifest = json.loads((directory / "manifest.json").read_text())
+        require(manifest.get("hardware_profile", "legacy") == self.hardware_profile,
+                "hardware profile differs from the authenticated manifest")
+        require(self.kind != "channel" or self.hardware_profile == "legacy",
+                "channel images must retain the legacy hardware profile")
         require(self.kind in ("candidate", "channel"), f"the set is of an unknown kind: {self.kind}")
         self.roles = {p.get("role", p["name"]): p["name"] for p in self.summary["packages"]}
         self._listings: dict[str, list[str]] = {}
@@ -239,8 +246,8 @@ def check_refused(root: Path, policy: dict) -> str:
 def check_installed_payloads(root: Path, candidates: Candidates) -> str:
     release = candidates.kernel_release()
     expected = {
-        "usr/lib/asahi-boot/m1n1.bin": "aura",
-        "usr/lib/asahi-boot/u-boot-nodtb.bin": "uboot-aurora",
+        "usr/lib/asahi-boot/m1n1.bin": candidates.boot_owners["usr/lib/asahi-boot/m1n1.bin"],
+        "usr/lib/asahi-boot/u-boot-nodtb.bin": candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"],
         f"usr/lib/modules/{release}/vmlinuz": KERNEL,
     }
     expected.update({path: KERNEL for path in candidates.dtbs()})
@@ -248,6 +255,15 @@ def check_installed_payloads(root: Path, candidates: Candidates) -> str:
         installed = root / path
         require(installed.is_file() and not installed.is_symlink(), f"/{path} is missing")
         require(installed.read_bytes() == candidates.member(package, path), f"/{path} is not {package}'s from the set")
+    if candidates.hardware_profile == "neo":
+        stage1 = root / "boot/efi/aurora/stage1-j700.bin"
+        stage2 = root / "boot/efi/m1n1/boot-j700.bin"
+        require(stage1.is_file() and not stage1.is_symlink()
+                and stage1.read_bytes() == candidates.member("aura", "usr/share/aura/stage1/aura-raw.bin"),
+                "Neo Stage 1 does not match the authenticated Aura package")
+        require(stage2.is_file() and not stage2.is_symlink()
+                and stage2.read_bytes() == (root / "boot/efi/m1n1/boot.bin").read_bytes(),
+                "Neo Stage 2 does not match the inspected common bundle")
     return f"m1n1, U-Boot, the kernel and {len(candidates.dtbs())} device trees match the set's archives"
 
 
@@ -255,7 +271,7 @@ def m1n1_stage2(root: Path, candidates: Candidates, report: dict) -> str:
     """m1n1/boot.bin is the set's m1n1, then every Aurora device tree in C
     order, then the set's U-Boot gzipped, then m1n1 options only."""
     data = limine.regular(root / "boot/efi/m1n1/boot.bin")
-    m1n1 = candidates.member("aura", "usr/lib/asahi-boot/m1n1.bin")
+    m1n1 = candidates.member(candidates.boot_owners["usr/lib/asahi-boot/m1n1.bin"], "usr/lib/asahi-boot/m1n1.bin")
     require(data.startswith(m1n1), "m1n1/boot.bin does not start with the set's m1n1")
     offset = len(m1n1)
     names = candidates.dtbs()
@@ -266,7 +282,7 @@ def m1n1_stage2(root: Path, candidates: Candidates, report: dict) -> str:
         offset += len(dtb)
     require(data[offset:offset + 4] != b"\xd0\x0d\xfe\xed", "m1n1/boot.bin carries a device tree the set's kernel lacks")
     uboot, rest = limine.gunzip_prefix(data[offset:])
-    require(uboot == candidates.member("uboot-aurora", "usr/lib/asahi-boot/u-boot-nodtb.bin"),
+    require(uboot == candidates.member(candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"], "usr/lib/asahi-boot/u-boot-nodtb.bin"),
             "m1n1/boot.bin's U-Boot is not the set's")
     options = m1n1_options(root)
     require(rest == options, "m1n1/boot.bin does not end with exactly the image's m1n1 options")
@@ -351,8 +367,12 @@ def mtree_digests(root: Path, package: str) -> dict[str, str]:
 def check_supported_models(root: Path, candidates: Candidates, report: dict) -> str:
     """Every Mac U-Boot supports has its Aurora device tree in stage 2."""
     kernel_dtbs = {PurePosixPath(p).name for p in candidates.dtbs()}
-    models = sorted(PurePosixPath(p).name for p in candidates.listing("uboot-aurora")
+    models = sorted(PurePosixPath(p).name for p in candidates.listing(candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"])
                     if PurePosixPath(p).match("usr/lib/asahi-boot/dtb/*.dtb"))
+    if candidates.hardware_profile == "neo":
+        models = [name for name in models if name == "t8140-j700.dtb"]
+    else:
+        models = [name for name in models if name != "t8140-j700.dtb"]
     require(models, "the set's U-Boot names no Mac")
     missing = [name for name in models if name not in kernel_dtbs]
     require(not missing, "the Aurora kernel lacks device trees for " + ", ".join(missing))
@@ -635,6 +655,7 @@ def inspect(root: Path, candidates_dir: Path, channel: str, factory: Path | None
     report: dict = {
         "schema": 1,
         "kind": "apple-image-inspection",
+        "hardware_profile": candidates.hardware_profile,
         "set": candidates.summary["set"],
         "source_commit": candidates.summary["source_commit"],
         "signer": candidates.summary["signer"],

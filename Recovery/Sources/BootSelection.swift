@@ -32,7 +32,9 @@ struct BootSelection: Codable {
 }
 
 enum RecoveryBootPolicy {
-  static func authorizationArguments(groupUUID: String) -> [String] {
-    ["-nca", "-v", groupUUID]
+  static func authorizationArguments(
+    groupUUID: String, allowCustomBootArguments: Bool = false
+  ) -> [String] {
+    [allowCustomBootArguments ? "-nca" : "-nc", "-v", groupUUID]
   }
 }

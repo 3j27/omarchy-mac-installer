@@ -152,6 +152,7 @@ def manifest(chosen, lane, database_sha256, channel):
     return {
         'schema': 1,
         'kind': 'channel',
+        'hardware_profile': 'legacy',
         'channel': lane,
         'repository': channel['repository'],
         'database_sha256': database_sha256,
@@ -249,6 +250,7 @@ def snapshot(database, database_sha256, lane, packages, destination, trust=TRUST
     summary = {
         'schema': 1,
         'kind': 'channel',
+        'hardware_profile': 'legacy',
         'set': f'omarchy-{lane}-{database_sha256[:12]}',
         'candidate_only': False,
         'channel': lane,

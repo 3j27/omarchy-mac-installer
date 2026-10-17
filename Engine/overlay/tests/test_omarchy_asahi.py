@@ -244,6 +244,21 @@ class AsahiStage1AdapterTests(unittest.TestCase):
 
         self.assertTrue(adapter.preflight_complete)
 
+    def test_image_board_scope_is_checked_before_partitioning(self):
+        for board, allowed, excluded in [("j700ap", None, ["j700ap"]),
+                                         ("j314sap", ["j700ap"], [])]:
+            with self.subTest(board=board):
+                metadata = self._target_metadata()
+                metadata.update(allowed_device_classes=allowed, excluded_device_classes=excluded)
+                self._write_metadata([metadata])
+                installer = FakeInstaller(FakeDiskUtil([[self.free]]))
+                installer.sysinfo.device_class = board
+                adapter = self._adapter(installer)
+                with self.assertRaisesRegex(AsahiAdapterError, "not qualified"):
+                    adapter.preflight(self.plan)
+                self.assertFalse(adapter.preflight_complete)
+                self.assertEqual(installer.dutil.add_calls, [])
+
     def test_native_recovery_contract_requires_app_before_disk_changes(self):
         metadata = self._target_metadata()
         metadata["recovery_gui"] = "omarchy-native-v1"
@@ -1148,7 +1163,7 @@ class Step2ScriptTests(unittest.TestCase):
     # The fake recoveryOS tools' interpreter.
     fake_shell = "/bin/sh"
 
-    def make(self, owner):
+    def make(self, owner, device_class="j314sap"):
         root = tempfile.TemporaryDirectory()
         self.addCleanup(root.cleanup)
         step2 = Path(root.name) / "step2.sh"
@@ -1157,6 +1172,7 @@ class Step2ScriptTests(unittest.TestCase):
         class Stub:
             def __init__(self, *args):
                 self.osi = SimpleNamespace(vgid="0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F0", preboot_vgid="1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809", recovery=root.name)
+                self.sysinfo = SimpleNamespace(device_class=device_class)
                 self.step2_sh = str(step2)
 
             def load_identity(self):
@@ -1191,7 +1207,7 @@ class Step2ScriptTests(unittest.TestCase):
         # One prompt, kept whole: leading and trailing spaces are part of it.
         self.assertEqual(text.count("read -r PASSWORD"), 1)
         self.assertIn("IFS= read -r PASSWORD", text)
-        self.assertIn('bputil -nca -v "$VGID" -u "$OWNER" -p "$PASSWORD"', text)
+        self.assertIn('bputil -nc -v "$VGID" -u "$OWNER" -p "$PASSWORD"', text)
         # kmutil runs on a hidden terminal, recording its own process ID.
         self.assertIn('script -q -t 0 "$kmutil_log"', text)
         self.assertIn("echo $$ >/tmp/kmutil.pid; exec kmutil configure-boot -c boot.bin --raw --entry-point 2048", text)
@@ -1202,6 +1218,15 @@ class Step2ScriptTests(unittest.TestCase):
         self.assertIn("'one true recoveryOS'", text)
         result = subprocess.run([*self.shell, "-n", str(step2)])
         self.assertEqual(result.returncode, 0)
+
+    def test_only_neo_enables_and_discloses_custom_boot_arguments(self):
+        neo = self.make("scott", device_class="j700ap").read_text()
+        legacy = self.make("scott", device_class="j314sap").read_text()
+        self.assertIn('bputil -nca -v "$VGID"', neo)
+        self.assertIn('including USB proxy mode', neo)
+        self.assertIn('bputil -nc -v "$VGID"', legacy)
+        self.assertNotIn('bputil -nca', legacy)
+        self.assertNotIn('including USB proxy mode', legacy)
 
     def step2_with_fakes(self, kmutil_body, paired=True, bputil_mode="ok", password="secret",
                          startup="macos"):
@@ -1347,7 +1372,7 @@ class Step2ScriptTests(unittest.TestCase):
         self.assertIn("macOS asks itself now", result.stdout)
         attempts = Path(f"{calls}.bputil").read_text().splitlines()
         self.assertEqual(len(attempts), 4)
-        self.assertEqual(attempts[-1], "-nca -v 0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F0")
+        self.assertEqual(attempts[-1], "-nc -v 0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F0")
 
     def test_a_kmutil_that_fails_is_handed_to_the_owner(self):
         started = time.monotonic()

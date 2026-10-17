@@ -819,11 +819,13 @@ available_base() {
 # is pulled in, and the set resolves at all.
 precheck_transaction() {
   local resolved refused name
-  # This universal image admits Neo: stock audio is not a functional fallback.
-  for name in aurora-audio alsa-ucm-conf-aurora speakerguardd omarchy-aurora-firmware; do
-    jq -e --arg name "$name" '.packages[] | select(.name == $name and .group == "support")' \
-      "$candidates/import.json" >/dev/null || fail "Neo support package is missing: $name"
-  done
+  # Only the explicitly selected Neo candidate requires these unpublished packages.
+  if [[ $(jq -r '.hardware_profile // "legacy"' "$candidates/import.json") == neo ]]; then
+    for name in aurora-audio alsa-ucm-conf-aurora speakerguardd omarchy-aurora-firmware; do
+      jq -e --arg name "$name" '.packages[] | select(.name == $name and .group == "support")' \
+        "$candidates/import.json" >/dev/null || fail "Neo support package is missing: $name"
+    done
+  fi
   available_base
   resolved=$(target_pacman -Sp --print-format '%r %n %v' "${BOOTSTRAP[@]}" "${PLATFORM_PACKAGES[@]}" \
     "$(qualified omarchy)" "$(qualified omarchy-settings)" "${base_names[@]}" $(qualified "${APPLE_AUDIO[@]}") \
@@ -1234,6 +1236,7 @@ configure_image() {
   isolated_chroot "$target" env LC_ALL=C update-m1n1 >"$logs/update-m1n1.log" 2>&1 ||
     fail "update-m1n1 failed (logs/update-m1n1.log)"
   activate_limine
+  stage_neo_boot_payloads
   arm_first_boot
   # Recorded once the boot setup, which could change packages, is done.
   record_packages
@@ -1249,6 +1252,19 @@ configure_image() {
   keep_installed_databases
   find "$target/var/cache/pacman/pkg" -mindepth 1 -delete
   probe_first_boot
+}
+
+# Board payloads come from the same authenticated Aura package as Stage 2.
+# Keep the established board-specific engine contract until common-image
+# qualification is recorded; do not claim qualification for other Macs.
+stage_neo_boot_payloads() {
+  [[ $(jq -r '.hardware_profile // "legacy"' "$candidates/import.json") == neo ]] || return 0
+  local stage1="$target/usr/share/aura/stage1/aura-raw.bin"
+  local stage2="$target/boot/efi/m1n1/boot.bin"
+  [[ -s $stage1 && ! -L $stage1 && -s $stage2 && ! -L $stage2 ]] ||
+    fail "the Neo image lacks matched Aura Stage 1 and Stage 2 payloads"
+  install -Dm644 "$stage1" "$target/boot/efi/aurora/stage1-j700.bin"
+  install -Dm644 "$stage2" "$target/boot/efi/m1n1/boot-j700.bin"
 }
 
 # Repository names in pacman configuration FILE, in its order.
@@ -1507,17 +1523,24 @@ payload_name() {
 }
 
 write_installer_data() {
+  local hardware_profile
+  hardware_profile=$(jq -r '.hardware_profile // "legacy"' "$candidates/import.json")
+  local firmware=("${SUPPORTED_FW[@]}")
+  [[ $hardware_profile != neo ]] || firmware=(26.6.2)
   jq -S -n --arg package "$1" --argjson esp "$ESP_SIZE" --argjson boot "$BOOT_SIZE" --argjson root "$ROOT_SIZE" \
-    --arg volume_id "$ESP_VOLUME_ID" --args '{os_list: [{
+    --arg volume_id "$ESP_VOLUME_ID" \
+    --arg hardware_profile "$hardware_profile" --args '{os_list: [{
       name: "Omarchy MX Mac", default_os_name: "Omarchy", omarchy_target: "apple-silicon-full-os",
       boot_object: "m1n1.bin", next_object: "m1n1/boot.bin", package: $package, icon: "omarchy-volume.icns",
       supported_fw: $ARGS.positional,
+      allowed_device_classes: (if $hardware_profile == "neo" then ["j700ap"] else null end),
+      excluded_device_classes: (if $hardware_profile == "legacy" then ["j700ap"] else [] end),
       partitions: [
         {name: "EFI", type: "EFI", size: "\($esp)B", format: "fat", volume_id: $volume_id,
           copy_firmware: true, copy_installer_data: true, source: "esp"},
         {name: "Boot", type: "Linux", size: "\($boot)B", image: "boot.img"},
         {name: "Root", type: "Linux", size: "\($root)B", expand: true, image: "root.img"}]}]}' \
-    "${SUPPORTED_FW[@]}" >"$2"
+    "${firmware[@]}" >"$2"
 }
 
 # The key a reproduced build must match: every installed package's name,
@@ -1545,6 +1568,7 @@ write_provenance() {
       "$candidates/import.json"
     printf 'hardware_setup=%s\n' "$hardware_setup"
     printf 'test_image_pin=%s\n' "$test_image_pin"
+    printf 'hardware_profile=%s\n' "$(jq -r '.hardware_profile // "legacy"' "$candidates/import.json")"
     [[ $profile == release ]] || printf 'profile=%s\nlab_access_sha256=%s\n' "$profile" "$lab_access_sha256"
     while read -r name; do
       [[ -z $name ]] || printf 'unavailable=%s\n' "$name"
@@ -1589,6 +1613,7 @@ write_image() {
     done
     printf 'hardware_setup=%s\n' "$hardware_setup"
     printf 'test_image_pin=%s\n' "$test_image_pin"
+    printf 'hardware_profile=%s\n' "$(jq -r '.hardware_profile // "legacy"' "$candidates/import.json")"
     [[ $profile == release ]] || printf 'profile=%s\nlab_access_sha256=%s\n' "$profile" "$lab_access_sha256"
     printf 'package_set_sha256=%s\n' "$package_set_digest"
     printf 'built=%s\n' "$built"

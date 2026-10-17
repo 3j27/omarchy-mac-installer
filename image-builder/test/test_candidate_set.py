@@ -47,24 +47,46 @@ class CandidateSetTest(unittest.TestCase):
 
     def test_signed_set_creates_readonly_snapshot(self):
         summary = self.verify()
-        self.assertEqual(len(summary["packages"]), 13)
+        self.assertEqual(len(summary["packages"]), 9)
         self.assertEqual(summary["signer"], self.signer.fingerprint)
         self.assertEqual((self.work / "output").stat().st_mode & 0o777, 0o555)
         imported = json.loads((self.work / "output/import.json").read_text())
-        self.assertEqual({p["group"] for p in imported["packages"]}, {"runtime", "boot", "support"})
+        self.assertEqual({p["group"] for p in imported["packages"]}, {"runtime", "boot"})
         self.assertFalse((self.work / "output/candidate-signing-key.asc").exists())
 
     def test_architecture_independent_support_still_requires_a_signed_source(self):
-        directory, receipt = self.variant(arches={"aurora-audio": "any", "alsa-ucm-conf-aurora": "any"})
+        directory, receipt = self.variant(hardware_profile="neo", arches={"aurora-audio": "any", "alsa-ucm-conf-aurora": "any"})
         summary = self.verify(directory, receipt)
         self.assertEqual({p["name"] for p in summary["packages"] if p["group"] == "support"},
-                         set(fixtures.POLICY["support_packages"]))
+                         set(fixtures.POLICY["hardware_profiles"]["neo"]["support_packages"]))
 
     def test_missing_support_is_rejected_even_with_stock_audio_closure(self):
         directory, receipt = self.variant(
-            names=[n for n in fixtures.VERSIONS if n != "aurora-audio"] + ["asahi-audio"],
+            hardware_profile="neo",
+            names=[n for n in fixtures.NEO_VERSIONS if n != "aurora-audio"] + ["asahi-audio"],
             versions={"asahi-audio": "4.1.1-1"})
         with self.assertRaisesRegex(ValueError, "missing aurora-audio"):
+            self.verify(directory, receipt)
+
+    def test_neo_profile_requires_each_support_package(self):
+        for name in fixtures.POLICY["hardware_profiles"]["neo"]["support_packages"]:
+            with self.subTest(package=name):
+                directory = self.work / name
+                receipt = fixtures.make_set(directory, self.signer, hardware_profile="neo",
+                    names=[n for n in fixtures.NEO_VERSIONS if n != name])
+                with self.assertRaisesRegex(ValueError, "missing " + name):
+                    self.verify(directory, receipt)
+                shutil.rmtree(self.work / "output", ignore_errors=True)
+
+    def test_unknown_signed_profile_and_missing_neo_device_tree_fail_closed(self):
+        directory, receipt = self.variant(manifest_edit=lambda m: m.update(hardware_profile="unreviewed"))
+        with self.assertRaisesRegex(ValueError, "unknown hardware profile"):
+            self.verify(directory, receipt)
+        shutil.rmtree(self.work / "output", ignore_errors=True)
+        directory = self.work / "no-neo-dtb"
+        receipt = fixtures.make_set(directory, self.signer, hardware_profile="neo",
+                                    contents=fixtures.default_contents())
+        with self.assertRaisesRegex(ValueError, "requires the J700"):
             self.verify(directory, receipt)
 
     def test_output_is_created_exclusively(self):
@@ -130,7 +152,7 @@ class CandidateSetTest(unittest.TestCase):
             self.verify(directory, receipt)
 
     def test_missing_or_extra_package(self):
-        directory, receipt = self.variant(names=[n for n in fixtures.VERSIONS if n != "uboot-aurora"])
+        directory, receipt = self.variant(names=[n for n in fixtures.VERSIONS if n != "uboot-asahi"])
         with self.assertRaisesRegex(ValueError, "wrong package set"):
             self.verify(directory, receipt)
 
@@ -143,13 +165,13 @@ class CandidateSetTest(unittest.TestCase):
             channel=("omarchy-mac-boot", "linux-aurora", "linux-aurora-headers"), arches={"omarchy-keyring": "any"})
         summary = self.verify(directory, receipt)
         packages = {p["name"]: p for p in summary["packages"]}
-        self.assertEqual(len(packages), 16)
+        self.assertEqual(len(packages), 12)
         self.assertTrue(summary["candidate_only"])
         self.assertEqual({n: p["origin"] for n, p in packages.items() if p["group"] == "runtime"},
                          {"omarchy": "commit", "omarchy-settings": "commit", "omarchy-mac": "commit",
                           "omarchy-mac-boot": "channel " + "d" * 40})
         self.assertEqual(packages["linux-aurora"]["origin"], "channel")
-        self.assertEqual(packages["uboot-aurora"]["origin"], "pull-request")
+        self.assertEqual(packages["uboot-asahi"]["origin"], "pull-request")
         self.assertEqual({n for n, p in packages.items() if p["group"] == "closure"}, set(versions))
         self.assertEqual(packages["asdcontrol"]["filename"], "asdcontrol-1.0.6.0-2-aarch64.pkg.tar.xz")
 
@@ -170,7 +192,7 @@ class CandidateSetTest(unittest.TestCase):
                 url="https://example.invalid/edge/aarch64/hyprland-0.56.2-3-aarch64.pkg.tar.xz"))),
              "unknown closure package source: hyprland"),
             ("runtime from a channel", dict(channel=("omarchy-mac",)), "mixed package sources: omarchy-mac"),
-            ("boot package any-arch", dict(arches={"uboot-aurora": "any"}), "package metadata mismatch: uboot-aurora"),
+            ("boot package any-arch", dict(arches={"uboot-asahi": "any"}), "package metadata mismatch: uboot-asahi"),
         )
         for name, change, pattern in cases:
             with self.subTest(name):

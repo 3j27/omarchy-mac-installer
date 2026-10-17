@@ -2,8 +2,8 @@
   "schema": 1,
   "reference_repository": "https://github.com/erykwieliczko/macos-firmware-extract",
   "reference_commit": "71b413af680edec1808a709cb7addfbde5c21cfc",
-  "swift": "Apple Swift version 6.2.3 (swiftlang-6.2.3.3.21 clang-1700.6.3.2)\nTarget: arm64-apple-macosx15.0",
-  "sdk": "26.2",
+  "swift": "Apple Swift version 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)\nTarget: arm64-apple-macosx26.0",
+  "sdk": "26.5",
   "target": "arm64-apple-macosx14.0",
   "reproducibility": "two-identical-clean-builds-same-host-pinned-toolchain",
   "sources": [
@@ -13,7 +13,7 @@
     },
     {
       "path": "build.sh",
-      "sha256": "830f684027de38d94d742e212c30bec0414c69d8c9d4c5ed3370a75085ef8c49"
+      "sha256": "278023c7aaea2413890acceff72a09fc787210acf4169c2f839157badd436337"
     },
     {
       "path": "Sources/RestoreImageCLI/CLI.swift",
@@ -21,7 +21,7 @@
     },
     {
       "path": "Sources/RestoreImageCore/Archive.swift",
-      "sha256": "ba6117982e3f10cd62bf7fb668bca90f522e279a89079c968e3e6e4aea0f5542"
+      "sha256": "f37788474aeec3654633a9cbb336d9c3558fd1325a4dc3ae0883257f7073449c"
     },
     {
       "path": "Sources/RestoreImageCore/Compression.swift",
@@ -37,13 +37,17 @@
     },
     {
       "path": "Sources/RestoreImageCore/Support.swift",
-      "sha256": "d9bd41a429b4dfab0ea1c697888988aa1ae72092f4362b7b457c57838271dc7e"
+      "sha256": "f4e0718c544c9db27388bc495bb000806d61a13d9f976fd94be619eb72241134"
     },
     {
       "path": "Sources/RestoreImageCore/Transport.swift",
       "sha256": "fbc967ae059206b375fec4bb5ae72dec5ea8d069e67d08c2c8bc0c6682369d92"
+    },
+    {
+      "path": "Sources/RestoreImageCore/WorkDirectory.swift",
+      "sha256": "45008e07ab13a7c03959aae7ed6ff49d4fc5068a63760f78c1de9dc8a810c6b8"
     }
   ],
-  "binary_sha256": "a94597cb4df742597cce20b49abd765623a4fbb359a12b711ce2ae2939625d2f",
-  "binary_size": 470104
+  "binary_sha256": "b761dc30ec21199432436c4655972154e7cb281fb9d43fc0f62e3ee71f20db49",
+  "binary_size": 470552
 }

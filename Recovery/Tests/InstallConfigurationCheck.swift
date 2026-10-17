@@ -17,7 +17,8 @@ import Foundation
       ("stage2Path", "../boot.bin"), ("systemUUID", "disk0s1"),
       ("espUUID", "00000000-0000-0000-0000-000000000000"),
       ("volumeName", "../macOS"), ("volumeName", "bad\nname"), ("volumeName", ""),
-      ("unknown", "unused"),
+      ("unknown", "unused"), ("allowCustomBootArguments", 1),
+      ("allowCustomBootArguments", "true"),
     ] as [(String, Any)] {
       var changed = value
       changed[key] = bad
@@ -25,6 +26,13 @@ import Foundation
         _ = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: changed))
         preconditionFailure("accepted invalid \(key)")
       } catch {}
+    }
+    precondition(config.allowCustomBootArguments == nil)
+    for allowed in [false, true] {
+      var scoped = value
+      scoped["allowCustomBootArguments"] = allowed
+      let decoded = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: scoped))
+      precondition(decoded.allowCustomBootArguments == allowed)
     }
     for key in value.keys {
       var changed = value

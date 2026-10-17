@@ -639,6 +639,11 @@ struct InstallerView: View {
           .font(OmarchyTheme.mono(12)).foregroundColor(OmarchyTheme.secondaryText)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.top, 8)
+          if RecoveryActions.allowsCustomBootArguments {
+            Text("Omarchy will also allow custom Aura boot arguments, including USB proxy mode.")
+              .font(OmarchyTheme.mono(12)).foregroundColor(OmarchyTheme.secondaryText)
+              .fixedSize(horizontal: false, vertical: true)
+          }
         }
       }
       SecureField("Password", text: $model.password)

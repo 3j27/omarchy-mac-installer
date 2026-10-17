@@ -184,7 +184,7 @@ run_with_spinner() {
 }
 
 bputil_now() {
-    bputil -nca -v "$VGID" -u "$OWNER" -p "$PASSWORD" >/tmp/bputil.log 2>&1
+    bputil ##BOOT_POLICY## -v "$VGID" -u "$OWNER" -p "$PASSWORD" >/tmp/bputil.log 2>&1
 }
 
 read_password() {
@@ -266,6 +266,7 @@ fi
 
 echo "This lets $os_name start Linux by lowering the security level of"
 echo "$os_name only. ${BOLD}macOS keeps Full Security.${RST}"
+##BOOT_POLICY_DISCLOSURE##
 echo
 # Ask before anything changes: bputil lowers the security level at once.
 printf "Are you sure you want to do this? (y or n) "
@@ -293,7 +294,7 @@ while :; do
     tries=$((tries + 1))
     if [ "$tries" -ge 3 ]; then
         echo "macOS asks itself now. Type your user name and password."
-        while ! bputil -nca -v "$VGID"; do
+        while ! bputil ##BOOT_POLICY## -v "$VGID"; do
             echo "That didn't work. Press Enter to try again."
             read -r _
         done
@@ -402,11 +403,20 @@ def _write_step2(installer):
     for name, value in (("volume group", installer.osi.vgid), ("Preboot volume group", installer.osi.preboot_vgid)):
         if VOLUME_GROUP_PATTERN.fullmatch(value or "") is None:
             raise AsahiAdapterError(f"{name} is invalid for the Recovery setup")
+    allow_custom_args = getattr(
+        getattr(installer, "sysinfo", None), "device_class", ""
+    ) == "j700ap"
+    disclosure = (
+        'echo "Custom Aura boot arguments, including USB proxy mode, will be allowed."'
+        if allow_custom_args else ""
+    )
     script = (
         STEP2_SCRIPT.replace("##TITLE##", title)
         .replace("##VGID##", installer.osi.vgid)
         .replace("##PREBOOT##", installer.osi.preboot_vgid)
         .replace("##OWNER##", owner)
+        .replace("##BOOT_POLICY_DISCLOSURE##", disclosure)
+        .replace("##BOOT_POLICY##", "-nca" if allow_custom_args else "-nc")
     )
     with open(installer.step2_sh, "w") as fd:
         fd.write(script)
@@ -1202,6 +1212,11 @@ class AsahiStage1Adapter:
             )
         self.installer.data = metadata
         self.template = templates[0]
+        board = getattr(self.installer.sysinfo, "device_class", "")
+        allowed = self.template.get("allowed_device_classes")
+        excluded = self.template.get("excluded_device_classes", [])
+        if (allowed is not None and board not in allowed) or board in excluded:
+            raise AsahiAdapterError("this image is not qualified for this Mac")
         self.osins = OmarchyOSInstaller(
             self.installer.dutil,
             metadata,

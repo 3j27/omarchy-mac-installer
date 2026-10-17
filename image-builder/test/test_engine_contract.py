@@ -94,22 +94,25 @@ def engine_metadata(package: str) -> dict:
     metadata = omarchy_asahi.load_metadata(str(ENGINE / "installer_data.json"))
     templates = [t for t in metadata["os_list"] if t.get("omarchy_target") == omarchy_asahi.TARGET]
     assert len(templates) == 1, "Engine/installer_data.json has exactly one full-OS target"
-    templates[0]["package"] = package
+    templates[0].update(package=package, allowed_device_classes=None, excluded_device_classes=["j700ap"])
     return metadata
 
 
-def written_metadata(package: str, out: Path) -> dict:
+def written_metadata(package: str, out: Path, hardware_profile: str = "legacy") -> dict:
     """The installer_data.json build-mac-image writes for PACKAGE."""
-    subprocess.run(["bash", "-c", 'source "$1" && write_installer_data "$2" "$3"', "bash",
-                    str(ROOT / "bin/build-mac-image"), package, str(out)], check=True)
+    candidates = out.parent / "metadata-set"
+    candidates.mkdir(exist_ok=True)
+    (candidates / "import.json").write_text(json.dumps({"hardware_profile": hardware_profile}))
+    subprocess.run(["bash", "-c", 'source "$1" && candidates="$4" && write_installer_data "$2" "$3"', "bash",
+                    str(ROOT / "bin/build-mac-image"), package, str(out), str(candidates)], check=True)
     return json.loads(out.read_text())
 
 
-def engine_admits(metadata: Path, payload: Path) -> list:
+def engine_admits(metadata: Path, payload: Path, device_class: str = "j314sap") -> list:
     """Runs the engine's preflight on METADATA and PAYLOAD; returns the firmware it chose from."""
     chosen = []
     installer = SimpleNamespace(
-        dutil=None, sysinfo=SimpleNamespace(device_class="j314sap"), osinfo=None,
+        dutil=None, sysinfo=SimpleNamespace(device_class=device_class), osinfo=None,
         choose_ipsw=lambda supported: chosen.append(supported)
         or SimpleNamespace(version=supported[-1]),
     )
@@ -139,6 +142,31 @@ class EngineContractTest(unittest.TestCase):
                                  "mac-image-check expects the engine's installer_data.json")
                 self.assertEqual(written_metadata(name, self.out / "installer_data.json"), expected,
                                  "build-mac-image writes the engine's installer_data.json")
+
+    def test_neo_profile_firmware_and_board_payloads_pass_engine_preflight(self):
+        metadata = self.out / "installer_data.json"
+        expected = check.expected_metadata(NAME, "neo")
+        self.assertEqual(written_metadata(NAME, metadata, "neo"), expected)
+        payload = self.out / NAME
+        fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID, hardware_profile="neo")
+        check.check_payload("edge", payload, metadata, hardware_profile="neo")
+        self.assertEqual(engine_admits(metadata, payload, "j700ap"), [["26.6.2"]])
+        with self.assertRaisesRegex(omarchy_asahi.AsahiAdapterError, "not qualified"):
+            engine_admits(metadata, payload, "j314sap")
+
+    def test_neo_missing_or_empty_board_boot_payloads_are_rejected(self):
+        metadata = self.out / "installer_data.json"
+        written_metadata(NAME, metadata, "neo")
+        for member in ("esp/aurora/stage1-j700.bin", "esp/m1n1/boot-j700.bin"):
+            for kind in ("omit", "empty"):
+                with self.subTest(member=member, kind=kind):
+                    payload = self.out / NAME
+                    fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID,
+                                           hardware_profile="neo", **{kind: (member,)})
+                    with self.assertRaises(check.CheckError):
+                        check.check_payload("edge", payload, metadata, hardware_profile="neo")
+                    with self.assertRaises(omarchy_asahi.AsahiAdapterError):
+                        engine_admits(metadata, payload, "j700ap")
 
     def test_the_engine_admits_the_builders_payload(self):
         for name, profile in ((NAME, "release"), (LAB_NAME, "lab")):

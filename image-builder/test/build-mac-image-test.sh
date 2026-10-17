@@ -64,7 +64,7 @@ pass "only the set and the empty [omarchy-aarch64] come from disk; the rest from
 candidates=$scratch/candidates
 mkdir -p "$candidates"
 cat >"$candidates/import.json" <<'EOF'
-{"packages": [
+{"hardware_profile": "neo", "packages": [
   {"name": "omarchy", "version": "4.0.0-1", "filename": "omarchy-4.0.0-1-aarch64.pkg.tar.xz", "group": "runtime"},
   {"name": "omarchy-settings", "version": "4.0.0-1", "filename": "s.pkg.tar.xz", "group": "runtime"},
   {"name": "omarchy-mac", "version": "0.1.0-1", "filename": "m.pkg.tar.xz", "group": "runtime"},
@@ -866,3 +866,25 @@ if command -v pacman >/dev/null 2>&1; then
 else
   echo "skip - pacman resolution of the repository order (no pacman on this host)"
 fi
+
+# Neo stages a matched, authenticated board contract; legacy images keep theirs.
+(
+  candidates=$scratch/neo-boot-inputs
+  target=$scratch/neo-boot-target
+  mkdir -p "$candidates" "$target/usr/share/aura/stage1" "$target/boot/efi/m1n1"
+  echo '{"hardware_profile":"neo"}' >"$candidates/import.json"
+  printf 'authenticated raw Stage 1' >"$target/usr/share/aura/stage1/aura-raw.bin"
+  printf 'assembled Stage 2' >"$target/boot/efi/m1n1/boot.bin"
+  stage_neo_boot_payloads
+  cmp "$target/usr/share/aura/stage1/aura-raw.bin" "$target/boot/efi/aurora/stage1-j700.bin" || exit 1
+  cmp "$target/boot/efi/m1n1/boot.bin" "$target/boot/efi/m1n1/boot-j700.bin" || exit 1
+  rm "$target/usr/share/aura/stage1/aura-raw.bin"
+  if (fail() { builder_fail "$@"; }; stage_neo_boot_payloads) >/dev/null 2>&1; then
+    exit 1
+  fi
+  rm "$target/boot/efi/aurora/stage1-j700.bin" "$target/boot/efi/m1n1/boot-j700.bin"
+  echo '{"hardware_profile":"legacy"}' >"$candidates/import.json"
+  stage_neo_boot_payloads
+  [[ ! -e $target/boot/efi/aurora/stage1-j700.bin && ! -e $target/boot/efi/m1n1/boot-j700.bin ]]
+) || fail "Neo boot payloads are missing, mismatched, or staged for a legacy image"
+pass "Neo stages matched board payloads and rejects missing Aura Stage 1; legacy stages none"
