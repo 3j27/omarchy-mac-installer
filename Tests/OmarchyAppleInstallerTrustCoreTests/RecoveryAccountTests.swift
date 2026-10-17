@@ -12,7 +12,7 @@
       let system = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
       try fm.createDirectory(at: system, withIntermediateDirectories: true)
       defer { try? fm.removeItem(at: system) }
-      let appName = "Omarchy Installer.app"
+      let appName = InstallerProductIdentity.recoveryAppBundleName
       let legacy = system.appendingPathComponent(
         appName + "/Contents/Resources/install-config.json")
       XCTAssertEqual(
@@ -30,7 +30,8 @@
     func testLegacyRecoveryDataMigratesWithoutChangingTheSignedBundleOrAccountState() throws {
       let fm = FileManager.default
       let system = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      let resources = system.appendingPathComponent("Omarchy Installer.app/Contents/Resources")
+      let appName = InstallerProductIdentity.recoveryAppBundleName
+      let resources = system.appendingPathComponent(appName + "/Contents/Resources")
       let payloads = resources.appendingPathComponent("AuraPayloads")
       try fm.createDirectory(at: payloads, withIntermediateDirectories: true)
       defer { try? fm.removeItem(at: system) }
@@ -62,7 +63,7 @@
       let sentinel = Data("account journal".utf8)
       try sentinel.write(to: state.appendingPathComponent("keep.json"))
       let output = try RecoveryInstallData.migrateLegacy(
-        system: system, appName: "Omarchy Installer.app", target: target, read: fixtureRead)
+        system: system, appName: appName, target: target, read: fixtureRead)
       XCTAssertEqual(
         try Data(contentsOf: output.appendingPathComponent("install-config.json")), config)
       XCTAssertEqual(
@@ -75,10 +76,10 @@
         XCTAssertEqual(try Data(contentsOf: payloads.appendingPathComponent(name)), Data(name.utf8))
       }
       // A later app update uses the published baseline, even if the old app is gone.
-      try fm.removeItem(at: system.appendingPathComponent("Omarchy Installer.app"))
+      try fm.removeItem(at: system.appendingPathComponent(appName))
       XCTAssertEqual(
         try RecoveryInstallData.migrateLegacy(
-          system: system, appName: "Omarchy Installer.app", target: target, read: fixtureRead),
+          system: system, appName: appName, target: target, read: fixtureRead),
         output)
     }
 
