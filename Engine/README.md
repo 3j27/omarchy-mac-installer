@@ -17,3 +17,7 @@ App-release CI uses that same producer and uploads the result as its engine buil
 The `.28` base preserves the original authenticated runtime: all 78 Mach-O files and the bootloader match the older `.14` base byte-for-byte. The locked Python patch and current integration replace its older installer logic. This avoids relying on the historical preview download URL.
 
 When the Swift helper changes, run its native debug/release tests and `Engine/RestoreImage/build.sh`, update its tracked binary/build record and source identity, then reproduce a new engine version and refresh the archive pins. The producer rejects a stale helper or archive.
+
+The authenticated `.28` runtime is also retained independently in the Aurora Silicon release mirror. The producer tries the primary asset, then the mirror, and requires exactly the same size and SHA-256 from either. The engine `.50` archive is published in that mirror too; the release pipeline names its available URL. Release assets are runtime inputs, not replacement source trees.
+
+Source revisions are repository-qualified: the integration revision belongs to `aurora-silicon/omarchy-mac`, as does `restore_image_source.repository` in the source lock. Preserve the fork source tags `engine-v0.9.2-omarchy.50` and `restore-image-source-7115941` when merging or squashing this PR; a squash does not change their immutable source identities. A future release revision should name the merged source commit and must reproduce its pinned engine before publication.

@@ -54,6 +54,27 @@ class EnginePreparationTests(unittest.TestCase):
             PREPARE.cached_base(self.root / 'cache', self.base_identity, bad_fetch)
         self.assertFalse((self.root / 'cache' / digest(self.base)).exists())
 
+    def test_missing_primary_uses_identically_pinned_mirror(self):
+        identity = dict(self.base_identity, base_mirror_urls=['https://mirror.invalid/base.tar.gz'])
+        calls = []
+        def fetch(url, destination, size):
+            calls.append(url)
+            if len(calls) == 1:
+                destination.write_bytes(b'interrupted download')
+                raise OSError('primary unavailable')
+            destination.write_bytes(self.base)
+        output = PREPARE.cached_base(self.root / 'cache', identity, fetch)
+        self.assertEqual(output.read_bytes(), self.base)
+        self.assertEqual(calls, [identity['base_url'], *identity['base_mirror_urls']])
+
+    def test_mirror_cannot_replace_the_authenticated_runtime(self):
+        identity = dict(self.base_identity, base_mirror_urls=['https://mirror.invalid/base.tar.gz'])
+        def fetch(url, destination, size):
+            destination.write_bytes(b'wrong runtime')
+        with self.assertRaisesRegex(ValueError, 'size or digest mismatch'):
+            PREPARE.cached_base(self.root / 'cache', identity, fetch)
+        self.assertFalse((self.root / 'cache' / digest(self.base)).exists())
+
     def test_cached_symlink_does_not_admit_an_unverified_target(self):
         cache = self.root / 'cache'
         cache.mkdir()

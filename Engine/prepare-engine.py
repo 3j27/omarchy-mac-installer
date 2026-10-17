@@ -62,8 +62,16 @@ def cached_base(cache, identity, fetch=download):
             target.unlink()
     with tempfile.TemporaryDirectory(prefix='base-', dir=cache) as temporary:
         fresh = Path(temporary) / 'runtime.tar.gz'
-        fetch(identity['base_url'], fresh, identity['base_size_bytes'])
-        verify_file(fresh, identity['base_size_bytes'], identity['base_sha256'])
+        urls = [identity['base_url'], *identity.get('base_mirror_urls', [])]
+        for index, url in enumerate(urls):
+            try:
+                fetch(url, fresh, identity['base_size_bytes'])
+                verify_file(fresh, identity['base_size_bytes'], identity['base_sha256'])
+                break
+            except (OSError, ValueError):
+                fresh.unlink(missing_ok=True)
+                if index == len(urls) - 1:
+                    raise
         try:
             os.link(fresh, target)
         except FileExistsError:

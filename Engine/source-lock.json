@@ -446,15 +446,15 @@
     },
     {
       "path": "prepare-engine.py",
-      "sha256": "889d49f8c2129e7b16e54f1ac0c509f00e1add7e5400d4706aec6c2f0d9519d6"
+      "sha256": "6074938d02e58829f67d106299d7709ef6fb43cfb5e12fe0e0b6065fde77b1df"
     },
     {
       "path": "tests/test_prepare_engine.py",
-      "sha256": "585b6faa662cd231853121b818dc7bb8cfa11b342bff0e6186c122cfb1399613"
+      "sha256": "d507336f17760e9fa644bea4dd23693d2ff32455e189ba2b3357d558e033b648"
     },
     {
       "path": "README.md",
-      "sha256": "0679d7513894008ba96ab1b7597b29382aefca28ad4c8d7bee4783ed1a78b644"
+      "sha256": "293349eaff0ceebc5f4a3a87cc34a00979ae037085aa6fc19653c24f5abe75bc"
     }
   ],
   "validation_artifact": {
@@ -497,7 +497,10 @@
     },
     "base_size_bytes": 17843348,
     "base_source_commit": "652c36254b12309d661dd4c427d616255f184f61",
-    "base_url": "https://github.com/omacom/omarchy-mac-installer/releases/download/engine-v0.9.2-omarchy.28/installer-v0.9.2-omarchy.28.tar.gz"
+    "base_url": "https://github.com/omacom/omarchy-mac-installer/releases/download/engine-v0.9.2-omarchy.28/installer-v0.9.2-omarchy.28.tar.gz",
+    "base_mirror_urls": [
+      "https://github.com/aurora-silicon/omarchy-mac/releases/download/engine-v0.9.2-omarchy.28/installer-v0.9.2-omarchy.28.tar.gz"
+    ]
   },
   "restore_image_source": {
     "repository": "https://github.com/aurora-silicon/omarchy-mac",
