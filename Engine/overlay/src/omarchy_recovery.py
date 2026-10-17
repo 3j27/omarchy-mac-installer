@@ -223,7 +223,16 @@ def _atomic_bytes(path, data, mode=0o600):
             temporary.unlink(missing_ok=True)
 
 
-def _verify_staged_app(app, config, files, template, run):
+def _unsigned_executable(data, run):
+    """Remove signing metadata from a private copy, preserving all code bytes."""
+    with tempfile.TemporaryDirectory(prefix="omarchy-recovery-code-") as temporary:
+        executable = Path(temporary) / "OmarchyRecovery"
+        executable.write_bytes(data)
+        run(["/usr/bin/codesign", "--remove-signature", str(executable)], check=True)
+        return executable.read_bytes()
+
+
+def _verify_staged_app(app, config, files, template, run, app_source):
     if app.is_symlink() or not app.is_dir():
         raise RecoveryError("unexpected existing Recovery app")
     for name, expected in template["files"].items():
@@ -234,7 +243,20 @@ def _verify_staged_app(app, config, files, template, run):
             raise RecoveryError("existing Recovery app contains a symbolic link")
         data = path.read_bytes()
         if expected != {"sha256": digest(data), "bytes": len(data)}:
-            raise RecoveryError("existing Recovery application differs from its template")
+            if name != "Contents/MacOS/OmarchyRecovery":
+                raise RecoveryError("existing Recovery application differs from its template")
+            source = Path(app_source) / name
+            if source.is_symlink():
+                raise RecoveryError("Recovery executable template contains a symbolic link")
+            original = source.read_bytes()
+            if expected != {"sha256": digest(original), "bytes": len(original)}:
+                raise RecoveryError("Recovery executable template changed during publication")
+            # Adding the per-install resources requires re-signing the bundle.
+            # codesign updates the signature inside the Mach-O executable too.
+            # Compare authenticated code without those signatures, then verify
+            # the complete staged bundle's current signature below.
+            if _unsigned_executable(data, run) != _unsigned_executable(original, run):
+                raise RecoveryError("existing Recovery application differs from its template")
     resources = app / "Contents/Resources"
     if json.loads((resources / "install-config.json").read_text()) != config:
         raise RecoveryError("existing Recovery app belongs to another installation")
@@ -325,7 +347,7 @@ def stage(installer, esp_uuid, esp_root, app_source=None,
                    "marker": base64.b64encode(marker.read_bytes()).decode(),
                    "markerMode": marker.stat().st_mode & 0o777}
     if destination.exists():
-        _verify_staged_app(destination, config, files, template, run)
+        _verify_staged_app(destination, config, files, template, run, app_source)
         if not pending.exists():
             _atomic_bytes(pending, json.dumps(journal, sort_keys=True).encode())
     if not destination.exists():
@@ -357,7 +379,7 @@ def stage(installer, esp_uuid, esp_root, app_source=None,
             _atomic_bytes(pending, json.dumps(journal, sort_keys=True).encode())
             os.replace(app, destination)
     try:
-        _verify_staged_app(destination, config, files, template, run)
+        _verify_staged_app(destination, config, files, template, run, app_source)
         _atomic_bytes(legacy_step2, launcher.encode(), 0o755)
         _atomic_bytes(marker, plistlib.dumps(launch), journal["markerMode"])
     except Exception:

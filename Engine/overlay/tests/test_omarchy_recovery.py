@@ -149,6 +149,25 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(recovery.RecoveryError, "differs from its template"):
             self.stage()
 
+    @unittest.skipUnless(sys.platform == "darwin", "requires native macOS codesign")
+    def test_native_resigning_preserves_code_and_rejects_signed_replacement(self):
+        source = self.root / "recovery.c"
+        source.write_text("int main(void) { return 0; }\n")
+        subprocess.run(["/usr/bin/xcrun", "clang", str(source), "-o", str(self.binary)], check=True)
+        subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(self.app)], check=True)
+        self.repin()
+        expected = recovery.stage(self.installer, ESP, str(self.esp))
+        target = self.system / recovery.APP_NAME
+        executable = target / "Contents/MacOS/OmarchyRecovery"
+        self.assertNotEqual(self.binary.read_bytes(), executable.read_bytes())
+        self.assertEqual(recovery.stage(self.installer, ESP, str(self.esp)), expected)
+
+        source.write_text("int main(void) { return 1; }\n")
+        subprocess.run(["/usr/bin/xcrun", "clang", str(source), "-o", str(executable)], check=True)
+        subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(target)], check=True)
+        with self.assertRaisesRegex(recovery.RecoveryError, "differs from its template"):
+            recovery.stage(self.installer, ESP, str(self.esp))
+
     def test_interrupted_marker_publication_restores_launcher_and_resumes(self):
         before_marker = self.marker.read_bytes()
         before_launcher = self.step2.read_bytes()
