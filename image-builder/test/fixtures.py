@@ -458,6 +458,10 @@ def plymouth_members(config: bytes | None = PLYMOUTH_CONFIG, theme: bool = True)
 def good_initramfs(plymouth: dict[str, bytes] | None = None) -> bytes:
     limine = load("apple_limine", "builder/apple_limine.py")
     members: dict[str, bytes | str] = {name: b"#!/bin/sh\n" for name in limine.INITRD_FILES}
+    header = bytearray(64)
+    header[:7] = b"\x7fELF\x02\x01\x01"
+    struct.pack_into("<H", header, 18, 183)
+    members["usr/bin/btrfs"] = bytes(header)
     members.update(limine.INITRD_LINKS)
     members.update(plymouth_members() if plymouth is None else plymouth)
     return initramfs(members)

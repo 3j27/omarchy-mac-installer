@@ -228,6 +228,22 @@ class InspectionTest(unittest.TestCase):
         menu = self.root / "boot/efi/limine.conf"
         menu.write_text(menu.read_text().split("#")[0] + "#" + hashlib.blake2b(data).hexdigest() + "\n")
 
+    def test_embedded_btrfs_must_run_on_target_without_build_host(self):
+        limine = inspection.limine
+        base = limine.initramfs_files(fixtures.good_initramfs(), set(limine.INITRD_FILES))
+        base.update(limine.INITRD_LINKS)
+        wrong_arch = bytearray(base["usr/bin/btrfs"])
+        wrong_arch[18:20] = (62).to_bytes(2, "little")
+        cases = (
+            b'#!/bin/sh\nexec /run/omarchy-native-fs/bin/btrfs "$@"\n',
+            bytes(wrong_arch),
+            b"\x7fELF\x02\x01\x01",
+        )
+        for contents in cases:
+            with self.subTest(contents=contents):
+                self.replace_uki(initrd=fixtures.initramfs({**base, "usr/bin/btrfs": contents}))
+                self.assertFails("embedded-initramfs", "btrfs is not an AArch64 ELF")
+
     def test_boot_splash(self):
         bgrt = b"# Administrator customizations go in this file\n[Daemon]\nTheme=bgrt\n"
         cmdline = self.inspect()["uki"]["cmdline"]
