@@ -81,6 +81,21 @@
         try RecoveryInstallData.migrateLegacy(
           system: system, appName: appName, target: target, read: fixtureRead),
         output)
+      // A retry must revalidate all payloads, even after a prior publication.
+      let firmware = output.appendingPathComponent("AuraPayloads/vendorfw/firmware.tar")
+      try Data("tampered".utf8).write(to: firmware)
+      XCTAssertThrowsError(
+        try RecoveryInstallData.migrateLegacy(
+          system: system, appName: appName, target: target, read: fixtureRead))
+      try Data("vendorfw/firmware.tar".utf8).write(to: firmware)
+      let payloadRoot = output.appendingPathComponent("AuraPayloads")
+      try fm.moveItem(at: payloadRoot, to: output.appendingPathComponent("saved-payloads"))
+      try fm.createSymbolicLink(
+        at: payloadRoot, withDestinationURL: output.appendingPathComponent("saved-payloads"))
+      XCTAssertThrowsError(try RecoveryInstallData.payloadDirectory(system: system))
+      XCTAssertThrowsError(
+        try RecoveryInstallData.migrateLegacy(
+          system: system, appName: appName, target: target, read: fixtureRead))
     }
 
     func testTokenAuthorityWaitsForNativePersistence() throws {
@@ -235,6 +250,17 @@
         directory: root.appendingPathComponent("snapshot"),
         files: [enabled, hidden, marker, disabled, receipt])
       try transaction.clearImmutableFlags()
+      // Account ownership may finish before boot enrollment. A policy/enrollment
+      // failure must leave the original autolaunch and version available to retry.
+      let pending = try RecoveryVersionMetadata.finishAccountSetup(
+        system: root, installationPending: true, read: fixtureRead)
+      XCTAssertTrue(pending.isEmpty)
+      XCTAssertEqual(try Data(contentsOf: marker), launch)
+      XCTAssertEqual(try Data(contentsOf: hidden), version)
+      let stillDeferred =
+        try JSONSerialization.jsonObject(
+          with: Data(contentsOf: receipt)) as? [String: Any]
+      XCTAssertEqual(stillDeferred?["recoveryAccountDeferred"] as? Bool, true)
       let relocated = try RecoveryVersionMetadata.finishAccountSetup(
         system: root, read: fixtureRead)
       try transaction.commit(relocated: relocated)

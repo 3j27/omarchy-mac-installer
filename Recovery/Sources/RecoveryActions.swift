@@ -74,7 +74,7 @@ enum RecoveryActions {
     }
   }
   static func payloadRoot() throws -> URL {
-    try RecoveryInstallData.directory(system: volume).appendingPathComponent("AuraPayloads")
+    try RecoveryInstallData.payloadDirectory(system: volume)
   }
   static var state: URL { volume.appendingPathComponent("Aurora/Recovery/State") }
   static var receipt: URL { state.appendingPathComponent("installation.json") }
@@ -263,7 +263,9 @@ enum RecoveryActions {
   }
   static func manifest() throws -> [String: Any] {
     let path = try payloadRoot().appendingPathComponent("manifest.json")
-    guard let m = try JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any],
+    guard
+      let m = try JSONSerialization.jsonObject(
+        with: RecoveryAccountInstaller.protectedRead(path, limit: 1 << 20)) as? [String: Any],
       m["schema"] as? Int == 2
     else { throw RecoveryFailure(message: "The recovery payload manifest is invalid.") }
     return m
@@ -330,7 +332,7 @@ enum RecoveryActions {
         InstallerLog.shared.append(
           "Verifying the recovery account and completing its ownership metadata.")
         let final = try RecoveryAccountInstaller.finalize(
-          selected.target, password: Data(password.utf8))
+          selected.target, password: Data(password.utf8), installationPending: true)
         try RecoveryAccountInstaller.requireOwnership(final)
         InstallerLog.shared.append("Recovery account ownership verified.")
       } else {

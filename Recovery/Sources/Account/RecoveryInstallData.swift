@@ -38,22 +38,62 @@ public enum RecoveryInstallData {
     let fm = FileManager.default
     let destination = try directory(system: system)
     if fm.fileExists(atPath: destination.path) {
-      try validateTarget(
-        read(destination.appendingPathComponent("install-config.json"), 65536), target)
+      _ = try verifiedBaseline(resources: destination, target: target, read: read)
       return destination
     }
     let resources = system.appendingPathComponent(appName + "/Contents/Resources")
     var legacy = system
-    for name in [appName, "Contents", "Resources", "AuraPayloads"] {
+    for name in [appName, "Contents", "Resources"] {
       legacy.appendPathComponent(name)
-      var info = stat()
-      guard lstat(legacy.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else {
-        throw AccountSetupFailure("The old Recovery data path is unsuitable.")
-      }
+      try requireDirectory(legacy)
     }
+    let (config, manifest, verified) = try verifiedBaseline(
+      resources: resources, target: target, read: read)
+    let parent = destination.deletingLastPathComponent()
+    try fm.createDirectory(
+      at: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    _ = try directory(system: system)
+    let temporary = parent.appendingPathComponent(".install-data-" + UUID().uuidString)
+    try fm.createDirectory(
+      at: temporary, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    defer { try? fm.removeItem(at: temporary) }
+    try RecoveryFileTransaction.write(
+      config, to: temporary.appendingPathComponent("install-config.json"))
+    for (name, bytes) in verified {
+      let output = temporary.appendingPathComponent("AuraPayloads/" + name)
+      try fm.createDirectory(
+        at: output.deletingLastPathComponent(), withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700])
+      try RecoveryFileTransaction.write(bytes, to: output)
+    }
+    try RecoveryFileTransaction.write(
+      manifest, to: temporary.appendingPathComponent("AuraPayloads/manifest.json"))
+    try RecoveryFileTransaction.flushTree(temporary)
+    try fm.moveItem(at: temporary, to: destination)
+    try RecoveryFileTransaction.flushDirectory(parent)
+    return destination
+  }
+
+  public static func payloadDirectory(system: URL) throws -> URL {
+    let path = try directory(system: system).appendingPathComponent("AuraPayloads")
+    try requireDirectory(path)
+    return path
+  }
+
+  private static func requireDirectory(_ path: URL) throws {
+    var info = stat()
+    guard lstat(path.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else {
+      throw AccountSetupFailure("The Recovery payload directory is unsuitable.")
+    }
+  }
+
+  private static func verifiedBaseline(
+    resources: URL, target: RecoveryAccountTarget, read: (URL, Int) throws -> Data
+  ) throws -> (Data, Data, [String: Data]) {
     let config = try read(resources.appendingPathComponent("install-config.json"), 65536)
     try validateTarget(config, target)
     let payloads = resources.appendingPathComponent("AuraPayloads")
+    try requireDirectory(payloads)
     let manifest = try read(payloads.appendingPathComponent("manifest.json"), 1 << 20)
     guard let value = try JSONSerialization.jsonObject(with: manifest) as? [String: Any],
       value["schema"] as? Int == 2,
@@ -84,28 +124,7 @@ public enum RecoveryInstallData {
       }
       verified[name] = bytes
     }
-    let parent = destination.deletingLastPathComponent()
-    try fm.createDirectory(
-      at: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-    _ = try directory(system: system)
-    let temporary = parent.appendingPathComponent(".install-data-" + UUID().uuidString)
-    try fm.createDirectory(
-      at: temporary, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-    defer { try? fm.removeItem(at: temporary) }
-    try RecoveryFileTransaction.write(
-      config, to: temporary.appendingPathComponent("install-config.json"))
-    for (name, bytes) in verified {
-      let output = temporary.appendingPathComponent("AuraPayloads/" + name)
-      try fm.createDirectory(
-        at: output.deletingLastPathComponent(), withIntermediateDirectories: true,
-        attributes: [.posixPermissions: 0o700])
-      try RecoveryFileTransaction.write(bytes, to: output)
-    }
-    try RecoveryFileTransaction.write(
-      manifest, to: temporary.appendingPathComponent("AuraPayloads/manifest.json"))
-    try fm.moveItem(at: temporary, to: destination)
-    try RecoveryFileTransaction.flushDirectory(parent)
-    return destination
+    return (config, manifest, verified)
   }
 
   private static func validateTarget(_ config: Data, _ target: RecoveryAccountTarget) throws {

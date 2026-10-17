@@ -279,7 +279,20 @@ public enum RecoveryAccountInstaller {
       close(fd)
       throw AccountSetupFailure("A protected account record is unsuitable.")
     }
-    return try FileHandle(fileDescriptor: fd, closeOnDealloc: true).readToEnd() ?? Data()
+    let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    var bytes = Data()
+    while let block = try handle.read(upToCount: min(1 << 20, limit - bytes.count + 1)),
+      !block.isEmpty
+    {
+      bytes.append(block)
+      guard bytes.count <= limit else {
+        throw AccountSetupFailure("A protected account record grew beyond its limit.")
+      }
+    }
+    guard bytes.count == status.st_size else {
+      throw AccountSetupFailure("A protected account record changed while reading.")
+    }
+    return bytes
   }
 
   static func save(_ record: RecoveryAccountRecord, _ ctx: Context) throws {
@@ -711,7 +724,9 @@ public enum RecoveryAccountInstaller {
     try FileManager.default.removeItem(at: pending)
   }
 
-  public static func finalize(_ target: RecoveryAccountTarget, password: Data) throws
+  public static func finalize(
+    _ target: RecoveryAccountTarget, password: Data, installationPending: Bool = false
+  ) throws
     -> RecoveryAccountRecord
   {
     try validatePassword(password)
@@ -852,7 +867,8 @@ public enum RecoveryAccountInstaller {
             && $0["VolumeOwner"] as? Bool == true
         })
       else { throw AccountSetupFailure("Recovery ownership changed during finalization.") }
-      let relocated = try RecoveryVersionMetadata.finishAccountSetup(system: ctx.system)
+      let relocated = try RecoveryVersionMetadata.finishAccountSetup(
+        system: ctx.system, installationPending: installationPending)
       record.phase = "finalized"
       try save(record, ctx)
       try transaction.commit(relocated: relocated)

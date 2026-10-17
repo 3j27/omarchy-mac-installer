@@ -76,3 +76,5 @@ A deferred receipt remains visible to the macOS installer’s Recovery handoff. 
 The recovery account deliberately remains the stub’s only admin account (uid 501); it must become a verified volume/machine owner to authorize future Linux boot changes independently. Its password is validated by macOS account creation and authentication, without an extra installer-specific length rule. This is an explicit owner requirement, not a completed maintainer approval.
 
 Recovery app updates retain the external data directory. A previously installed app with embedded inputs is migrated once after checking the target UUIDs and every payload hash. The old signed bundle remains unchanged during migration and rollback; immutable app backups carry their target binding in an adjacent JSON record. Existing account state and journals under `Aurora/Recovery/State` are preserved.
+
+Installation-specific data under `Aurora/Recovery/InstallData` is not code-signed. Its target identities, file inventory, sizes and hashes are checked separately; this preserves the previous stub-data trust level. The application bundle retains its original signature unchanged.

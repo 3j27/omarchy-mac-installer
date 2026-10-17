@@ -34,14 +34,21 @@ public enum RecoveryVersionMetadata {
   /// The caller snapshots every affected file, then passes the returned
   /// relocations to transaction.commit() to preserve moved metadata flags.
   @discardableResult
-  public static func finishAccountSetup(system: URL) throws -> [String: URL] {
-    try finishAccountSetup(system: system, read: RecoveryAccountInstaller.protectedRead)
+  public static func finishAccountSetup(
+    system: URL, installationPending: Bool = false
+  ) throws -> [String: URL] {
+    try finishAccountSetup(
+      system: system, installationPending: installationPending,
+      read: RecoveryAccountInstaller.protectedRead)
   }
 
   @discardableResult
   static func finishAccountSetup(
-    system: URL, read: (URL, Int) throws -> Data
+    system: URL, installationPending: Bool = false, read: (URL, Int) throws -> Data
   ) throws -> [String: URL] {
+    // Enrollment owns these files until its receipt is durable. Account ownership
+    // can finish first without disarming the launcher needed to retry enrollment.
+    guard !installationPending else { return [:] }
     var relocated = [String: URL]()
     let fm = FileManager.default
     let marker = system.appendingPathComponent(".IAPhysicalMedia")
