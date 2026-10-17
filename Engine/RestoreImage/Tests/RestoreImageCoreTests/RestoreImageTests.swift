@@ -163,6 +163,37 @@ final class RestoreImageTests: XCTestCase, @unchecked Sendable {
     }
     XCTAssertThrowsError(try decompressStorage([]))
   }
+  func testAPFSLZVNPaddingAndInstructionBoundaries() throws {
+    let v = try vectors()
+    let plain = try bytes(v, "plain")
+    let compressed = try bytes(v, "lzvn")
+    let padded = compressed + Data(repeating: 0xa5, count: 34)
+    XCTAssertEqual(try lzvnPayload(padded, expected: plain.count), compressed)
+    for kind in [7, 8] {
+      let attr =
+        Data("fpmc".utf8) + littleBytes(kind, count: 4) + littleBytes(plain.count, count: 8)
+      let storage =
+        kind == 7
+        ? [attr + padded]
+        : [attr, littleBytes(8, count: 4) + littleBytes(8 + padded.count, count: 4) + padded]
+      XCTAssertEqual(try decompressStorage(storage), plain)
+    }
+    // An EOS-shaped sequence inside literal data must not terminate parsing.
+    let literal = Data([6, 0, 0, 0, 0, 0, 0, 0])
+    let encoded = Data([0xe8]) + literal + Data([6, 0, 0, 0, 0, 0, 0, 0])
+    XCTAssertEqual(try lzvnPayload(encoded + Data([0xa5]), expected: 8), encoded)
+    let attr = Data("fpmc".utf8) + littleBytes(7, count: 4) + littleBytes(8, count: 8)
+    XCTAssertEqual(try decompressStorage([attr + encoded + Data([0xa5])]), literal)
+    for malformed in [
+      Data([6]), Data([0xe0]), Data([0xe2, 65]), Data([0x07, 1]), Data([0xf1]), Data([0x00, 0]),
+    ] {
+      XCTAssertThrowsError(try lzvnPayload(malformed, expected: 8))
+    }
+    XCTAssertThrowsError(try lzvnPayload(encoded, expected: 7))
+    XCTAssertThrowsError(try lzvnPayload(encoded, expected: 9))
+    XCTAssertThrowsError(try lzvnPayload(Data(encoded.dropLast()), expected: 8))
+  }
+
   struct AEAFixture: Decodable {
     struct Record: Decodable {
       let record: RangeRecord

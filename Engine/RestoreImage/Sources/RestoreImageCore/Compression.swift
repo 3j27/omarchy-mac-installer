@@ -82,6 +82,67 @@ func inflateZlib(_ data: Data, expected: Int) throws -> Data {
   try require(status == Z_OK && count == expected, "zlib output length mismatch.")
   return Data(output.prefix(Int(count)))
 }
+
+func lzvnPayload(_ data: Data, expected: Int) throws -> Data {
+  try require(expected > 0 && expected <= 65536 && data.count <= 65537, "Invalid LZVN bounds.")
+  var cursor = 0
+  var produced = 0
+  var previousDistance = 0
+  func read(_ count: Int) throws -> Int {
+    let value = try data.little(cursor, count)
+    cursor += count
+    return value
+  }
+  while cursor < data.count {
+    let opcode = try read(1)
+    if opcode == 0x06 {
+      _ = try data.part(cursor, 7)
+      try require(produced == expected, "LZVN output length mismatch.")
+      return try data.part(0, cursor + 7)
+    }
+    if opcode == 0x0e || opcode == 0x16 { continue }
+    let literals: Int
+    let matches: Int
+    var distance = previousDistance
+    if opcode >= 0xf0 {
+      literals = 0
+      matches = try opcode == 0xf0 ? read(1) + 16 : opcode & 15
+    } else if opcode >= 0xe0 {
+      matches = 0
+      literals = try opcode == 0xe0 ? read(1) + 16 : opcode & 15
+    } else if (0xa0...0xbf).contains(opcode) {
+      let first = try read(1)
+      let second = try read(1)
+      literals = (opcode >> 3) & 3
+      matches = (((opcode & 7) << 2) | (first & 3)) + 3
+      distance = (first >> 2) | (second << 6)
+      previousDistance = distance
+    } else {
+      literals = opcode >> 6
+      matches = ((opcode >> 3) & 7) + 3
+      switch opcode & 7 {
+      case 0...5:
+        distance = try ((opcode & 7) << 8) | read(1)
+        previousDistance = distance
+      case 6: break
+      default:
+        distance = try read(2)
+        previousDistance = distance
+      }
+    }
+    _ = try data.part(cursor, literals)
+    cursor += literals
+    try require(literals <= expected - produced, "LZVN literal budget exceeded.")
+    produced += literals
+    if matches > 0 {
+      try require(distance > 0 && distance <= produced, "Invalid LZVN match distance.")
+      try require(matches <= expected - produced, "LZVN match budget exceeded.")
+      produced += matches
+    }
+  }
+  throw RestoreFailure("Missing LZVN end-of-stream.")
+}
+
 func decompressStorage(_ storage: [Data]) throws -> Data {
   try require((1...2).contains(storage.count), "Invalid APFS storage count.")
   let attr = storage[0]
@@ -142,10 +203,13 @@ func decompressStorage(_ storage: [Data]) throws -> Data {
       if block.first == 6 {
         plain = Data(block.dropFirst())
       } else {
-        // Apple's public LZFSE codec accepts raw LZVN inside its bvxn envelope.
+        // APFS chunks can contain authenticated padding after LZVN's EOS.
+        // Parse instructions to locate EOS; a byte search could match literals.
+        // The full padded storage has already passed its recipe hash check.
+        let payload = try lzvnPayload(block, expected: expected)
         let envelope =
           Data("bvxn".utf8) + littleBytes(expected, count: 4)
-          + littleBytes(block.count, count: 4) + block + Data("bvx$".utf8)
+          + littleBytes(payload.count, count: 4) + payload + Data("bvx$".utf8)
         plain = try boundedLZFSE(envelope, maximum: expected)
       }
     default:

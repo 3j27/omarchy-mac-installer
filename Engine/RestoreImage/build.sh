@@ -14,12 +14,15 @@ stage=$(mktemp -d "$output/.restore-image-build.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 export ZERO_AR_DATE=1
 for variant in first second; do
-  swift build --package-path "$package" --scratch-path "$stage/$variant" \
+  swift build --build-system native --package-path "$package" --scratch-path "$stage/$variant" \
     --configuration release --jobs "$jobs" --triple arm64-apple-macosx14.0 \
     -Xswiftc -file-prefix-map -Xswiftc "$package=/Sources/RestoreImage" \
     -Xswiftc -gnone -Xswiftc -Xfrontend -Xswiftc -no-serialize-debugging-options \
     -Xlinker -oso_prefix -Xlinker "$stage/$variant/"
-  cp "$stage/$variant/arm64-apple-macosx/release/omarchy-restore-image" "$stage/$variant.bin"
+  binary_directory=$(swift build --build-system native --package-path "$package" \
+    --scratch-path "$stage/$variant" --configuration release \
+    --triple arm64-apple-macosx14.0 --show-bin-path)
+  cp "$binary_directory/omarchy-restore-image" "$stage/$variant.bin"
 done
 if ! cmp "$stage/first.bin" "$stage/second.bin"; then
   cp "$stage/first.bin" "$output/first-unqualified.bin"
