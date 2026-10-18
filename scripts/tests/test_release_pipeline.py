@@ -308,14 +308,29 @@ class AcceptanceJobs(unittest.TestCase):
         self.assertEqual(runs_on(self.jobs["acceptance"]), "${{ fromJSON(needs.guard.outputs.runner) }}")
         self.assertEqual(field(self.jobs["guard"], "if"), "github.repository == 'omacom/omarchy-mac-installer'")
 
-    def test_every_job_off_github_hosted_runners_needs_the_guard(self):
+    def test_every_job_off_github_hosted_runners_refuses_pull_requests(self):
+        # Namespace's runners are ours. A job on one either waits for a
+        # GitHub-hosted guard (acceptance's, which also checks its inputs and
+        # picks the runner) or carries the same refusal in its own condition,
+        # which GitHub evaluates before the job reaches a runner.
+        refusal = ("github.repository == 'omacom/omarchy-mac-installer'",
+                   "github.event_name != 'pull_request'", "github.event_name != 'pull_request_target'")
         for workflow in sorted(WORKFLOWS.glob("*.yml")):
             for job, body in jobs(workflow).items():
                 if field(body, "uses") or hosted(body):
                     continue
                 with self.subTest(f"{workflow.name} {job}"):
-                    self.assertEqual(workflow, ACCEPTANCE)
-                    self.assertIn("guard", field(body, "needs"))
+                    if "guard" in field(body, "needs"):
+                        guard = jobs(workflow)["guard"]
+                        self.assertTrue(hosted(guard))
+                        self.assertEqual(field(guard, "if"), refusal[0])
+                        self.assertIn("pull_request_target", guard)
+                    else:
+                        for condition in refusal:
+                            self.assertIn(condition, body)
+
+    def test_the_image_is_built_only_from_main(self):
+        self.assertIn("github.ref == 'refs/heads/main'", jobs(WORKFLOWS / "mac-image.yml")["build"])
 
     def test_no_pull_request_workflow_can_reach_the_lab_runner(self):
         for workflow in sorted(WORKFLOWS.glob("*.yml")):
@@ -617,7 +632,7 @@ class Record(unittest.TestCase):
 class Plan(unittest.TestCase):
     def plan(self, dry_run: str, ref: str, event: str = "workflow_dispatch") -> int:
         env = {"PATH": os.environ["PATH"], "DRY_RUN": dry_run, "GITHUB_REF": ref, "EVENT": event}
-        return subprocess.run(["bash", "--noprofile", "--norc", "-c", step_script(PIPELINE, "Refuse a real run off main")], env=env,
+        return subprocess.run(["bash", "--noprofile", "--norc", "-c", step_script(PIPELINE, "Refuse a run off main")], env=env,
                               stdin=subprocess.DEVNULL, capture_output=True).returncode
 
     def test_the_plan_reads_the_runs_own_dry_run_input(self):
@@ -625,11 +640,14 @@ class Plan(unittest.TestCase):
         self.assertIn("DRY_RUN: ${{ inputs.dry-run }}", plan)
         self.assertIn("EVENT: ${{ github.event_name }}", plan)
 
-    def test_a_real_run_starts_only_from_main(self):
+    def test_every_run_starts_only_from_main(self):
+        # The image builds only from main: a dry run elsewhere would skip
+        # every job and pass, having tested nothing.
         self.assertEqual(self.plan("false", "refs/heads/main"), 0)
+        self.assertEqual(self.plan("true", "refs/heads/main"), 0)
         self.assertNotEqual(self.plan("false", "refs/heads/feature"), 0)
         self.assertNotEqual(self.plan("false", "refs/tags/v2.2.0"), 0)
-        self.assertEqual(self.plan("true", "refs/heads/feature"), 0)
+        self.assertNotEqual(self.plan("true", "refs/heads/feature"), 0)
 
     def test_pull_requests_never_run_it(self):
         for event in ("pull_request", "pull_request_target"):
