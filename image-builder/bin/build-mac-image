@@ -945,8 +945,15 @@ require_build_identity() {
 }
 
 install_runtime() {
+  local graphics=()
+  # A Neo image's reviewed Mesa must be a target here: it then satisfies the
+  # desktop's mesa dependency, so stock mesa never installs. The Apple set
+  # cannot replace it later without answering a conflict prompt.
+  if [[ $(jq -r '.hardware_profile // "legacy"' "$candidates/import.json") == neo ]]; then
+    mapfile -t graphics < <(qualified mesa-aurora vulkan-aurora)
+  fi
   mount_api
-  target_pacman -S "$(qualified omarchy)" "${base_names[@]}" >>"$logs/install.log" 2>&1 ||
+  target_pacman -S "$(qualified omarchy)" "${base_names[@]}" "${graphics[@]}" >>"$logs/install.log" 2>&1 ||
     fail "could not install the runtime (logs/install.log)"
   unmount_api
 }

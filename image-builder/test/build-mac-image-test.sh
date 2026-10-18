@@ -292,7 +292,8 @@ mapfile -t transactions <"$scratch/transactions"
 ((${#transactions[@]} == 3)) || fail "three transactions: ${transactions[*]}"
 [[ ${transactions[0]} == *" omarchy-candidates/omarchy-settings manifest=no" && ${transactions[0]} != *linux-aurora* ]] ||
   fail "the first transaction is the base and omarchy-settings alone, before the manifest: ${transactions[0]}"
-[[ ${transactions[1]} == "-S omarchy-candidates/omarchy hyprland manifest=yes" ]] ||
+# This fixture is a Neo set: its reviewed Mesa installs with the runtime.
+[[ ${transactions[1]} == "-S omarchy-candidates/omarchy hyprland omarchy-candidates/mesa-aurora omarchy-candidates/vulkan-aurora manifest=yes" ]] ||
   fail "the runtime comes next, after the manifest: ${transactions[1]}"
 for name in omarchy-mac omarchy-mac-boot linux-aurora aura uboot-aurora; do
   [[ " ${transactions[2]} " == *" omarchy-candidates/$name "* ]] || fail "the Apple set installs $name by its qualified name"
@@ -904,3 +905,21 @@ pass "Neo stages matched board payloads and rejects missing Aura Stage 1; legacy
   [[ ${base_names[*]} == "omarchy-candidates/mesa-aurora" ]]
 ) || fail "Neo base package request bypasses the reviewed Mesa archive"
 pass "Neo base and Apple runtime requests use the reviewed Mesa, Vulkan and bless packages"
+
+# Neo's runtime transaction carries the reviewed Mesa, so stock mesa never installs
+# and the Apple set needs no conflict prompt. Legacy's runtime is unchanged.
+(
+  candidates=$scratch/neo-runtime-mesa
+  mkdir -p "$candidates"
+  printf '%s\n' '{"hardware_profile":"neo","packages":[{"name":"omarchy-dev","role":"omarchy"},{"name":"mesa-aurora"},{"name":"vulkan-aurora"}]}' >"$candidates/import.json"
+  mount_api() { :; }
+  unmount_api() { :; }
+  target_pacman() { printf '%s\n' "$*" >"$scratch/neo-runtime-transaction"; }
+  base_names=(hyprland)
+  install_runtime
+  [[ $(<"$scratch/neo-runtime-transaction") == "-S omarchy-candidates/omarchy-dev hyprland omarchy-candidates/mesa-aurora omarchy-candidates/vulkan-aurora" ]] || exit 1
+  printf '%s\n' '{"packages":[{"name":"omarchy-dev","role":"omarchy"},{"name":"mesa-aurora"},{"name":"vulkan-aurora"}]}' >"$candidates/import.json"
+  install_runtime
+  [[ $(<"$scratch/neo-runtime-transaction") == "-S omarchy-candidates/omarchy-dev hyprland" ]]
+) || fail "the Neo runtime transaction does not carry the reviewed Mesa, or legacy's does"
+pass "Neo installs the reviewed Mesa and Vulkan with the runtime; legacy's runtime is unchanged"
