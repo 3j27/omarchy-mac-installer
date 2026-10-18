@@ -110,9 +110,14 @@ jobs:
           echo "signatures in the package cache: $(find "$WORK/cache/pkg" -name '*.sig' | wc -l)"
 
       - name: Run the release guard
+        # The guard loop-mounts root.img and boot.img. The runner has no loop
+        # devices, so it runs in a privileged container, as the builder does.
         run: |
           set -euo pipefail
-          sudo python3 image-builder/bin/mac-release-guard build "$WORK/out" 2>&1 | tee "$WORK/evidence/release-guard.log"
+          sudo docker run --rm --privileged -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" -v "$WORK:$WORK" \
+            -w "$GITHUB_WORKSPACE" ubuntu@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac \
+            bash -c 'apt-get update -qq && apt-get install --yes -qq --no-install-recommends python3 libarchive-tools btrfs-progs >/dev/null &&
+              python3 image-builder/bin/mac-release-guard build "$1"' guard "$WORK/out" 2>&1 | tee "$WORK/evidence/release-guard.log"
 
       - name: Stage the image
         id: stage
