@@ -37,6 +37,12 @@ def check(template, output):
                 package['name'] for package in summary['packages']}
             root = work / 'root'
             fixtures.make_root(root, work / 'frozen')
+            packages = [(p['name'], p['version'], 'omarchy-candidates', p['filename'], p['sha256'])
+                        for p in summary['packages']]
+            target = root / 'var/lib/omarchy/image/target'
+            target.write_text(target.read_text().replace(fixtures.PACKAGE_SET_SHA256,
+                                                        image.package_set(packages)).replace(
+                                                            fixtures.BUILT, image.BUILT))
             # Fixture directories stand in for Btrfs subvolumes in this unprivileged lane.
             inspection.is_subvolume = lambda path: path == root / '.snapshots'
             inspection.OWNER_UID = os.geteuid()
@@ -46,10 +52,17 @@ def check(template, output):
                 raise ValueError('Neo fixture inspection failed: ' + str(report['failed_checks']))
             frozen = work / 'recovery-frozen'
             recovery.snapshot(template, frozen, before)
-            inputs = dict(image.CHANNEL_INPUTS, hardware_profile='neo', recovery_app_manifest_sha256=before)
+            inputs = dict(image.CHANNEL_INPUTS, channel_set=summary['set'],
+                          channel_signer=summary['signer'], channel_manifest_sha256=summary['manifest_sha256'],
+                          omarchy_db_sha256=digest, hardware_profile='neo', recovery_app_manifest_sha256=before)
+
+            def inspected_report(record):
+                record.clear()
+                record.update(report)
+
             image.build(output, inputs=inputs, hardware_profile='neo', recovery_app=frozen,
-                        pin='', sources=(('omarchy-mac', fixtures.SOURCE),),
-                        packages=image.CHANNEL_PACKAGES, candidates=image.CHANNEL_PACKAGES[:2])
+                        pin='', sources=tuple(report['runtime_sources'].items()),
+                        packages=packages, candidates=packages, report_edit=inspected_report)
             image.check.check_provenance('edge', output)
             image.check.check_descriptor('edge', output)
             assert recovery.validate(template) == before
@@ -57,6 +70,8 @@ def check(template, output):
             payload.unlink()  # Synthetic image must not be mistaken for a deployable artifact.
             (output / 'check-only.json').write_text(json.dumps({
                 'result': 'passed', 'hardware_profile': 'neo', 'nativeRecoveryManifestSha256': before,
+                'channelSet': summary['set'], 'packageSetSha256': image.package_set(packages),
+                'channelDatabaseSha256': digest,
                 'sourceCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
                 'scope': 'real native Recovery artifact; signed fixture packages and filesystems',
                 'hardwareTested': False, 'channelPackagesBuilt': False,
