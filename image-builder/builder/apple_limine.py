@@ -24,6 +24,7 @@ import zlib
 INITRD_EXECUTABLES = (
     "usr/lib/systemd/system-generators/systemd-cryptsetup-generator",
     "usr/bin/systemd-cryptsetup",
+    "usr/bin/btrfs",
 )
 INITRD_FILES = (
     *INITRD_EXECUTABLES,
@@ -282,7 +283,14 @@ def validate_initramfs(archive: bytes) -> int:
     for name in INITRD_EXECUTABLES:
         mode = members[name][0]
         if not (mode.startswith("-") and mode[3] == "x"):
-            raise ContractError(f"the embedded initramfs cryptsetup binary is not executable: {name}")
+            raise ContractError(f"the embedded initramfs binary is not executable: {name}")
+    # A cross-build may temporarily bind a host wrapper over the installed
+    # binary. Inspect the embedded bytes: restoring the root file afterwards
+    # does not repair the initrd that mkinitcpio already produced.
+    btrfs = initramfs_files(archive, {"usr/bin/btrfs"}).get("usr/bin/btrfs", b"")
+    if (len(btrfs) < 64 or btrfs[:7] != b"\x7fELF\x02\x01\x01"
+            or struct.unpack_from("<H", btrfs, 18)[0] != 183):
+        raise ContractError("the embedded initramfs btrfs is not an AArch64 ELF binary")
     for name, target in INITRD_LINKS.items():
         mode, actual = members[name]
         if not mode.startswith("l") or actual != target:

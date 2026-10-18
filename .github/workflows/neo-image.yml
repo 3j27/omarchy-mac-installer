@@ -1,0 +1,99 @@
+name: Neo image input check and build
+
+# Manual, secret-free image qualification. No releases, catalogs or deployment.
+# Default: authenticate real Neo channel inputs and freeze the native template.
+# A full image build is opt-in and still does not qualify a hardware boot.
+on:
+  workflow_dispatch:
+    inputs:
+      build-image:
+        description: Build the full image after authenticating inputs
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  recovery:
+    name: Build the native Recovery image input
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Build and record the Recovery source and native tools
+        run: |
+          mkdir -p "$RUNNER_TEMP/neo-recovery"
+          {
+            git rev-parse HEAD
+            git rev-parse HEAD:Recovery
+            sw_vers
+            xcodebuild -version
+            xcrun swift --version
+          } > "$RUNNER_TEMP/neo-recovery/source.txt"
+          bash Recovery/build-recovery.sh "$RUNNER_TEMP/neo-recovery/template"
+          source Packaging/identity.conf
+          tar -cf "$RUNNER_TEMP/neo-recovery/native-recovery.tar" -C "$RUNNER_TEMP/neo-recovery/template" "$INSTALLER_RECOVERY_APP_NAME.app" omarchy-recovery-app.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: neo-native-recovery-input
+          path: |
+            ${{ runner.temp }}/neo-recovery/native-recovery.tar
+            ${{ runner.temp }}/neo-recovery/source.txt
+          retention-days: 14
+
+  image:
+    name: Check real Neo channel inputs, optionally build
+    needs: recovery
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      BUILD_IMAGE: ${{ inputs.build-image }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Set the work directory
+        run: echo "WORK=$RUNNER_TEMP/neo-image" >>"$GITHUB_ENV"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: neo-native-recovery-input
+          path: ${{ runner.temp }}/neo-image/recovery
+      - name: Install input verification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools jq gnupg zstd xz-utils
+      - name: Resolve and authenticate the real edge Neo package set
+        run: |
+          mkdir -p "$WORK/evidence"
+          tar -xf "$WORK/recovery/native-recovery.tar" -C "$WORK/recovery"
+          bash image-builder/bin/mac-image-inputs resolve "$WORK/inputs" --channel-set --channel edge --hardware-profile neo --recovery-app "$WORK/recovery" --cache "$WORK/cache" 2>&1 | tee "$WORK/evidence/resolve.log"
+          cp "$WORK/inputs" "$WORK/evidence/inputs"
+          cp "$WORK/recovery/source.txt" "$WORK/evidence/recovery-source.txt"
+          options=(--dry-run)
+          [[ $BUILD_IMAGE != true ]] || options=()
+          bash image-builder/bin/build-mac-image --inputs "$WORK/inputs" --recovery-app "$WORK/recovery" --cache "$WORK/cache" "${options[@]}" "$WORK/out" 2>&1 | tee "$WORK/evidence/build.log"
+      - name: Check a completed image
+        if: inputs.build-image
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" "$WORK/out"
+          python3 image-builder/bin/mac-image-check provenance edge "$WORK/out"
+          python3 image-builder/bin/mac-image-check descriptor edge "$WORK/out"
+          sudo python3 image-builder/bin/mac-release-guard build "$WORK/out" 2>&1 | tee "$WORK/evidence/release-guard.log"
+      - name: Save qualification artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: neo-image-qualification
+          path: |
+            ${{ runner.temp }}/neo-image/evidence/
+            ${{ runner.temp }}/neo-image/out/
+          retention-days: 14
