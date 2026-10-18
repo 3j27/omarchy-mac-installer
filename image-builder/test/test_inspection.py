@@ -234,6 +234,18 @@ class InspectionTest(unittest.TestCase):
         menu.write_text(menu.read_text().split("#")[0] + "#" + hashlib.blake2b(data).hexdigest() + "\n")
         self.assertFails("embedded-initramfs", "omarchy-mac-encrypt")
 
+    def test_embedded_initramfs_accepts_published_boot_package_without_extra_root_gate(self):
+        limine = inspection.limine
+        extra_gate = "usr/lib/systemd/system/sysroot.mount.d/10-omarchy-mac-encrypt-required.conf"
+        members = limine.initramfs_files(fixtures.good_initramfs(),
+                                        set(limine.INITRD_FILES) | {extra_gate})
+        members.update(limine.INITRD_LINKS)
+        members.pop(extra_gate, None)
+        self.replace_uki(initrd=fixtures.initramfs(members))
+        report = self.inspect()
+        self.assertEqual(report["checks"]["embedded-initramfs"]["result"], "passed",
+                         report["checks"]["embedded-initramfs"])
+
     def replace_uki(self, initrd=None, cmdline=None):
         """Rebuilds the UKI with another initramfs or command line, keeping the menu's hash and
         /etc/default/limine in step so only the splash is wrong."""
