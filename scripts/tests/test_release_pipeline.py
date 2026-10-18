@@ -632,7 +632,7 @@ class Record(unittest.TestCase):
 class Plan(unittest.TestCase):
     def plan(self, dry_run: str, ref: str, event: str = "workflow_dispatch") -> int:
         env = {"PATH": os.environ["PATH"], "DRY_RUN": dry_run, "GITHUB_REF": ref, "EVENT": event}
-        return subprocess.run(["bash", "--noprofile", "--norc", "-c", step_script(PIPELINE, "Refuse a real run off main")], env=env,
+        return subprocess.run(["bash", "--noprofile", "--norc", "-c", step_script(PIPELINE, "Refuse a run off main")], env=env,
                               stdin=subprocess.DEVNULL, capture_output=True).returncode
 
     def test_the_plan_reads_the_runs_own_dry_run_input(self):
@@ -640,11 +640,14 @@ class Plan(unittest.TestCase):
         self.assertIn("DRY_RUN: ${{ inputs.dry-run }}", plan)
         self.assertIn("EVENT: ${{ github.event_name }}", plan)
 
-    def test_a_real_run_starts_only_from_main(self):
+    def test_every_run_starts_only_from_main(self):
+        # The image builds only from main: a dry run elsewhere would skip
+        # every job and pass, having tested nothing.
         self.assertEqual(self.plan("false", "refs/heads/main"), 0)
+        self.assertEqual(self.plan("true", "refs/heads/main"), 0)
         self.assertNotEqual(self.plan("false", "refs/heads/feature"), 0)
         self.assertNotEqual(self.plan("false", "refs/tags/v2.2.0"), 0)
-        self.assertEqual(self.plan("true", "refs/heads/feature"), 0)
+        self.assertNotEqual(self.plan("true", "refs/heads/feature"), 0)
 
     def test_pull_requests_never_run_it(self):
         for event in ("pull_request", "pull_request_target"):
