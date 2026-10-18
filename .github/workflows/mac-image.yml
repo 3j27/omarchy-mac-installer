@@ -111,11 +111,12 @@ jobs:
 
       - name: Run the release guard
         # The guard loop-mounts root.img and boot.img. The runner has no loop
-        # devices, so it runs in a privileged container, as the builder does.
+        # devices, so it runs in a privileged container, as the builder does,
+        # and unpacks onto a volume: a loop device needs a real filesystem.
         run: |
           set -euo pipefail
-          sudo docker run --rm --privileged -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" -v "$WORK:$WORK" \
-            -w "$GITHUB_WORKSPACE" ubuntu@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac \
+          sudo docker run --rm --privileged -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" -v "$WORK:$WORK" -v /guard \
+            -e TMPDIR=/guard -w "$GITHUB_WORKSPACE" ubuntu@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac \
             bash -c 'apt-get update -qq && apt-get install --yes -qq --no-install-recommends python3 libarchive-tools btrfs-progs >/dev/null &&
               python3 image-builder/bin/mac-release-guard build "$1"' guard "$WORK/out" 2>&1 | tee "$WORK/evidence/release-guard.log"
 
