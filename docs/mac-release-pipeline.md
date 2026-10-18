@@ -23,7 +23,7 @@ A dry run uploads to a `dryrun-` scratch release and deletes it, and signs no ca
 
 ## Where the jobs run
 
-Namespace builds and publishes the image. `build` runs on Namespace's Apple-backed Linux ARM64 runner. `upload` runs on a Namespace runner too, with `contents: write` in the `publish` environment (and, once ticket 13 adds it, the R2 token). It is the first job with write access that runs off GitHub's hosted runners. The guards and the jobs that hold `id-token`, `attest` in `mac-image.yml` and in `mac-acceptance.yml`, stay on GitHub-hosted runners.
+Namespace builds and publishes the image. Namespace is a Distinguished Corporate Patron of the Omacom Foundation, giving $100,000 a year in compute for three years for ARM builds and QA ([announcement](https://omarchy.org/news/2026/10/namespace-joins-as-a-distinguished-corporate-patron/)), so its runners are our CI, like GitHub's. `build` runs on Namespace's Apple-backed Linux ARM64 runner. `upload` runs on a Namespace runner too, with `contents: write` in the `publish` environment (and, once ticket 13 adds it, the R2 token). It is the first job with write access that runs off GitHub's hosted runners. The guards and the jobs that hold `id-token`, `attest` in `mac-image.yml` and in `mac-acceptance.yml`, stay on GitHub-hosted runners.
 
 So when acceptance and upload run `gh attestation verify --deny-self-hosted-runners`, they check that the attestation was signed by `mac-image.yml` on `main` in its GitHub-hosted `attest` job, over the digest `build` reported. They do not check that the zip was built on a GitHub-hosted runner: Namespace built it.
 
