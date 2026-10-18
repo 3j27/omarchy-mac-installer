@@ -10,7 +10,7 @@ The runner is Ubuntu; the harness was written for an Arch Linux ARM host. `scrip
 
 - **Overlay root.** The runner's root file system is overlayfs, which the harness's own overlay mount cannot use as its upper layer. The run's state directory is an ext4 file system in a sparse file (`$ROOT/state.ext4`).
 - **No udev.** Reloading udev rules, which only hides the run's devices from a desktop automounter, is a no-op.
-- **No FAT driver in the kernel.** The harness reads and writes the ESP with mtools, so the host kernel needs none.
+- **No FAT driver in the kernel.** The VM job runs on Namespace's default kernel, which has none, so the harness reads and writes the ESP with mtools. (The image build opts into Namespace's bleeding-edge kernel, which has FAT; see `image-builder/README.md`.)
 
 The harness gives the guest a GICv2m for its MSIs, not an ITS (`msi=gicv2m`): nested on Apple silicon the host's virtual GIC has no LPIs, so an emulated ITS's interrupts never reach the guest and its USB and virtio devices hang.
 

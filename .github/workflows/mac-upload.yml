@@ -122,7 +122,8 @@ jobs:
       github.repository == 'omacom/omarchy-mac-installer' &&
       github.event_name != 'pull_request' &&
       github.event_name != 'pull_request_target'
-    runs-on: ubuntu-24.04
+    # On Namespace, which holds the image in its artifact storage.
+    runs-on: namespace-profile-linux-amd64-16x32
     timeout-minutes: 180
     # The publish environment only deploys from main. A dry run needs no
     # environment: it touches nothing real.
@@ -194,7 +195,7 @@ jobs:
           python3 -I scripts/mac-upload.py check-run --run-json "$WORK/evidence-run.json" --repository "$GITHUB_REPOSITORY" --role evidence --current-run-id "$GITHUB_RUN_ID"
 
       - name: Download the image
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: namespace-actions/download-artifact@7cbad919e4b0e09f17e9d6311a444ff002992b5b # v2.0.1
         with:
           name: ${{ inputs.image-artifact }}
           path: ${{ runner.temp }}/mac-upload/image
@@ -219,10 +220,13 @@ jobs:
           shopt -s nullglob
           zips=("$WORK"/image/*.zip)
           (( ${#zips[@]} == 1 )) || { echo "::error::the artifact holds ${#zips[@]} image zips, not one"; exit 1; }
+          # --deny-self-hosted-runners holds the attestation to mac-image.yml's
+          # GitHub-hosted attest job, which signs the digest build reported. The
+          # zip itself is built on Namespace (docs/mac-release-pipeline.md).
           if gh attestation verify "${zips[0]}" --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/mac-image.yml" \
             --source-ref refs/heads/main --deny-self-hosted-runners >"$WORK/attestation.log" 2>&1; then
-            echo "the image was built by mac-image.yml on main"
+            echo "the image was built on Namespace by mac-image.yml on main, and attested on GitHub's runner"
           elif [[ $DRY_RUN == "true" ]]; then
             cat "$WORK/attestation.log"
             echo "::warning::the image has no build attestation from mac-image.yml on main; a real upload would refuse it"

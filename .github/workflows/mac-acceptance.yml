@@ -215,7 +215,7 @@ jobs:
           (( free >= 70 )) || { echo "::error::$ROOT has ${free} GiB free, not 70"; exit 1; }
 
       - name: Download the image
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: namespace-actions/download-artifact@7cbad919e4b0e09f17e9d6311a444ff002992b5b # v2.0.1
         with:
           name: ${{ inputs.image-artifact }}
           path: ${{ env.ROOT }}/image
@@ -241,13 +241,16 @@ jobs:
             exit 1
           fi
           # The same check as mac-upload.yml's.
+          # --deny-self-hosted-runners holds the attestation to mac-image.yml's
+          # GitHub-hosted attest job, which signs the digest build reported. The
+          # zip itself is built on Namespace (docs/mac-release-pipeline.md).
           if ! gh attestation verify "${zips[0]}" --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/mac-image.yml" \
             --source-ref refs/heads/main --deny-self-hosted-runners; then
             echo "::error::the image has no build attestation from mac-image.yml on main"
             exit 1
           fi
-          echo "$(basename "${zips[0]}") is $IMAGE_SHA256, built by mac-image.yml on main"
+          echo "$(basename "${zips[0]}") is $IMAGE_SHA256, built on Namespace by mac-image.yml on main"
 
       - name: Fetch the harness
         id: harness

@@ -2,7 +2,9 @@ name: Mac release pipeline
 
 # Carries one edge image from build to a signed edge catalog:
 #
-#   plan        refuses a real run off main or for a pull request
+#   plan        refuses any run off main (the image builds only from main, so
+#               a dry run elsewhere would skip every job and pass) or for a
+#               pull request
 #   build       mac-image.yml: builds and attests the image (no secrets)
 #   acceptance  mac-acceptance.yml: the VM harness's fresh-install scenarios
 #               on that exact sha256, on the VM runner (the `runner` input;
@@ -73,7 +75,7 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     steps:
-      - name: Refuse a real run off main
+      - name: Refuse a run off main
         env:
           DRY_RUN: ${{ inputs.dry-run }}
           EVENT: ${{ github.event_name }}
@@ -83,8 +85,11 @@ jobs:
             echo "::error::the release pipeline never runs for pull requests"
             exit 1
           fi
-          if [[ $DRY_RUN != true && $GITHUB_REF != refs/heads/main ]]; then
-            echo "::error::a real pipeline run starts only from main, not $GITHUB_REF"
+          # mac-image.yml builds only from main. Off main, build and every job
+          # after it would skip and the run would pass having tested nothing,
+          # so a dry run starts from main too.
+          if [[ $GITHUB_REF != refs/heads/main ]]; then
+            echo "::error::the pipeline runs only from main, dry runs included, not $GITHUB_REF"
             exit 1
           fi
           echo "dry_run=$DRY_RUN ref=$GITHUB_REF event=$EVENT"
