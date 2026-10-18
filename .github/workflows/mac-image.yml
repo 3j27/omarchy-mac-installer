@@ -48,7 +48,10 @@ jobs:
       github.event_name != 'pull_request' &&
       github.event_name != 'pull_request_target' &&
       github.ref == 'refs/heads/main'
-    runs-on: namespace-profile-arm64-linux-apple-12x32
+    # Namespace's bleeding-edge kernel has FAT (vfat and loop devices in the
+    # builder's privileged container), which limine-entry-tool requires of the
+    # ESP. Their default kernel has none.
+    runs-on: namespace-profile-arm64-linux-apple-12x32;kernel.release-channel=bleeding-edge
     timeout-minutes: 90
     outputs:
       name: ${{ steps.stage.outputs.name }}
