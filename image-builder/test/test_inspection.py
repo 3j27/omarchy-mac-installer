@@ -419,6 +419,23 @@ class InspectionTest(unittest.TestCase):
         (install / "omarchy-aarch64-apple.packages").write_text("omarchy-mac\nnot-installed\n")
         self.assertFails("apple-packages", "omarchy-aarch64-apple.packages names packages that are not installed: not-installed$")
 
+    def test_apple_package_list_accepts_only_exact_aurora_replacements(self):
+        install = self.root / "usr/share/omarchy/install"
+        (install / "omarchy-aarch64-apple.packages").write_text("omarchy-mac\nasahi-bless\n")
+        local = self.root / "var/lib/pacman/local"
+        for stock in local.glob("asahi-bless-*"):
+            shutil.rmtree(stock)
+        self.assertFails("apple-packages", "names packages that are not installed: asahi-bless$")
+        fixtures.local_package(self.root, "aurora-bless", "0.4.4.aurora2-1", [], provides=("asahi-bless=0.4.4.aurora2",))
+        report = self.inspect()
+        self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
+        shutil.rmtree(local / "aurora-bless-0.4.4.aurora2-1")
+        fixtures.local_package(self.root, "aurora-bless", "0.4.4.aurora2-1", [])
+        self.assertFails("apple-packages", "names packages that are not installed: asahi-bless$")
+        shutil.rmtree(local / "aurora-bless-0.4.4.aurora2-1")
+        fixtures.local_package(self.root, "bless-impostor", "1-1", [], provides=("asahi-bless",))
+        self.assertFails("apple-packages", "names packages that are not installed: asahi-bless$")
+
     def test_apple_package_list_missing(self):
         install = self.root / "usr/share/omarchy/install"
         (install / "omarchy-apple-silicon.packages").unlink()
