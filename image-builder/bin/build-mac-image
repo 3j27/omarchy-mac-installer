@@ -1017,7 +1017,8 @@ write_installed_config() {
   python3 "$ROOT/builder/test_image_pin.py" render "$repositories/pacman-$channel.conf" "$candidates/import.json" \
     >"$work/pacman.conf" || fail "could not write the test image's pacman configuration"
   install -m 0644 "$work/pacman.conf" "$target/etc/pacman.conf"
-  install -D -m 0644 "$mirrorlist" "$target/etc/pacman.d/mirrorlist"
+  mkdir -p "$target/etc/pacman.d"
+  install -m 0644 "$mirrorlist" "$target/etc/pacman.d/mirrorlist"
   test_image_pin=$(python3 "$ROOT/builder/test_image_pin.py" names "$candidates/import.json")
 }
 
@@ -1292,8 +1293,9 @@ stage_neo_boot_payloads() {
   local stage2="$target/boot/efi/m1n1/boot.bin"
   [[ -s $stage1 && ! -L $stage1 && -s $stage2 && ! -L $stage2 ]] ||
     fail "the Neo image lacks matched Aura Stage 1 and Stage 2 payloads"
-  install -Dm644 "$stage1" "$target/boot/efi/aurora/stage1-j700.bin"
-  install -Dm644 "$stage2" "$target/boot/efi/m1n1/boot-j700.bin"
+  mkdir -p "$target/boot/efi/aurora" "$target/boot/efi/m1n1"
+  install -m 0644 "$stage1" "$target/boot/efi/aurora/stage1-j700.bin"
+  install -m 0644 "$stage2" "$target/boot/efi/m1n1/boot-j700.bin"
 }
 
 # Repository names in pacman configuration FILE, in its order.

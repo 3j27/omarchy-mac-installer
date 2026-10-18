@@ -16,7 +16,7 @@ import fixtures  # noqa: E402
 inspection = fixtures.load("inspection", "builder/inspection.py")
 inspection.OWNER_UID = os.geteuid()
 CHECKS = ("candidate-versions", "runtime-sources", "minimum-versions", "refused-packages", "apple-packages", "installed-boot-payloads",
-          "candidate-files",
+          "candidate-files", "package-mtrees",
           "m1n1-stage2", "aurora-device-trees", "limine-uki", "embedded-initramfs", "boot-splash", "boot-maintenance",
           "image-target", "first-boot", "snapshots", "pacman-config", "installed-system", "factory")
 # Fixture roots live on whatever filesystem the tests run on: these paths stand in for btrfs subvolumes.
@@ -74,6 +74,28 @@ class InspectionTest(unittest.TestCase):
         compressor = zlib.compressobj(wbits=31)
         data = m1n1 + b"".join(fixtures.dtb(name) for name in dtbs) + compressor.compress(uboot) + compressor.flush() + tail
         (self.root / "boot/efi/m1n1/boot.bin").write_bytes(data)
+
+    def test_missing_corrupt_and_replaced_integrity_references_fail(self):
+        import gzip
+        entry = next((self.root / 'var/lib/pacman/local').glob('linux-aurora-*')) / 'mtree'
+        original = entry.read_bytes()
+        for data, reason in [(None, 'no installed mtree'), (b'not gzip', 'invalid compressed mtree'),
+                             (gzip.compress(b'#mtree\n./changed sha256digest=' + b'0' * 64 + b'\n'),
+                              'differs from its source')]:
+            with self.subTest(reason=reason):
+                if data is None:
+                    entry.unlink()
+                else:
+                    entry.write_bytes(data)
+                self.assertFails('package-mtrees', reason)
+                entry.write_bytes(original)
+
+    def test_source_package_without_mtree_is_rejected_even_with_installed_reference(self):
+        candidates = inspection.Candidates(self.candidates)
+        listing = candidates.listing(inspection.KERNEL)
+        candidates._listings[inspection.KERNEL] = [p for p in listing if p != '.MTREE']
+        with self.assertRaisesRegex(inspection.InspectionError, 'source package has no .MTREE'):
+            inspection.check_package_mtrees(self.root, candidates)
 
     def test_image_built_from_the_set_passes_inspection(self):
         report = self.inspect()

@@ -148,7 +148,10 @@ def write_archive(path: Path, name: str, version: str, files: dict[str, bytes], 
     pkginfo = "\n".join([f"pkgname = {name}", f"pkgver = {version}", f"arch = {arch}",
                          *[f"depend = {d}" for d in deps]]) + "\n"
     with tarfile.open(path, "w:xz") as archive:
-        for member, data in {".PKGINFO": pkginfo.encode(), **files}.items():
+        metadata = "#mtree\n" + "".join(
+            f"./{name} size={len(data)} sha256digest={hashlib.sha256(data).hexdigest()}\n"
+            for name, data in {".PKGINFO": pkginfo.encode(), **files}.items() if isinstance(data, bytes))
+        for member, data in {".PKGINFO": pkginfo.encode(), ".MTREE": gzip.compress(metadata.encode()), **files}.items():
             info = tarfile.TarInfo(member)
             if isinstance(data, str):
                 # A symlink to TARGET.
@@ -526,7 +529,7 @@ def make_root(root: Path, candidates: Path, layout: str | None = None) -> None:
     root.mkdir(parents=True, exist_ok=True)
     for package in summary["packages"]:
         subprocess.run(["bsdtar", "-xf", str(candidates / package["filename"]), "-C", str(root),
-                        "--exclude", ".PKGINFO"], check=True)
+                        "--exclude", ".PKGINFO", "--exclude", ".MTREE"], check=True)
     uuid = "4f4d5801-524f-4f54-8000-000000000001"
     cmdline = f"root=UUID={uuid} rootflags=subvol=@ rw rootfstype=btrfs {SPLASH}"
     write(root, "etc/fstab", f"UUID={uuid} / btrfs noatime,subvol=@ 0 0\n")
@@ -586,6 +589,8 @@ def make_root(root: Path, candidates: Path, layout: str | None = None) -> None:
             others.pop(role, None)
     for name, version in {**versions, **others}.items():
         local_package(root, name, version, owners.get(name, []), provides.get(name, ()))
+        if name in versions:
+            write(root, f"var/lib/pacman/local/{name}-{version}/mtree", member(name, ".MTREE"))
     state = root / "var/lib/omarchy"
     write(root, "var/lib/omarchy/image/target", image_target(summary))
     (state / "image").chmod(0o755)

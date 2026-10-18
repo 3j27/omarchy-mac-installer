@@ -148,7 +148,7 @@ mkdir "$work/channel-packages"
   fail "packages from the cache"
 expected=$(cd "$work/channel/edge/packages" && ls | sort)
 [[ $(cd "$work/channel-packages" && ls | grep -v '\.sig$' | sort) == "$expected" &&
-  $(ls "$work/channel-packages" | grep -c '\.sig$') == $(wc -l <<<"$expected") ]] ||
+  $(ls "$work/channel-packages" | grep -c '\.sig$') -eq $(wc -l <<<"$expected") ]] ||
   fail "packages puts each archive the pinned database names, with its signature, in place"
 pass "packages puts the channel set's archives and signatures in place from the cache"
 

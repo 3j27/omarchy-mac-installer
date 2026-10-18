@@ -121,11 +121,25 @@ def validate_zip(archive, expected=None):
     files = manifest_files(data)
     prefix = PREFIX + APP + "/"
     actual = set()
+    seen = set()
     for item in archive.infolist():
-        if not item.filename.startswith(prefix) or item.is_dir():
+        if not item.filename.startswith(PREFIX):
+            continue
+        require(item.filename not in seen, "duplicate Recovery payload entry")
+        seen.add(item.filename)
+        require((item.external_attr >> 16) & 0o170000 in (0, stat.S_IFREG, stat.S_IFDIR),
+                "Recovery payload contains a non-regular entry")
+        if item.is_dir():
+            require(item.filename == PREFIX or item.filename == prefix
+                    or item.filename.startswith(prefix) and any(
+                        name.startswith(item.filename[len(prefix):]) for name in files),
+                    "unexpected Recovery payload directory")
+            continue
+        require(item.filename == name or item.filename.startswith(prefix),
+                "unexpected Recovery payload file")
+        if item.filename == name:
             continue
         relative = item.filename[len(prefix):]
-        require(relative not in actual, "duplicate Recovery payload entry")
         require((item.external_attr >> 16) & 0o170000 in (0, stat.S_IFREG),
                 "Recovery payload contains a non-regular entry")
         actual.add(relative)

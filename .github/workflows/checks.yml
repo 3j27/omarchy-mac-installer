@@ -55,7 +55,7 @@ jobs:
   macos:
     name: macOS checks
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       # Use an explicit Swift 6.2 toolchain, independent of the image default.
       DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
@@ -77,6 +77,12 @@ jobs:
             xcrun swift --version
             xcrun swift-format --version
           } | tee "$RUNNER_TEMP/installer-ci/toolchain.txt"
+      - name: Check image-builder shell portability on macOS
+        run: |
+          brew install bash jq gnupg libarchive
+          export PATH="$(brew --prefix libarchive)/bin:$(brew --prefix bash)/bin:$PATH"
+          bash image-builder/test/mac-image-inputs-test.sh 2>&1 | tee "$RUNNER_TEMP/installer-ci/image-inputs-shell.log"
+          bash image-builder/test/build-mac-image-test.sh 2>&1 | tee "$RUNNER_TEMP/installer-ci/image-builder-shell.log"
       - name: Install pinned XcodeBuildMCP
         run: |
           # Match the standalone tool used for the recorded M4 validation.
@@ -117,6 +123,16 @@ jobs:
         run: xcodebuildmcp swift-package test --package-path "$PWD" --configuration release 2>&1 | tee "$RUNNER_TEMP/installer-ci/swift-release.log"
       - name: Build Recovery enrollment app and run its standalone fixtures
         run: bash Recovery/build-app.sh recovery "$RUNNER_TEMP/installer-ci/recovery-enrollment" 2>&1 | tee "$RUNNER_TEMP/installer-ci/recovery-enrollment.log"
+      - name: Export the immutable native Recovery input for Neo checks
+        run: |
+          source Packaging/identity.conf
+          tar -cf "$RUNNER_TEMP/installer-ci/native-recovery.tar" -C "$RUNNER_TEMP/installer-ci/recovery-enrollment" "$INSTALLER_RECOVERY_APP_NAME.app" omarchy-recovery-app.json
+      - name: Save the native Recovery image input
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-recovery-image-input
+          path: ${{ runner.temp }}/installer-ci/native-recovery.tar
+          retention-days: 7
       - name: Build Recovery preview
         run: OMARCHY_RECOVERY_BUILD=preview xcodebuildmcp swift-package build --package-path "$PWD/Recovery" --configuration release 2>&1 | tee "$RUNNER_TEMP/installer-ci/recovery-preview.log"
       - name: Reproduce the pinned installer engine
@@ -161,4 +177,33 @@ jobs:
         with:
           name: image-builder-source-evidence
           path: ${{ runner.temp }}/image-builder-ci/
+          retention-days: 14
+
+  neo-recovery:
+    name: Neo and native Recovery image contract (check only)
+    needs: macos
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: native-recovery-image-input
+          path: ${{ runner.temp }}/native-recovery
+      - name: Install source-test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools jq gnupg zstd xz-utils
+      - name: Check the macOS-built Recovery artifact with the Neo profile
+        run: |
+          tar -xf "$RUNNER_TEMP/native-recovery/native-recovery.tar" -C "$RUNNER_TEMP/native-recovery"
+          python3 image-builder/test/neo-recovery-check.py --recovery-app "$RUNNER_TEMP/native-recovery" --output "$RUNNER_TEMP/neo-recovery-check"
+      - name: Save check-only evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: neo-recovery-check-only
+          path: ${{ runner.temp }}/neo-recovery-check/
           retention-days: 14

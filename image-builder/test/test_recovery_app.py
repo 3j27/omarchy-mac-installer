@@ -70,6 +70,18 @@ class RecoveryAppTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     recovery.validate(self.source, digest)
 
+    def test_zip_rejects_stray_files_and_directories_outside_the_frozen_app(self):
+        for stray in ('extra', 'InstallData/config.json', 'extra/',
+                      recovery.APP + '/Contents/extra/'):
+            with self.subTest(stray=stray):
+                payload = self.root / 'payload.zip'
+                fixtures.write_payload(payload, '4f4d5801-424f-4f54-8000-000000000001',
+                                       '4f4d5801-524f-4f54-8000-000000000001', recovery_app=self.source)
+                with zipfile.ZipFile(payload, 'a') as archive:
+                    archive.writestr(recovery.PREFIX + stray, b'')
+                with zipfile.ZipFile(payload) as archive, self.assertRaisesRegex(ValueError, 'unexpected Recovery'):
+                    recovery.validate_zip(archive, self.digest)
+
     def test_paths_and_sizes_are_bounded_before_file_reads(self):
         for name, size in (("../outside", 1), ("Contents/../outside", 1),
                            ("Contents/MacOS/OmarchyRecovery", recovery.MAX_FILE + 1),

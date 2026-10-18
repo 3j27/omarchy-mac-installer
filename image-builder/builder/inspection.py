@@ -362,6 +362,24 @@ def mtree_digests(root: Path, package: str) -> dict[str, str]:
     return digests
 
 
+def check_package_mtrees(root: Path, candidates: Candidates) -> str:
+    """The installed integrity references must come from the frozen archives."""
+    versions = installed_versions(root)
+    for name in sorted(candidates.packages):
+        require(".MTREE" in candidates.listing(name), f"{name}: source package has no .MTREE")
+        expected = candidates.member(name, ".MTREE")
+        path = root / "var/lib/pacman/local" / f"{name}-{versions.get(name, '')}" / "mtree"
+        require(path.is_file() and not path.is_symlink(), f"{name}: no installed mtree file")
+        try:
+            source, installed = gzip.decompress(expected), gzip.decompress(path.read_bytes())
+        except (OSError, EOFError, zlib.error) as error:
+            raise InspectionError(f"{name}: invalid compressed mtree") from error
+        require(source.startswith(b"#mtree\n") and b"sha256digest=" in source,
+                f"{name}: mtree has no file checksums")
+        require(source == installed, f"{name}: installed mtree differs from its source package")
+    return f"all {len(candidates.packages)} package mtree references match their frozen archives"
+
+
 def check_supported_models(root: Path, candidates: Candidates, report: dict) -> str:
     """Every Mac U-Boot supports has its Aurora device tree in stage 2."""
     kernel_dtbs = {PurePosixPath(p).name for p in candidates.dtbs()}
@@ -670,6 +688,7 @@ def inspect(root: Path, candidates_dir: Path, channel: str, factory: Path | None
         ("apple-packages", lambda: check_apple_packages(root, report)),
         ("installed-boot-payloads", lambda: check_installed_payloads(root, candidates)),
         ("candidate-files", lambda: check_candidate_files(root, candidates, report)),
+        ("package-mtrees", lambda: check_package_mtrees(root, candidates)),
         ("m1n1-stage2", lambda: m1n1_stage2(root, candidates, report)),
         ("aurora-device-trees", lambda: check_supported_models(root, candidates, report)),
         ("limine-uki", lambda: check_limine(root, candidates, report)),
