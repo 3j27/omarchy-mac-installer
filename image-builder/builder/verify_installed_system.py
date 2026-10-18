@@ -235,6 +235,24 @@ def installed_package_names(root: Path) -> set[str]:
     return set(installed_provides(root))
 
 
+# Exact Aurora replacements only. An arbitrary package claiming a required
+# role must not satisfy image inspection. Candidate signature/source checks
+# still happen independently before this installed-system check.
+AURORA_REPLACEMENTS = {
+    "aura": {"m1n1-aurora"}, "uboot-aurora": {"uboot-asahi"},
+    "mesa-aurora": {"mesa"}, "vulkan-aurora": {"vulkan-asahi"},
+    "aurora-bless": {"asahi-bless"},
+    "aurora-audio": {"asahi-audio"},
+    "alsa-ucm-conf-aurora": {"alsa-ucm-conf-asahi"},
+}
+
+
+def aurora_replaced(packages: dict[str, set[str]]) -> set[str]:
+    """Names an installed exact Aurora replacement fills, when it provides them."""
+    return {role for name, roles in AURORA_REPLACEMENTS.items() if name in packages
+            for role in roles & packages[name]}
+
+
 def installed_provides(root: Path) -> dict[str, set[str]]:
     """Each installed package's name and the names it provides, without versions."""
     database = root / "var/lib/pacman/local"
@@ -263,19 +281,7 @@ def check_packages(verification: Verification, root: Path, runtime_packages: fro
     packages = installed_provides(root)
     installed = set(packages)
     filled = installed | {role for name in runtime_packages & installed for role in packages[name]}
-    # Exact Aurora replacements only. An arbitrary package claiming a required
-    # role must not satisfy image inspection. Candidate signature/source checks
-    # still happen independently before this installed-system check.
-    replacements = {
-        "aura": {"m1n1-aurora"}, "uboot-aurora": {"uboot-asahi"},
-        "mesa-aurora": {"mesa"}, "vulkan-aurora": {"vulkan-asahi"},
-        "aurora-bless": {"asahi-bless"},
-        "aurora-audio": {"asahi-audio"},
-        "alsa-ucm-conf-aurora": {"alsa-ucm-conf-asahi"},
-    }
-    for name, roles in replacements.items():
-        if name in installed:
-            filled.update(roles & packages[name])
+    filled |= aurora_replaced(packages)
     missing = [name for name in REQUIRED_PACKAGES if name not in filled]
     verification.record(
         "packages-required-present",

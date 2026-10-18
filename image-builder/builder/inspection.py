@@ -217,9 +217,11 @@ def check_apple_packages(root: Path, report: dict) -> str:
     names = [fields[0] for fields in map(str.split, path.read_text().splitlines())
              if fields and not fields[0].startswith("#")]
     require(bool(names), f"{path.name} names no package")
-    versions = installed_versions(root)
+    packages = installed_system.installed_provides(root)
+    # A Neo image installs aurora-bless where the list names asahi-bless.
+    filled = set(packages) | installed_system.aurora_replaced(packages)
     report["apple_package_list"] = path.name
-    missing = [name for name in names if name not in versions]
+    missing = [name for name in names if name not in filled]
     require(not missing, f"{path.name} names packages that are not installed: {' '.join(missing)}")
     return f"all {len(names)} packages of {path.name} installed"
 
