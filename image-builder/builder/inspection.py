@@ -381,14 +381,14 @@ def check_package_mtrees(root: Path, candidates: Candidates) -> str:
 
 
 def check_supported_models(root: Path, candidates: Candidates, report: dict) -> str:
-    """Every Mac U-Boot supports has its Aurora device tree in stage 2."""
+    """Every Mac the image admits has its Aurora device tree in stage 2."""
     kernel_dtbs = {PurePosixPath(p).name for p in candidates.dtbs()}
-    models = sorted(PurePosixPath(p).name for p in candidates.listing(candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"])
-                    if PurePosixPath(p).match("usr/lib/asahi-boot/dtb/*.dtb"))
     if candidates.hardware_profile == "neo":
-        models = [name for name in models if name == "t8140-j700.dtb"]
+        # The Neo profile admits one board, and the Aurora U-Boot ships no device trees.
+        models = ["t8140-j700.dtb"]
     else:
-        models = [name for name in models if name != "t8140-j700.dtb"]
+        models = sorted(PurePosixPath(p).name for p in candidates.listing(candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"])
+                        if PurePosixPath(p).match("usr/lib/asahi-boot/dtb/*.dtb") and PurePosixPath(p).name != "t8140-j700.dtb")
     require(models, "the set's U-Boot names no Mac")
     missing = [name for name in models if name not in kernel_dtbs]
     require(not missing, "the Aurora kernel lacks device trees for " + ", ".join(missing))

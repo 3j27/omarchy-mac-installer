@@ -133,6 +133,19 @@ class InspectionTest(unittest.TestCase):
         with self.assertRaisesRegex(inspection.InspectionError, "authenticated manifest"):
             inspection.Candidates(imported)
 
+    def test_neo_model_comes_from_the_profile_and_needs_the_kernel_tree(self):
+        directory = self.root.parent / "neo-nokernel-input"
+        imported = self.root.parent / "neo-nokernel-import"
+        receipt = fixtures.make_set(directory, self.signer, hardware_profile="neo")
+        fixtures.import_set(directory, imported, self.signer, receipt)
+        candidates = inspection.Candidates(imported)
+        boot_owner = candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"]
+        self.assertFalse([p for p in candidates.listing(boot_owner) if "/dtb/" in p])
+        candidates.dtbs = lambda: [p for p in inspection.Candidates.dtbs(candidates)
+                                   if not p.endswith("/t8140-j700.dtb")]
+        with self.assertRaisesRegex(inspection.InspectionError, "lacks device trees for t8140-j700"):
+            inspection.check_supported_models(self.root, candidates, {})
+
     def test_m1n1_stage2_mismatches(self):
         cases = {
             "another m1n1": dict(m1n1=b"some other m1n1 build"),

@@ -122,10 +122,13 @@ def default_contents(layout: str | None = None, hardware_profile: str = "legacy"
     }
     if hardware_profile == "neo":
         contents["linux-aurora"][f"usr/lib/modules/{RELEASE}/dtbs/t8140-j700.dtb"] = dtb("t8140-j700")
-        contents["uboot-asahi"]["usr/lib/asahi-boot/dtb/t8140-j700.dtb"] = b"uboot j700"
     contents["aura"] = {**contents["m1n1-aurora"],
                         "usr/share/aura/stage1/aura-raw.bin": aura_stage1()}
     contents["uboot-aurora"] = contents["uboot-asahi"]
+    if hardware_profile == "neo":
+        # Like the published package: U-Boot only, its device trees come from the kernel.
+        contents["uboot-aurora"] = {path: data for path, data in contents["uboot-asahi"].items()
+                                    if not path.startswith("usr/lib/asahi-boot/dtb/")}
     if layout:
         install = "usr/share/omarchy/install/"
         runtime = contents["omarchy"]

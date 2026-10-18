@@ -89,6 +89,14 @@ class CandidateSetTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires the J700"):
             self.verify(directory, receipt)
 
+    def test_neo_set_needs_no_uboot_device_tree(self):
+        # The published uboot-aurora carries only u-boot-nodtb.bin; stage 2 uses the kernel's trees.
+        contents = fixtures.default_contents(hardware_profile="neo")
+        self.assertFalse([p for p in contents["uboot-aurora"] if p.startswith("usr/lib/asahi-boot/dtb/")])
+        directory, receipt = self.variant(hardware_profile="neo", contents=contents)
+        summary = self.verify(directory, receipt)
+        self.assertIn("uboot-aurora", {p["name"] for p in summary["packages"]})
+
     def test_output_is_created_exclusively(self):
         (self.work / "output").mkdir()
         with self.assertRaises(FileExistsError):

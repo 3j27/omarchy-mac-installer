@@ -255,10 +255,9 @@ def verify_payloads(payloads, profile='legacy'):
     dtbs = [p for p in payloads['linux-aurora'] if PurePosixPath(p).match(f'usr/lib/modules/{release}/dtbs/*.dtb')]
     require(dtbs, 'linux-aurora carries no device trees')
     if profile == 'neo':
+        # Stage 2 hands U-Boot the kernel's tree; the Aurora U-Boot ships none of its own.
         require(any(PurePosixPath(path).name == 't8140-j700.dtb' for path in dtbs),
                 'Neo profile requires the J700 kernel device tree')
-        require('usr/lib/asahi-boot/dtb/t8140-j700.dtb' in payloads.get('uboot-aurora', ()),
-                'Neo profile requires the J700 U-Boot device tree')
     require(not any('omarchy-arm-repository.key' in path for path in owners), 'a fork repository key is in the set')
     return owners
 
