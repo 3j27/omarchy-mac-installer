@@ -4,7 +4,7 @@
 
 | Job | Workflow | Runs when | Gates it keeps |
 | --- | --- | --- | --- |
-| `plan` | here | always | a real run starts only from `main`, never for a pull request |
+| `plan` | here | always | every run starts only from `main`, dry runs included (the image builds only from `main`), never for a pull request |
 | `build` | `mac-image.yml` | after `plan` | no secrets; the release guard; a build attestation on the zip |
 | `acceptance` | `mac-acceptance.yml` | after `build` | main only, never for a pull request; the zip's sha256 and build attestation checked; the VM harness's `fresh-install` scenarios on the VM runner ([runner](mac-acceptance-runner.md)); fails unless the evidence record for the zip's sha256 passes; a passing record is attested |
 | `catalog-inputs` | here | acceptance passed | `.github/mac-release-pipeline.json` must name an app release (a dry run only notes it), before anything is public |
@@ -20,6 +20,12 @@ A dry run uploads to a `dryrun-` scratch release and deletes it, and signs no ca
 - `acceptance` uploads the artifact `acceptance-evidence`, holding `acceptance-evidence.json` ([format](mac-acceptance-evidence.md)), and outputs `result`, `evidence-artifact` and `evidence-run-id` (this run). It also keeps the harness's logs as `acceptance-harness-logs`. The pipeline's `runner` input (empty by default) overrides the VM job's runner.
 - `upload` downloads the image and evidence artifacts from this run. After a real upload it outputs `payload` and `installer-data` (the catalog's inputs, built from the files it uploaded and verified) and `evidence` (the record it checked).
 - `catalog-inputs` outputs the `engine` and `installer` blocks of `.github/mac-release-pipeline.json`.
+
+## Where the jobs run
+
+Namespace builds and publishes the image. `build` runs on Namespace's Apple-backed Linux ARM64 runner. `upload` runs on a Namespace runner too, with `contents: write` in the `publish` environment (and, once ticket 13 adds it, the R2 token). It is the first job with write access that runs off GitHub's hosted runners. The guards and the jobs that hold `id-token`, `attest` in `mac-image.yml` and in `mac-acceptance.yml`, stay on GitHub-hosted runners.
+
+So when acceptance and upload run `gh attestation verify --deny-self-hosted-runners`, they check that the attestation was signed by `mac-image.yml` on `main` in its GitHub-hosted `attest` job, over the digest `build` reported. They do not check that the zip was built on a GitHub-hosted runner: Namespace built it.
 
 ## Secrets
 

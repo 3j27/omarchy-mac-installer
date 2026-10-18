@@ -220,10 +220,13 @@ jobs:
           shopt -s nullglob
           zips=("$WORK"/image/*.zip)
           (( ${#zips[@]} == 1 )) || { echo "::error::the artifact holds ${#zips[@]} image zips, not one"; exit 1; }
+          # --deny-self-hosted-runners holds the attestation to mac-image.yml's
+          # GitHub-hosted attest job, which signs the digest build reported. The
+          # zip itself is built on Namespace (docs/mac-release-pipeline.md).
           if gh attestation verify "${zips[0]}" --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/mac-image.yml" \
             --source-ref refs/heads/main --deny-self-hosted-runners >"$WORK/attestation.log" 2>&1; then
-            echo "the image was built by mac-image.yml on main"
+            echo "the image was built on Namespace by mac-image.yml on main, and attested on GitHub's runner"
           elif [[ $DRY_RUN == "true" ]]; then
             cat "$WORK/attestation.log"
             echo "::warning::the image has no build attestation from mac-image.yml on main; a real upload would refuse it"

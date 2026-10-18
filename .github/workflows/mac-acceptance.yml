@@ -241,13 +241,16 @@ jobs:
             exit 1
           fi
           # The same check as mac-upload.yml's.
+          # --deny-self-hosted-runners holds the attestation to mac-image.yml's
+          # GitHub-hosted attest job, which signs the digest build reported. The
+          # zip itself is built on Namespace (docs/mac-release-pipeline.md).
           if ! gh attestation verify "${zips[0]}" --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/mac-image.yml" \
             --source-ref refs/heads/main --deny-self-hosted-runners; then
             echo "::error::the image has no build attestation from mac-image.yml on main"
             exit 1
           fi
-          echo "$(basename "${zips[0]}") is $IMAGE_SHA256, built by mac-image.yml on main"
+          echo "$(basename "${zips[0]}") is $IMAGE_SHA256, built on Namespace by mac-image.yml on main"
 
       - name: Fetch the harness
         id: harness
