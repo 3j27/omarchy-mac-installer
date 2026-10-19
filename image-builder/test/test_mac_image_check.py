@@ -67,21 +67,22 @@ def package_set(packages) -> str:
 def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="passed", image_edit=None,
           profile=(), provenance_profile=None, name=None, inspection_digest=None, target_edit=None,
           sources=(("omarchy", "a" * 40),), runtime_sources=None, provenance_edit=None, legacy=False,
-          inputs=INPUTS, pin=None, report_edit=None, recovery_app=None) -> None:
+          inputs=INPUTS, pin=None, report_edit=None, recovery_app=None, builder_commit="c" * 40, grow=None) -> None:
     """A build directory as build-mac-image writes it; LEGACY, as a build before builds recorded their identity.
     With CHANNEL_INPUTS, a channel build: the image target names the channel set and database, INSPECTION the
-    set it inspected, and PIN (the test image pin, empty for a public image) is recorded."""
+    set it inspected, and PIN (the test image pin, empty for a public image) is recorded. BUILDER_COMMIT names
+    the builder, and GROW (fixtures.write_payload) changes the payload's bytes, as a builder fix would."""
     lab = "profile=lab" in profile
     channel = "channel_set" in inputs
     name = name or (LAB_NAME if lab else NAME)
     zip_path = out / name
-    fixtures.write_payload(zip_path, check.BOOT_UUID, check.ROOT_UUID, recovery_app=recovery_app)
+    fixtures.write_payload(zip_path, check.BOOT_UUID, check.ROOT_UUID, recovery_app=recovery_app, grow=grow)
     (out / "installer_data.json").write_text(json.dumps(check.expected_metadata(name, recovery_app is not None)))
     if channel:
         target = {"channel_set": inputs["channel_set"], "channel_db_sha256": inputs["omarchy_db_sha256"]}
     else:
         target = {"candidate_set": inputs["candidate_set"], "candidate_source_commit": inputs["candidate_source_commit"]}
-    target.update({"builder_commit": "c" * 40, "builder_tree_clean": "true",
+    target.update({"builder_commit": builder_commit, "builder_tree_clean": "true",
                    "image_profile": "lab" if lab else "release" if channel else "test",
                    "package_set_sha256": package_set(packages), "built": BUILT})
     if legacy:
@@ -101,7 +102,7 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
     (out / "INSPECTION").write_text(json.dumps(report))
     (out / "inputs").write_text("format=2\n" + "".join(f"{k}={v}\n" for k, v in inputs.items()))
     lines = ["format=2", "kind=mac-image", "lane=edge", "kernel=linux-aurora", "platform=apple-silicon",
-             "builder_commit=" + "c" * 40, "builder_tree_clean=true", f"inputs_sha256={sha(out / 'inputs')}"]
+             "builder_commit=" + builder_commit, "builder_tree_clean=true", f"inputs_sha256={sha(out / 'inputs')}"]
     lines += [f"input.{k}={v}" for k, v in inputs.items()]
     lines += [f"candidate={n}|{v}|{f}|{s}" for n, v, _, f, s in candidates]
     lines += [f"candidate_source={n}|{c}" for n, c in sources]
@@ -116,7 +117,7 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
         lines = provenance_edit(lines)
     (out / "PROVENANCE").write_text("\n".join(lines) + "\n")
     digests = check.check_payload("edge", zip_path, out / "installer_data.json", "lab" if name == LAB_NAME else "release")
-    image = ["format=2", "lane=edge", "platform=apple-silicon", "builder_commit=" + "c" * 40, "builder_tree_clean=true",
+    image = ["format=2", "lane=edge", "platform=apple-silicon", "builder_commit=" + builder_commit, "builder_tree_clean=true",
              *[f"{k}={v}" for k, v in inputs.items()],
              "hardware_setup=build", *([] if pin is None else [f"test_image_pin={pin}"]), *profile,
              f"package_set_sha256={package_set(packages)}",
@@ -285,13 +286,44 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
                                     recovery_gui="omarchy-native-v1")
         self.assertEqual(metadata, engine)
 
-    def test_a_public_image_is_named_for_its_lane_date_and_package_set(self):
+    def test_a_public_image_is_named_for_its_lane_date_package_set_and_bytes(self):
         self.build()
-        set_id = package_set(CHANNEL_PACKAGES)[:12]
-        self.assertEqual(check.image_name("edge", self.out), f"omarchy-mac-edge-2026.09.25-{set_id}")
+        set_id, image_id = package_set(CHANNEL_PACKAGES)[:12], sha(self.out / NAME)[:12]
+        expected = f"omarchy-mac-edge-2026.09.25-{set_id}-{image_id}"
+        self.assertEqual(check.image_name("edge", self.out), expected)
+        self.assertRegex(expected, check.IMAGE_NAME)
         result = subprocess.run([sys.executable, str(ROOT / "bin/mac-image-check"), "name", "edge", str(self.out)],
                                 capture_output=True, text=True)
-        self.assertEqual((result.returncode, result.stdout), (0, f"omarchy-mac-edge-2026.09.25-{set_id}\n"))
+        self.assertEqual((result.returncode, result.stdout), (0, f"{expected}\n"))
+
+    def test_a_builder_fix_on_the_same_packages_and_day_gets_its_own_name(self):
+        # Run 39328508742: the same edge package set on the same UTC day as a published
+        # release, rebuilt by a newer builder, was named like it and its upload refused.
+        self.build()
+        first = check.image_name("edge", self.out)
+        self.build(builder_commit="d" * 40, grow={"esp/limine.conf": 1})
+        second = check.image_name("edge", self.out)
+        self.assertNotEqual(second, first)
+        self.assertEqual(second.rsplit("-", 1)[0], first.rsplit("-", 1)[0], "the same lane, date and package set id")
+        self.assertEqual(second.rsplit("-", 1)[1], sha(self.out / NAME)[:12])
+
+    def test_the_same_bytes_keep_their_name(self):
+        self.build()
+        first = check.image_name("edge", self.out)
+        copy = Path(self.tmp.name) / "copy"
+        shutil.copytree(self.out, copy)
+        self.assertEqual(check.image_name("edge", copy), first)
+        self.assertEqual(check.image_name("edge", self.out), first)
+
+    def test_the_name_pattern(self):
+        for name, matches in (("omarchy-mac-edge-2026.10.19-71656b684cbe-0123456789ab", True),
+                              ("omarchy-mac-stable-2026.10.19-71656b684cbe-0123456789ab", True),
+                              ("omarchy-mac-edge-2026.10.19-71656b684cbe", False),
+                              ("omarchy-mac-edge-2026.10.19-71656b684cbe-0123456789AB", False),
+                              ("omarchy-mac-edge-2026.10.19-71656b684cbe-0123456789a", False),
+                              ("omarchy-mac-beta-2026.10.19-71656b684cbe-0123456789ab", False)):
+            with self.subTest(name):
+                self.assertEqual(check.IMAGE_NAME.fullmatch(name) is not None, matches)
 
     def test_any_changed_package_changes_the_name(self):
         self.build()

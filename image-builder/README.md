@@ -52,7 +52,7 @@ Finished-image inspection requires each set package to carry `.MTREE` and the in
 
 ### Image name
 
-The image is named `omarchy-mac-<lane>-<YYYY.MM.DD>-<package set id>` (`mac-image-check name edge OUT`): the date its inputs were resolved (the payload's date) and the first 12 hex digits of `package_set_sha256`, the digest of every installed package's name, version and archive sha256. A rebuild of the same packages on the same day gets the same name; any changed package changes it.
+The image is named `omarchy-mac-<lane>-<YYYY.MM.DD>-<package set id>-<image id>` (`mac-image-check name edge OUT`), for example `omarchy-mac-edge-2026.10.19-71656b684cbe-3f9a0c27d1e4`: the date its inputs were resolved (the payload's date), the first 12 hex digits of `package_set_sha256`, the digest of every installed package's name, version and archive sha256, and the first 12 hex digits of the payload zip's sha256. The name is also the image's release tag. The package set id says which packages it installs; the image id makes the name one build's, so a builder or image fix on the same packages and day gets its own release instead of colliding with a published one (the image records when it was built, so any rebuild has new bytes), and the same bytes always map to the same release, where a re-upload is a no-op. The zip's file name stays `omarchy-<YYYY.MM.DD>-aarch64-apple-silicon-mac-<lane>-os-package.zip`: each release holds its own copy. Images built before the image id was added are named without it; their releases stay as they are, and the catalog tools still accept the older name.
 
 ### Release guard
 

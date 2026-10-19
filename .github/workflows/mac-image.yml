@@ -25,7 +25,7 @@ on:
   workflow_call:
     outputs:
       name:
-        description: The image name and artifact name, omarchy-mac-edge-<YYYY.MM.DD>-<set id>
+        description: The image name and artifact name, omarchy-mac-edge-<YYYY.MM.DD>-<package set id>-<image id>
         value: ${{ jobs.build.outputs.name }}
       payload:
         description: The image zip's file name
@@ -178,6 +178,8 @@ jobs:
           (cd "$stage" && sha256sum "$zip" >"$zip.sha256")
           sha256=$(cut -d' ' -f1 "$stage/$zip.sha256")
           [[ $zip =~ ^omarchy-[0-9]{4}\.[0-9]{2}\.[0-9]{2}-aarch64-apple-silicon-mac-edge-os-package\.zip$ && $sha256 =~ ^[0-9a-f]{64}$ ]]
+          # The name ends in the zip's image id, so each build gets its own release.
+          [[ $name == *-"${sha256:0:12}" ]] || { echo "::error::$name does not name the zip's sha256 $sha256"; exit 1; }
           for file in installer_data.json IMAGE PROVENANCE INSPECTION inputs; do
             cp "$WORK/out/$file" "$stage/"
           done

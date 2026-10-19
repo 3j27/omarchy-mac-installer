@@ -6,7 +6,7 @@
 
 | Input | Meaning |
 |---|---|
-| `image-artifact` | the image build's artifact name, which is the image name `omarchy-mac-<lane>-<YYYY.MM.DD>-<set id>` |
+| `image-artifact` | the image build's artifact name, which is the image name `omarchy-mac-<lane>-<YYYY.MM.DD>-<package set id>-<image id>`, whose image id must be the first 12 hex digits of `image-sha256` |
 | `image-sha256` | the expected sha256 of the image zip |
 | `image-run-id` | the run that uploaded the image artifact (empty: this run) |
 | `dry-run` | default `true`; upload to a scratch release and delete it |
@@ -26,6 +26,8 @@ Callers grant `contents: write`, `actions: read` and `attestations: read`.
 5. Uploads the missing files, downloads every file back and checks its sha256.
 
 The stopgap destination is a draft prerelease on omacom/omarchy-mac-installer, named and tagged after the image, never marked latest. Once it is published the job never adds to it. Only the zip is attested by the image build; the records beside it are trusted as part of the same artifact.
+
+The image id in the name keeps releases one build each. Before it, the name carried only the package set id, so a rebuild of the same packages on the same UTC day (a builder fix, say) was named like the published release and its upload was refused at the first part with different bytes. Now the same bytes always go to the same release, and new bytes to a new one.
 
 ## Handing the image to the catalog
 

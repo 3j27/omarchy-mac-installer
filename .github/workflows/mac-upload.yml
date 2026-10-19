@@ -24,7 +24,7 @@ on:
   workflow_call:
     inputs:
       image-artifact:
-        description: Name of the image build's artifact, which is the image name (omarchy-mac-<lane>-<YYYY.MM.DD>-<set id>)
+        description: Name of the image build's artifact, which is the image name (omarchy-mac-<lane>-<YYYY.MM.DD>-<package set id>-<image id>)
         type: string
         required: true
       image-sha256:
