@@ -23,6 +23,17 @@ def load(name, path):
 
 REBUILD = load('engine_rebuild', ROOT / 'Engine/rebuild-python-overlay.py')
 MODES = load('engine_modes', ROOT / 'Engine/verify-archive-modes.py')
+MACHO = load('engine_macho', ROOT / 'Engine/verify-engine-macho.py')
+
+
+def verify_contents(path, runtime=None):
+    if MODES.verify_archive(path) != 0:
+        raise ValueError('engine archive modes failed verification')
+    # Notarization rejects native code outside the app's signing; the engine
+    # may carry only the authenticated, Developer ID signed runtime.
+    findings = MACHO.verify(path, runtime)
+    if findings:
+        raise ValueError('engine native code differs from the authenticated runtime: ' + '; '.join(findings))
 
 
 def file_digest(path):
@@ -91,7 +102,7 @@ def source_checkout(path, lock):
     return path
 
 
-def reproduce(checkout, base, destination, identity, build=REBUILD.rebuild):
+def reproduce(checkout, base, destination, identity, build=REBUILD.rebuild, runtime=None):
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='engine-reproduce-', dir=destination.parent) as temporary:
         first, second = [Path(temporary) / name for name in ('first.tar.gz', 'second.tar.gz')]
@@ -101,8 +112,7 @@ def reproduce(checkout, base, destination, identity, build=REBUILD.rebuild):
         verify_file(second, identity['size_bytes'], identity['sha256'])
         if first.read_bytes() != second.read_bytes():
             raise ValueError('independent engine repacks differ')
-        if MODES.verify_archive(first) != 0:
-            raise ValueError('engine archive modes failed verification')
+        verify_contents(first, runtime)
         try:
             os.link(first, destination)
         except FileExistsError:
@@ -114,9 +124,8 @@ def prepare(output, cache, checkout=None):
     engine = ROOT / 'Engine'
     lock = json.loads((engine / 'source-lock.json').read_text())
     # Packaging must agree with the source lock before using either an existing
-    # archive or a newly reproduced one. The tracked helper must match source.
+    # archive or a newly reproduced one.
     subprocess.run(['python3', str(ROOT / 'Packaging/read-validation-engine.py')], check=True)
-    REBUILD.VERIFY.require_restore_image(engine)
     records = (lock['downstream_overlay']['files'] + lock['build_recipe']
                + [lock['downstream_overlay']['patch'], lock['incremental_build']['base_patch']])
     for record in records:
@@ -125,8 +134,7 @@ def prepare(output, cache, checkout=None):
     destination = output / identity['filename']
     if destination.exists() or destination.is_symlink():
         verify_file(destination, identity['size_bytes'], identity['sha256'])
-        if MODES.verify_archive(destination) != 0:
-            raise ValueError('engine archive modes failed verification')
+        verify_contents(destination)
         return destination
     base = cached_base(cache, lock['incremental_build'])
     REBUILD.require_base(base.read_bytes(), lock)

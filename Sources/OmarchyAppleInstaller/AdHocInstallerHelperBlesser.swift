@@ -84,6 +84,10 @@
         isDirectory: true)
       let templateRequirement = "cdhash H\"\(try Self.codeHash(at: template))\""
       environment["OMARCHY_RECOVERY_TEMPLATE_REQUIREMENT"] = templateRequirement
+      // The decoder an install hands the engine: this build's exact copy.
+      environment[RestoreImageHelper.requirementEnvironmentVariable] =
+        RestoreImageHelper.adHocRequirement(
+          codeHash: try Self.codeHash(at: RestoreImageHelper.bundledURL(in: bundle)))
       plist["EnvironmentVariables"] = environment
       let encoded = try PropertyListSerialization.data(
         fromPropertyList: plist, format: .xml, options: 0

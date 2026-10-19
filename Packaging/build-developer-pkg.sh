@@ -34,6 +34,14 @@ requirement="$requirement and cdhash H\"$client_hash\""
 /usr/bin/plutil -replace EnvironmentVariables.OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT \
   -string "$requirement" "$plist"
 /usr/bin/codesign --verify --strict -R="$requirement" "$app"
+# Likewise the restore-image decoder the root daemon hands the engine.
+decoder="$app/Contents/Helpers/omarchy-restore-image"
+decoder_hash=$(/usr/bin/codesign --display --verbose=4 "$decoder" 2>&1 | sed -n 's/^CDHash=//p')
+[[ $decoder_hash =~ ^[0-9a-f]{40,64}$ ]] || fail "cannot read the developer decoder code hash"
+decoder_requirement="identifier \"$INSTALLER_RESTORE_IMAGE_IDENTIFIER\" and cdhash H\"$decoder_hash\""
+/usr/bin/codesign --verify --strict -R="$decoder_requirement" "$decoder"
+/usr/bin/plutil -replace EnvironmentVariables.OMARCHY_RESTORE_IMAGE_REQUIREMENT \
+  -string "$decoder_requirement" "$plist"
 chmod 0644 "$plist"
 /usr/bin/ditto "$directory/pkg/scripts" "$work/scripts"
 install -m 0644 "$directory/identity.conf" "$work/scripts/identity.conf"

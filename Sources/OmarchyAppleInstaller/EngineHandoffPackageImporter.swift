@@ -12,6 +12,10 @@
     public let metadataURL: URL
     public let payloadURL: URL
     public let repairManifestURL: URL?
+    /// The app's signed decoder, imported into the package directory. Nil
+    /// only for packages that never came from an app (the lab canary); an
+    /// install then has no decoder and is refused.
+    public let restoreImageURL: URL?
     public let bindingDigest: String
     public let planDigest: String
     public let deviceIdentifier: String
@@ -26,6 +30,7 @@
       metadataURL: URL,
       payloadURL: URL,
       repairManifestURL: URL? = nil,
+      restoreImageURL: URL? = nil,
       bindingDigest: String,
       planDigest: String,
       deviceIdentifier: String,
@@ -39,6 +44,7 @@
       self.metadataURL = metadataURL
       self.payloadURL = payloadURL
       self.repairManifestURL = repairManifestURL
+      self.restoreImageURL = restoreImageURL
       self.bindingDigest = bindingDigest
       self.planDigest = planDigest
       self.deviceIdentifier = deviceIdentifier
@@ -124,6 +130,9 @@
       let repairManifestURL = manifest.repairManifest.map {
         package.appendingPathComponent($0.fileName)
       }
+      let restoreImageURL = package.appendingPathComponent(
+        manifest.restoreImage.fileName
+      )
       try copyArtifact(
         manifest.engine,
         role: "engine",
@@ -152,6 +161,17 @@
           to: repairManifestURL
         )
       }
+      // Its signature, checked by the executor before each install, is what
+      // makes it trusted; this copy only keeps it out of the user's reach.
+      try copyArtifact(
+        manifest.restoreImage,
+        role: "restore-image",
+        from: sourceDescriptor,
+        to: restoreImageURL
+      )
+      guard chmod(restoreImageURL.path, S_IRUSR | S_IXUSR) == 0 else {
+        throw EngineHandoffImportError.unsafeFile("restore-image")
+      }
 
       keepPackage = true
       return ImportedEngineHandoffPackage(
@@ -163,6 +183,7 @@
         metadataURL: metadataURL,
         payloadURL: payloadURL,
         repairManifestURL: repairManifestURL,
+        restoreImageURL: restoreImageURL,
         bindingDigest: identity.bindingDigest,
         planDigest: request.planDigest,
         deviceIdentifier: request.deviceIdentifier,
@@ -322,7 +343,7 @@
         }
         var manifestKeys: Set<String> = [
           "format", "binding_digest", "request_file", "identity_file",
-          "engine", "metadata", "payload",
+          "engine", "metadata", "payload", "restore_image",
         ]
         if rawObject["repair_manifest"] != nil {
           manifestKeys.insert("repair_manifest")
@@ -332,7 +353,7 @@
           keys: manifestKeys,
           error: .invalidManifest
         )
-        for key in ["engine", "metadata", "payload", "repair_manifest"]
+        for key in ["engine", "metadata", "payload", "repair_manifest", "restore_image"]
         where object[key] != nil {
           guard let artifact = object[key] as? [String: Any],
             Set(artifact.keys) == ["file_name", "digest", "size_bytes"]
@@ -349,6 +370,7 @@
             manifest.engine.fileName,
             manifest.metadata.fileName,
             manifest.payload.fileName,
+            manifest.restoreImage.fileName,
           ] + (manifest.repairManifest.map { [$0.fileName] } ?? [])
         guard manifest.format == 1,
           manifest.requestFile == "request.json",
@@ -357,9 +379,11 @@
           Set(fileNames).isDisjoint(
             with: ["manifest.json", "request.json", "identity.json"]
           ),
-          ([manifest.engine, manifest.metadata, manifest.payload]
+          ([manifest.engine, manifest.metadata, manifest.payload, manifest.restoreImage]
             + (manifest.repairManifest.map { [$0] } ?? []))
-            .allSatisfy(validArtifact)
+            .allSatisfy(validArtifact),
+          manifest.restoreImage.fileName == RestoreImageHelper.fileName,
+          manifest.restoreImage.sizeBytes <= RestoreImageHelper.maximumBytes
         else {
           throw EngineHandoffImportError.invalidManifest
         }
@@ -563,6 +587,7 @@
     let metadata: ImportedArtifactRecord
     let payload: ImportedArtifactRecord
     let repairManifest: ImportedArtifactRecord?
+    let restoreImage: ImportedArtifactRecord
 
     enum CodingKeys: String, CodingKey {
       case format
@@ -573,6 +598,7 @@
       case metadata
       case payload
       case repairManifest = "repair_manifest"
+      case restoreImage = "restore_image"
     }
   }
 

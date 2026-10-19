@@ -32,6 +32,7 @@ VALUES = guard.identity()
 TEAM = VALUES["INSTALLER_TEAM_ID"]
 APP_ID = VALUES["INSTALLER_APP_IDENTIFIER"]
 HELPER_ID = VALUES["INSTALLER_HELPER_IDENTIFIER"]
+DECODER_ID = VALUES["INSTALLER_RESTORE_IMAGE_IDENTIFIER"]
 
 
 def team_requirement(identifier: str) -> str:
@@ -50,8 +51,8 @@ class ReleaseGuardTest(unittest.TestCase):
     # ── a public app, as build-app.sh assembles it for the Developer ID ──────
     def make_app(self, trust_root: bytes | None = None) -> None:
         contents = self.app / "Contents"
-        for directory in ("MacOS", "Resources/Release", "Resources/Engine/artifacts", "Library/LaunchDaemons",
-                          "Library/LaunchServices"):
+        for directory in ("MacOS", "Helpers", "Resources/Release", "Resources/Engine/artifacts",
+                          "Library/LaunchDaemons", "Library/LaunchServices"):
             (contents / directory).mkdir(parents=True, exist_ok=True)
         self.write_plist(contents / "Info.plist", {
             "CFBundleIdentifier": APP_ID,
@@ -64,6 +65,7 @@ class ReleaseGuardTest(unittest.TestCase):
         })
         (contents / "MacOS/OmarchyAppleInstallerApp").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 64 + b"app code")
         (contents / f"Library/LaunchServices/{HELPER_ID}").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 64)
+        (contents / "Helpers/omarchy-restore-image").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 64 + b"decoder")
         self.set_trust_root(trust_root or bytes(range(1, 33)))
         self.write_engine({"installer/main.py": b"print('engine')\n"})
 
@@ -156,6 +158,47 @@ class ReleaseGuardTest(unittest.TestCase):
         app = self.recovery_template()
         app.rename(self.app / "Contents/Resources/Unexpected.app")
         self.assertRefused('bundle identifier')
+
+    def test_an_app_without_its_decoder_or_with_other_helpers_is_refused(self) -> None:
+        decoder = self.app / "Contents/Helpers/omarchy-restore-image"
+        decoder.write_bytes(b"#!/bin/sh\n")
+        self.assertRefused("omarchy-restore-image is not a Mach-O executable")
+        decoder.unlink()
+        self.assertRefused("the restore-image decoder, is missing")
+        decoder.symlink_to("/usr/bin/true")
+        self.assertRefused("the restore-image decoder, is missing")
+        decoder.unlink()
+        decoder.write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 64)
+        (self.app / "Contents/Helpers/other-tool").write_bytes(b"\xcf\xfa\xed\xfe")
+        self.assertRefused("Contents/Helpers/other-tool is not the restore-image decoder")
+
+    def test_an_engine_with_its_own_native_tool_is_refused(self) -> None:
+        # The 2.3.0 notarization failure: engine .50 carried the ad hoc
+        # signed decoder in bin/, out of the release signing's reach.
+        self.write_engine({"./main.py": b"print('engine')\n",
+                           "./bin/omarchy-restore-image": b"\xcf\xfa\xed\xfe" + b"\0" * 64})
+        self.assertRefused("bin/omarchy-restore-image: a Mach-O that is not part of the authenticated runtime")
+
+    def test_an_engine_whose_runtime_binary_changed_is_refused(self) -> None:
+        runtime = "Frameworks/Python.framework/Versions/3.13/bin/python3.13"
+        self.write_engine({"./" + runtime: b"\xca\xfe\xba\xbe" + b"\0" * 64})
+        self.assertRefused(f"{runtime}: differs from the authenticated runtime")
+
+    def test_a_cdhash_pinned_decoder_requirement_is_refused(self) -> None:
+        path = f"Contents/Library/LaunchDaemons/{HELPER_ID}.plist"
+        self.edit_plist(path, lambda value: value["EnvironmentVariables"].update(
+            OMARCHY_RESTORE_IMAGE_REQUIREMENT=f'identifier "{DECODER_ID}" and cdhash H"{"a" * 40}"'))
+        self.assertRefused("decoder requirement")
+        self.edit_plist(path, lambda value: value["EnvironmentVariables"].update(
+            OMARCHY_RESTORE_IMAGE_REQUIREMENT=team_requirement(DECODER_ID)))
+        self.assertRefused("decoder requirement")  # any Apple certificate of the team (TN3127)
+        developer_id = (f'anchor apple generic and identifier "{DECODER_ID}" '
+                        'and certificate 1[field.1.2.840.113635.100.6.2.6] '
+                        'and certificate leaf[field.1.2.840.113635.100.6.1.13] '
+                        f'and certificate leaf[subject.OU] = "{TEAM}"')
+        self.edit_plist(path, lambda value: value["EnvironmentVariables"].update(
+            OMARCHY_RESTORE_IMAGE_REQUIREMENT=developer_id))
+        self.assertEqual(self.findings(), [])
 
     def test_a_public_app_is_clean(self) -> None:
         self.assertEqual(self.findings(), [])

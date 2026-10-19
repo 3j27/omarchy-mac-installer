@@ -119,17 +119,23 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(catalog["sequence"], 1788480000)
         self.assertEqual(len(catalog["models"]), len(self.inputs["device_identifiers"]))
 
+    def test_an_engine_without_its_own_decoder_rejects_apps_before_2_3_0(self):
+        self.inputs["installer"]["minimum_version"] = "2.2.0"
+        self.assertRejected(self.inputs, "requires installer.minimum_version >= 2.3.0")
+        self.inputs["installer"]["minimum_version"] = "2.3.0"
+        self.assertEqual(self.generate(self.inputs).returncode, 0)
+
     def test_carries_the_installer_compatibility_block(self) -> None:
-        self.inputs["installer"]["minimum_version"] = "2.1.0"
-        self.inputs["installer"]["latest_version"] = "2.3.0"
+        self.inputs["installer"]["minimum_version"] = "2.3.0"
+        self.inputs["installer"]["latest_version"] = "2.4.0"
         result = self.generate()
         self.assertEqual(result.returncode, 0, result.stderr)
         catalog = json.loads((self.directory / "catalog.json").read_text())
         self.assertEqual(
             catalog["installer"],
             {
-                "minimumVersion": "2.1.0",
-                "latestVersion": "2.3.0",
+                "minimumVersion": "2.3.0",
+                "latestVersion": "2.4.0",
                 "downloadURL": self.inputs["installer"]["download_url"],
             },
         )

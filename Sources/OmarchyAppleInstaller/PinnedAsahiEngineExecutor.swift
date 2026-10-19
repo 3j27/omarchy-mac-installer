@@ -21,6 +21,11 @@
     case engineFailed(EngineFailureReport)
     case recoveryAuthorizationFailed
     case unsafeTranscript
+    /// The package carries no decoder, or this helper knows no requirement
+    /// for one (see RestoreImageHelper.requirement(environment:)).
+    case restoreImageUnavailable
+    /// The decoder's signature does not satisfy the requirement.
+    case restoreImageRejected
   }
 
   public struct PinnedAsahiEngineArchive: Equatable, Sendable {
@@ -55,21 +60,37 @@
     private let effectiveUserID: @Sendable () -> uid_t
     private let expectedFileOwnerID: @Sendable () -> uid_t
     private let extractionOptions: [String]
+    private let restoreImageRequirement: String?
+    private let verifyRestoreImage: @Sendable (URL, String) throws -> Void
 
-    public init() {
+    /// `restoreImageRequirement` is the code requirement an install's decoder
+    /// must satisfy; by default the one this process's launchd job implies.
+    public init(
+      restoreImageRequirement: String? = RestoreImageHelper.requirement(
+        environment: ProcessInfo.processInfo.environment
+      )
+    ) {
       effectiveUserID = { geteuid() }
       expectedFileOwnerID = { geteuid() }
       extractionOptions = []
+      self.restoreImageRequirement = restoreImageRequirement
+      verifyRestoreImage = { try RestoreImageHelper.verify($0, requirement: $1) }
     }
 
     init(
       effectiveUserID: @escaping @Sendable () -> uid_t,
       expectedFileOwnerID: @escaping @Sendable () -> uid_t = { geteuid() },
-      extractionOptions: [String] = []
+      extractionOptions: [String] = [],
+      restoreImageRequirement: String? = nil,
+      verifyRestoreImage: @escaping @Sendable (URL, String) throws -> Void = {
+        try RestoreImageHelper.verify($0, requirement: $1)
+      }
     ) {
       self.effectiveUserID = effectiveUserID
       self.expectedFileOwnerID = expectedFileOwnerID
       self.extractionOptions = extractionOptions
+      self.restoreImageRequirement = restoreImageRequirement
+      self.verifyRestoreImage = verifyRestoreImage
     }
 
     public func execute(
@@ -80,16 +101,29 @@
       guard effectiveUserID() == 0 else {
         throw PinnedAsahiEngineExecutionError.privilegeRequired
       }
+      // The decoder runs as root, so only the root-only imported copy whose
+      // signature satisfies this helper's own requirement is handed on.
+      guard let restoreImageRequirement, let restoreImage = package.restoreImageURL else {
+        throw PinnedAsahiEngineExecutionError.restoreImageUnavailable
+      }
+      do {
+        try verifyRestoreImage(restoreImage, restoreImageRequirement)
+      } catch {
+        throw PinnedAsahiEngineExecutionError.restoreImageRejected
+      }
       let journal = try preparePersistentJournal(for: package)
+      var environment = installEnvironment(
+        package: package,
+        authorization: authorization,
+        operation: operation
+      )
+      environment[RestoreImageHelper.pathEnvironmentVariable] = restoreImage.path
+      environment[RestoreImageHelper.requirementEnvironmentVariable] = restoreImageRequirement
       return try run(
         archive: package.engineURL,
         executionParent: package.packageURL.deletingLastPathComponent(),
         journal: journal,
-        additionalEnvironment: installEnvironment(
-          package: package,
-          authorization: authorization,
-          operation: operation
-        ),
+        additionalEnvironment: environment,
         standardInput: authorization.password + Data([10]),
         secrets: [authorization.password],
         retryIdentity: RecoveryRetryIdentity(package: package)

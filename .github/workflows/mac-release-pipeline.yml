@@ -160,7 +160,7 @@ jobs:
           try:
               engine = release.pipeline_engine(config["engine"])
               if config["installer"] is not None:
-                  release.check_installer(config["installer"])
+                  release.check_installer(config["installer"], engine)
           except (release.Refusal, KeyError, TypeError) as error:
               sys.exit(f"::error::{sys.argv[1]}: {error}")
           print(json.dumps(engine, separators=(",", ":")))

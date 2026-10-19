@@ -185,8 +185,22 @@ jobs:
         run: |
           source Packaging/identity.conf
           OMARCHY_TEAM_ID=$INSTALLER_TEAM_ID bash Packaging/build-app.sh "$RUNNER_TEMP/release" "$RUNNER_TEMP/app"
+      - name: Reproduce the restore-image decoder against the unsigned app
+        run: |
+          # Signing changes its bytes, so the source binding is checked here,
+          # before the sign job, on the copy that job will sign.
+          source Packaging/identity.conf
+          decoder="$RUNNER_TEMP/app/$INSTALLER_APP_NAME.app/Contents/Helpers/omarchy-restore-image"
+          DEVELOPER_DIR=/Applications/Xcode_26.5.app/Contents/Developer \
+            bash Engine/RestoreImage/build.sh "$RUNNER_TEMP/restore-image"
+          cmp "$RUNNER_TEMP/restore-image/omarchy-restore-image" "$decoder"
+          python3 Engine/verify-restore-image.py "$decoder"
       - name: Guard the unsigned app
-        run: python3 Packaging/release/release-guard "$RUNNER_TEMP/app/"*.app
+        run: |
+          python3 Packaging/release/release-guard "$RUNNER_TEMP/app/"*.app
+          # Every Mach-O notarization will see is signed by sign-app or is the
+          # engine's Developer ID signed runtime.
+          python3 Engine/verify-engine-macho.py --signatures "$RUNNER_TEMP/app/"*.app/Contents/Resources/Engine/artifacts/*.tar.gz
       - id: archive
         name: Archive the app
         run: |

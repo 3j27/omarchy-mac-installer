@@ -1,8 +1,10 @@
 # Installer engine
 
-The engine is this repository’s installer backend: the pinned Asahi installer, our Python integration, a bundled Python runtime and the Swift restore-image helper. The SwiftUI app invokes it. The Linux image and the native Recovery GUI are separate payloads.
+The engine is this repository’s installer backend: the pinned Asahi installer, our Python integration and a bundled Python runtime. The SwiftUI app invokes it. The Linux image and the native Recovery GUI are separate payloads.
 
-The backend source, patches, helper source/binary and build recipes are tracked here. Its generated `installer-*.tar.gz` archive lives in `Engine/artifacts/` and is bundled at `Contents/Resources/Engine/artifacts/` in the app.
+The backend source, patches and build recipes are tracked here. Its generated `installer-*.tar.gz` archive lives in `Engine/artifacts/` and is bundled at `Contents/Resources/Engine/artifacts/` in the app.
+
+The Swift restore-image helper (`RestoreImage/`, its tracked unsigned build in `RestoreImage/bin/`) is not part of the engine. Apple notarization inspects every Mach-O inside the app, archived ones included, and rejected the ad hoc signed helper that engine `.50` carried in `bin/`. The app ships the helper at `Contents/Helpers/omarchy-restore-image`, where `Packaging/release/sign-app` signs it, and the engine receives its path and code requirement in `OMARCHY_RESTORE_IMAGE` and `OMARCHY_RESTORE_IMAGE_REQUIREMENT`. The engine's only native code is the Developer ID signed runtime of the authenticated `.28` base, pinned file by file in `runtime-macho.json`; `verify-engine-macho.py` refuses anything else, and the producer and the release guard run it.
 
 Produce the exact archive named by the app and source lock:
 
@@ -16,8 +18,8 @@ App-release CI uses that same producer and uploads the result as its engine buil
 
 The `.28` base preserves the original authenticated runtime: all 78 Mach-O files and the bootloader match the older `.14` base byte-for-byte. The locked Python patch and current integration replace its older installer logic. This avoids relying on the historical preview download URL.
 
-When the Swift helper changes, run its native debug/release tests and `Engine/RestoreImage/build.sh`, update its tracked binary/build record and source identity, then reproduce a new engine version and refresh the archive pins. The producer rejects a stale helper or archive.
+When the Swift helper changes, run its native debug/release tests and `Engine/RestoreImage/build.sh`, then update its tracked binary, build record and the source digests in the lock. The engine archive does not change; packaging rejects a helper that differs from its build record, and CI compares the unsigned app's copy with a fresh source build.
 
-The authenticated `.28` runtime is also retained independently in the Aurora Silicon release mirror. The producer tries the primary asset, then the mirror, and requires exactly the same size and SHA-256 from either. The engine `.50` archive is available in that mirror, but the release pipeline deliberately names the canonical omacom URL. A maintainer must make those exact bytes available there before catalog publication; the source/app builds do not require that publication. Release assets are runtime inputs, not replacement source trees.
+The authenticated `.28` runtime is also retained independently in the Aurora Silicon release mirror. The producer tries the primary asset, then the mirror, and requires exactly the same size and SHA-256 from either. The release pipeline deliberately names the canonical omacom URL for the engine archive. A maintainer must make those exact bytes available there before catalog publication; the source/app builds do not require that publication. Release assets are runtime inputs, not replacement source trees.
 
-Source revisions are repository-qualified: the integration revision belongs to `aurora-silicon/omarchy-mac`, as does `restore_image_source.repository` in the source lock. Preserve the fork source tags `engine-v0.9.2-omarchy.50` and `restore-image-source-7115941` when merging or squashing this PR; a squash does not change their immutable source identities. A future release revision should name the merged source commit and must reproduce its pinned engine before publication.
+Source revisions are repository-qualified: the integration revision belongs to `aurora-silicon/omarchy-mac`, as does `restore_image_source.repository` in the source lock. Preserve the fork source tags `engine-v0.9.2-omarchy.50` and `restore-image-source-7115941`; a squash does not change their immutable source identities. A future release revision should name the merged source commit and must reproduce its pinned engine before publication.

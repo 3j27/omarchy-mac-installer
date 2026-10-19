@@ -6,6 +6,13 @@
 
   @testable import OmarchyAppleInstallerTrustCore
 
+  private enum RestoreImageCase {
+    case valid
+    case absent
+    case renamed
+    case changedInTransit
+  }
+
   final class EngineHandoffPackageImporterTests: XCTestCase {
     func testValidPackageIsRecopiedIntoPrivateHelperDirectory() throws {
       let fixture = try makeFixture()
@@ -34,6 +41,33 @@
       try FileManager.default.removeItem(at: fixture.engineURL)
       try writePrivate(Data("changed!".utf8), to: fixture.engineURL)
       XCTAssertEqual(try Data(contentsOf: imported.engineURL), fixture.engine)
+
+      // The app's decoder becomes a private, executable copy the user can't change.
+      let decoder = try XCTUnwrap(imported.restoreImageURL)
+      XCTAssertEqual(decoder.deletingLastPathComponent(), imported.packageURL)
+      XCTAssertEqual(decoder.lastPathComponent, RestoreImageHelper.fileName)
+      XCTAssertEqual(try mode(decoder), 0o500)
+      XCTAssertEqual(try Data(contentsOf: decoder), Data("signed decoder".utf8))
+    }
+
+    func testAPackageWithoutTheAppsDecoderOrWithAnotherIsRejected() throws {
+      for (restoreImageCase, expected) in [
+        (RestoreImageCase.absent, EngineHandoffImportError.invalidManifest),
+        (.renamed, .invalidManifest),
+        (.changedInTransit, .digestMismatch("restore-image")),
+      ] {
+        let fixture = try makeFixture(restoreImageCase: restoreImageCase)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let source = try openDirectory(fixture.source)
+        defer { try? source.close() }
+
+        XCTAssertThrowsError(
+          try EngineHandoffPackageImporter().prepare(from: source, in: fixture.destination)
+        ) {
+          XCTAssertEqual($0 as? EngineHandoffImportError, expected, "\(restoreImageCase)")
+        }
+        XCTAssertTrue(try importedEntries(in: fixture.destination).isEmpty)
+      }
     }
 
     func testUnknownManifestFieldIsRejectedBeforeImport() throws {
@@ -237,7 +271,8 @@
       nulEngineFileName: Bool = false,
       repair: Bool = false,
       replace: Bool = false,
-      strayRepairManifest: Bool = false
+      strayRepairManifest: Bool = false,
+      restoreImageCase: RestoreImageCase = .valid
     ) throws -> ImportFixture {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(
         "omarchy-helper-import-\(UUID().uuidString.lowercased())",
@@ -315,9 +350,19 @@
         includeRepairManifest
         ? ",\"repair_manifest\":{\"file_name\":\"repair.json\",\"digest\":\"\(repairDigest)\",\"size_bytes\":\(repairManifest.count)}"
         : ""
+      let restoreImage = Data("signed decoder".utf8)
+      try writePrivate(
+        restoreImageCase == .changedInTransit ? Data("signed decodeR".utf8) : restoreImage,
+        to: source.appendingPathComponent(RestoreImageHelper.fileName))
+      let restoreImageName =
+        restoreImageCase == .renamed ? "engine.tar.gz" : RestoreImageHelper.fileName
+      let restoreImageField =
+        restoreImageCase == .absent
+        ? ""
+        : ",\"restore_image\":{\"file_name\":\"\(restoreImageName)\",\"digest\":\"\(digest(restoreImage))\",\"size_bytes\":\(restoreImage.count)}"
       let manifest = Data(
         """
-        {"format":1,"binding_digest":"\(bindingDigest)","request_file":"request.json","identity_file":"identity.json","engine":{"file_name":"\(engineFileName)","digest":"\(engineDigest)","size_bytes":\(engine.count)},"metadata":{"file_name":"installer-data.json","digest":"\(metadataDigest)","size_bytes":\(metadata.count)},"payload":{"file_name":"omarchy.img.zst","digest":"\(payloadDigest)","size_bytes":\(payload.count)}\(repairManifestField)\(extraField)}
+        {"format":1,"binding_digest":"\(bindingDigest)","request_file":"request.json","identity_file":"identity.json","engine":{"file_name":"\(engineFileName)","digest":"\(engineDigest)","size_bytes":\(engine.count)},"metadata":{"file_name":"installer-data.json","digest":"\(metadataDigest)","size_bytes":\(metadata.count)},"payload":{"file_name":"omarchy.img.zst","digest":"\(payloadDigest)","size_bytes":\(payload.count)}\(restoreImageField)\(repairManifestField)\(extraField)}
         """.utf8
       )
       let request = Data(

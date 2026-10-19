@@ -11,6 +11,8 @@ New engines are named `v0.9.2-omarchy.<YYYYMMDD>.<content id>`, for example `v0.
 
 `v0.9.2-omarchy.50`, the last engine named by number, keeps its name only while the lock holds the inputs it was built from: `Engine/engine_pin.py` freezes their content id in `LEGACY`. `check` refuses every other name that isn't a well-formed dated one, such as a hand-picked `.51`. So the next engine change must take a dated name. Nothing compares or parses names: the catalog and the app pin the exact archive by digest, and every catalog requires app 2.1.0 or later whatever its engine is called.
 
+An engine that needs a newer app says so in the lock: `downstream_overlay.minimum_app_version` (2.3.0 since the engine stopped carrying the restore-image decoder, which only app 2.3.0 and later ship and pass). It is a build input, so it is part of the content id. `scripts/make-unsigned-catalog.py` refuses a lower `installer.minimum_version`, and `catalog_release.py` refuses a lower `installer.minimumVersion` for the engine whose SHA-256 is the lock's. Other engines keep the 2.1.0 floor.
+
 ## Who reads the pin
 
 Nothing else in the repository carries a copy of the pin; everything reads the lock:
