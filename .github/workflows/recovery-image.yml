@@ -35,6 +35,7 @@ jobs:
     timeout-minutes: 90
     env:
       BUILD_IMAGE: ${{ inputs.build-image }}
+      RECOVERY_SHA256: ${{ needs.recovery.outputs.manifest-sha256 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -52,7 +53,10 @@ jobs:
       - name: Resolve and authenticate the real edge package set
         run: |
           mkdir -p "$WORK/evidence"
+          [[ $RECOVERY_SHA256 =~ ^[0-9a-f]{64}$ ]] || { echo "::error::the Recovery job reported no inventory digest"; exit 1; }
           tar -xf "$WORK/recovery/native-recovery.tar" -C "$WORK/recovery"
+          # The app the Recovery job built, file for file (builder/recovery_app.py).
+          python3 image-builder/builder/recovery_app.py "$WORK/recovery" --sha256 "$RECOVERY_SHA256"
           bash image-builder/bin/mac-image-inputs resolve "$WORK/inputs" --channel-set --channel edge --recovery-app "$WORK/recovery" --cache "$WORK/cache" 2>&1 | tee "$WORK/evidence/resolve.log"
           cp "$WORK/inputs" "$WORK/evidence/inputs"
           cp "$WORK/recovery/source.txt" "$WORK/evidence/recovery-source.txt"

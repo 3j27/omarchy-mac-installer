@@ -20,8 +20,10 @@ image-builder/bin/build-mac-image --inputs inputs --candidates set/ --cache cach
 ## Build a public image from the channel
 
 ```bash
-image-builder/bin/mac-image-inputs resolve inputs --channel-set --cache cache/
-image-builder/bin/build-mac-image --inputs inputs --cache cache/ out/
+# On a Mac: build the native Recovery app every channel image carries.
+Recovery/build-recovery.sh recovery/
+image-builder/bin/mac-image-inputs resolve inputs --channel-set --recovery-app recovery/ --cache cache/
+image-builder/bin/build-mac-image --inputs inputs --recovery-app recovery/ --cache cache/ out/
 ```
 
 Channel mode builds straight from a snapshot of the edge package database (`https://pkgs.omarchy.org/edge/aarch64/omarchy.db`), not from a hand-signed set. `resolve --channel-set` pins that database by sha256 with the others, and `builder/channel_set.py` resolves the set from it: the runtime roles in the trust policy's `channel` section (`omarchy` and `omarchy-settings` are filled by edge's `omarchy-dev` and `omarchy-settings-dev`, which provide and conflict with them; `omarchy-mac`, `omarchy-mac-boot`) the boot packages (`linux-aurora`, its headers, `aura`, `uboot-aurora`, `limine-mkinitcpio-hook`) and the Aurora support packages (see [Hardware scope](#hardware-scope)). Each archive must be the one the pinned database lists (name, version, architecture, size and sha256) and carry a detached signature by the Omarchy package signing key, `40DFB630FF42BCFFB047046CF0134EE680CAC571` (`builder/candidate-trust/omarchy-channel.asc`, the key `omarchy-keyring` ships and `builder/keys/omarchy-repository.gpg` holds). The policy accepts that key for channel mode only: a candidate set signed by it is refused, and the candidate test key never signs a channel set (a channel build does not even trust it in its build keyring). The record names the set `channel_set=omarchy-edge-<database sha256, 12 digits>` with `channel_signer=` and `channel_manifest_sha256=` (the set's `manifest.json`) in place of the `candidate_*` lines; `mac-image-inputs packages` fetches its archives at build time, and a database that moved on since it was pinned stops the build.
