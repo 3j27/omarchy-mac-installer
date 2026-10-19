@@ -85,8 +85,9 @@ class CatalogGeneratorTests(unittest.TestCase):
         )
 
     def with_neo(self) -> dict:
-        """The inputs plus a MacBook Neo group with its own split payload."""
+        """The inputs with the MacBook Neo moved into a group with its own split payload."""
         document = json.loads(json.dumps(self.inputs))
+        document["device_identifiers"].remove("apple,j700")
         neo = {
             "payload_name": "neo-os-package.zip",
             "metadata_name": "installer_data-neo.json",
@@ -249,7 +250,7 @@ class CatalogGeneratorTests(unittest.TestCase):
             for identifier in document["device_identifiers"]
             if identifier not in M3_MACS
         ]
-        self.assertRejected(document, "every M1, M2 and M3 Mac must be enabled")
+        self.assertRejected(document, "every supported Mac must be enabled")
 
     def test_refused_and_unknown_macs_are_rejected_with_a_reason(self) -> None:
         for identifier, fragment in (
@@ -261,12 +262,14 @@ class CatalogGeneratorTests(unittest.TestCase):
             document["device_identifiers"].append(identifier)
             self.assertRejected(document, fragment)
 
-    def test_the_manifest_is_every_m1_m2_and_m3_mac(self) -> None:
+    def test_the_manifest_is_every_m1_m2_and_m3_mac_and_the_neo(self) -> None:
         manifest = json.loads(MANIFEST.read_text())
-        self.assertEqual(len(manifest["supported"]), 34)
+        self.assertEqual(len(manifest["supported"]), 35)
         self.assertTrue(set(M3_MACS) <= set(manifest["supported"]))
+        self.assertIn("apple,j700", manifest["supported"])
+        self.assertIn("apple,j700", manifest["untested"])
         self.assertEqual(set(manifest["refused"]), {"apple,j575d", "apple,j614s"})
-        self.assertEqual(set(manifest["developer"]), {"apple,j700"})
+        self.assertEqual(manifest["developer"], {})
         for template in sorted(MANIFEST.parent.glob("release-inputs*.template.json")):
             identifiers = json.loads(template.read_text())["device_identifiers"]
             self.assertEqual(
@@ -322,7 +325,7 @@ class CatalogGeneratorTests(unittest.TestCase):
         models = json.loads((self.directory / "catalog.json").read_text())["models"]
         self.assertEqual(
             [m["deviceIdentifier"] for m in models],
-            self.inputs["device_identifiers"] + ["apple,j700"],
+            [i for i in self.inputs["device_identifiers"] if i != "apple,j700"] + ["apple,j700"],
         )
         main, neo = models[0], models[-1]
         self.assertEqual(main["payloadArtifact"]["fileName"], self.inputs["payload_name"])
@@ -364,7 +367,7 @@ class CatalogGeneratorTests(unittest.TestCase):
             m["deviceIdentifier"]: m
             for m in json.loads((self.directory / "catalog.json").read_text())["models"]
         }
-        self.assertEqual(len(models), len(self.inputs["device_identifiers"]) + 1)
+        self.assertEqual(len(models), len(self.inputs["device_identifiers"]))
         main = models["apple,j293"]
         for identifier in airs:
             self.assertEqual(models[identifier]["metadataArtifact"]["fileName"], "installer_data-m3air.json")
@@ -387,7 +390,7 @@ class CatalogGeneratorTests(unittest.TestCase):
         document["device_identifiers"].remove("apple,j613")
         self.assertRejected(document, "missing apple,j613", developer=True)
 
-    def test_a_developer_catalog_never_passes_the_channel_check(self) -> None:
+    def test_a_developer_catalog_moving_a_supported_mac_still_covers_every_mac(self) -> None:
         self.generate(self.with_neo(), developer=True)
         check = subprocess.run(
             [
@@ -399,8 +402,7 @@ class CatalogGeneratorTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertNotEqual(check.returncode, 0)
-        self.assertIn("apple,j700 is not in scripts/supported-models.json", check.stderr)
+        self.assertEqual(check.returncode, 0, check.stderr)
 
 
 if __name__ == "__main__":

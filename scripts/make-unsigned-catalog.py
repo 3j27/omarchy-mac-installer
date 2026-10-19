@@ -10,7 +10,8 @@ Every per-release value comes from an inputs file (`--inputs`), so cutting a
 release never edits this script. `scripts/release-inputs.template.json` holds
 the current values. The engine is always the one `Engine/source-lock.json`
 pins. The inputs must list exactly the Macs in
-`scripts/supported-models.json`: every M1, M2 and M3 Mac, none refused.
+`scripts/supported-models.json`: every M1, M2 and M3 Mac and the MacBook Neo,
+none refused.
 
 The catalog pins whole-file digests. When the payload was split for release
 delivery, the sibling `<payload>.partNN` files are emitted as an additional
@@ -25,7 +26,7 @@ machine-enforced guard.
 add `developer_models`: groups of boards from the manifest's `developer`
 section, or supported Macs moved out of the main group, each group with its
 own metadata and its own or a shared payload. The main group and the moved
-Macs together still cover exactly every M1, M2 and M3 Mac. Channel publishing
+Macs together still cover exactly every supported Mac. Channel publishing
 rejects a catalog with a developer board.
 
 Usage:
@@ -294,7 +295,7 @@ def load_inputs(path: Path, developer: bool = False) -> dict:
             identifier
         ):
             raise SystemExit(f"invalid device identifier: {identifier}")
-    # Every catalog enables every M1, M2 and M3 Mac (scripts/supported-models.json):
+    # Every catalog enables every supported Mac (scripts/supported-models.json):
     # in the main group, or in a developer group that gives some of them their own metadata.
     taken = load_developer_models(document) if "developer_models" in document else []
     coverage = supported_models.coverage_errors(identifiers + taken)

@@ -62,9 +62,9 @@ require = candidate_set.require
 digest = candidate_set.digest
 
 
-def load_policy(trust=TRUST, hardware_profile="legacy"):
+def load_policy(trust=TRUST):
     """The candidate policy and its channel section, with the channel key checked against its pins."""
-    policy = candidate_set.hardware_policy(candidate_set.load_policy(trust), hardware_profile)
+    policy = candidate_set.load_policy(trust)
     channel = policy.get('channel')
     require(isinstance(channel, dict), 'the trust policy names no channel trust root')
     key = channel.get('public_key', '')
@@ -148,11 +148,10 @@ def resolve(entries, policy, channel):
     return chosen
 
 
-def manifest(chosen, lane, database_sha256, channel, hardware_profile="legacy"):
+def manifest(chosen, lane, database_sha256, channel):
     return {
         'schema': 1,
         'kind': 'channel',
-        'hardware_profile': hardware_profile,
         'channel': lane,
         'repository': channel['repository'],
         'database_sha256': database_sha256,
@@ -185,18 +184,18 @@ def verify_archive(home, path, entry, channel):
     return fields
 
 
-def files(database, lane, trust=TRUST, hardware_profile="legacy"):
-    policy, channel = load_policy(trust, hardware_profile)
+def files(database, lane, trust=TRUST):
+    policy, channel = load_policy(trust)
     require(LANE.fullmatch(lane) is not None and lane in channel['lanes'], f'channel mode does not build {lane}')
     return [e['FILENAME'][0] for _, _, e in resolve(read_database(database), policy, channel)]
 
 
-def snapshot(database, database_sha256, lane, packages, destination, trust=TRUST, hardware_profile="legacy"):
+def snapshot(database, database_sha256, lane, packages, destination, trust=TRUST):
     """Verifies the set the pinned DATABASE names from the archives in PACKAGES and freezes it in DESTINATION."""
     require(HEX64.fullmatch(database_sha256) is not None, 'invalid database hash')
     require(LANE.fullmatch(lane) is not None, 'invalid channel')
     require(packages.is_dir() and not packages.is_symlink(), 'unsafe package directory')
-    policy, channel = load_policy(trust, hardware_profile)
+    policy, channel = load_policy(trust)
     require(lane in channel['lanes'], f'channel mode does not build {lane}')
     destination.mkdir(mode=0o700)  # Exclusive: a failed import is never reused.
     candidate_set.copy_file(database.parent, database.name, destination)
@@ -204,7 +203,7 @@ def snapshot(database, database_sha256, lane, packages, destination, trust=TRUST
     require(digest(frozen) == database_sha256, 'the channel database changed since it was pinned')
     chosen = resolve(read_database(frozen), policy, channel)
     frozen.unlink()
-    record = manifest(chosen, lane, database_sha256, channel, hardware_profile)
+    record = manifest(chosen, lane, database_sha256, channel)
     text = json.dumps(record, indent=2, sort_keys=True) + '\n'
     (destination / 'manifest.json').write_text(text)
     payloads, fields_of, commits = {}, {}, {}
@@ -230,7 +229,7 @@ def snapshot(database, database_sha256, lane, packages, destination, trust=TRUST
                     require(candidate_set.HEX40.fullmatch(revision) is not None,
                             f'{entry["NAME"][0]} carries a malformed source revision')
                     commits[role] = revision
-    candidate_set.verify_payloads(payloads, hardware_profile)
+    candidate_set.verify_payloads(payloads, policy)
     names = {role: entry['NAME'][0] for role, _, entry in chosen}
     versions = {role: entry['VERSION'][0] for role, _, entry in chosen}
     require(versions['omarchy'] == versions['omarchy-settings'], 'mixed desktop versions')
@@ -250,7 +249,6 @@ def snapshot(database, database_sha256, lane, packages, destination, trust=TRUST
     summary = {
         'schema': 1,
         'kind': 'channel',
-        'hardware_profile': hardware_profile,
         'set': f'omarchy-{lane}-{database_sha256[:12]}',
         'candidate_only': False,
         'channel': lane,
@@ -268,10 +266,10 @@ def snapshot(database, database_sha256, lane, packages, destination, trust=TRUST
     return summary
 
 
-def describe(database, lane, packages, trust=TRUST, hardware_profile="legacy"):
+def describe(database, lane, packages, trust=TRUST):
     """Verifies the set in a scratch copy and prints the values an inputs record pins."""
     with tempfile.TemporaryDirectory(prefix='channel-describe-') as scratch:
-        summary = snapshot(database, digest(database), lane, packages, Path(scratch) / 'set', trust, hardware_profile)
+        summary = snapshot(database, digest(database), lane, packages, Path(scratch) / 'set', trust)
         for path in (Path(scratch) / 'set').iterdir():
             path.chmod(0o644)
         (Path(scratch) / 'set').chmod(0o755)
@@ -320,21 +318,19 @@ def main(argv=None):
     imported.add_argument('--output', type=Path, required=True)
     installed.add_argument('--records', type=Path, required=True)
     installed.add_argument('--cache', type=Path, required=True)
-    for command in (listed, imported, described):
-        command.add_argument('--hardware-profile', choices=('legacy', 'neo'), default='legacy')
     args = parser.parse_args(argv)
     try:
         if args.command == 'files':
-            print('\n'.join(files(args.db, args.lane, hardware_profile=args.hardware_profile)))
+            print('\n'.join(files(args.db, args.lane)))
             return 0
         if args.command == 'verify-installed':
             count = verify_installed(args.db, args.db_sha256, args.records, args.cache)
             print(f'verified={count}')
             return 0
         if args.command == 'import':
-            summary = snapshot(args.db, args.db_sha256, args.lane, args.packages, args.output, hardware_profile=args.hardware_profile)
+            summary = snapshot(args.db, args.db_sha256, args.lane, args.packages, args.output)
         else:
-            summary = describe(args.db, args.lane, args.packages, hardware_profile=args.hardware_profile)
+            summary = describe(args.db, args.lane, args.packages)
     except (ValueError, OSError, KeyError, TypeError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
         print(f'channel_set: {error}', file=sys.stderr)
         return 1

@@ -262,14 +262,16 @@
         "j475c", "j475d", "j180d", "j433", "j434", "j504", "j613", "j615", "j514s", "j514c",
         "j514m", "j516s", "j516c", "j516m",
       ].map { "apple,\($0)" }
-      XCTAssertEqual(identifiers, Set(everyM1M2M3Mac))
+      // The templates' one payload is the image every Mac installs, the MacBook Neo's too.
+      XCTAssertEqual(identifiers, Set(everyM1M2M3Mac + ["apple,j700"]))
       let manifest = try JSONSerialization.jsonObject(
         with: Data(contentsOf: scripts.appendingPathComponent("supported-models.json")))
       let supported = try XCTUnwrap((manifest as? [String: Any])?["supported"] as? [String])
-      XCTAssertEqual(Set(supported), Set(everyM1M2M3Mac))
+      XCTAssertEqual(Set(supported), Set(everyM1M2M3Mac + ["apple,j700"]))
       #if DEBUG
         XCTAssertEqual(
-          InstallerSimulationEnvironment.simulatedCatalogDevices.sorted(), everyM1M2M3Mac.sorted())
+          InstallerSimulationEnvironment.simulatedCatalogDevices.sorted(),
+          (everyM1M2M3Mac + ["apple,j700"]).sorted())
       #endif
       for identifier in identifiers {
         XCTAssertNotNil(MacModelNames.name(for: identifier), identifier)

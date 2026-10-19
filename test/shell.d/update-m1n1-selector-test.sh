@@ -8,8 +8,8 @@ set -euo pipefail
 
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
-selector=$ROOT/image-builder/one-image/update-m1n1-board
-default=$ROOT/image-builder/one-image/update-m1n1.default
+selector=$ROOT/image-builder/archive/one-image/update-m1n1-board
+default=$ROOT/image-builder/archive/one-image/update-m1n1.default
 installed_selector=/usr/lib/omarchy-mac-image/update-m1n1-board
 test_tmp=$(mktemp -d)
 trap 'rm -rf "$test_tmp"' EXIT

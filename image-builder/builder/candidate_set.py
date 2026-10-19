@@ -64,10 +64,11 @@ REVISION_FILES = {
     'omarchy-mac-boot': 'usr/share/omarchy-mac/boot-source-revision',
 }
 # Boot payloads the image is assembled and inspected from, and the one package
-# that may carry each.
+# that may carry each: every Mac boots the Aurora stack.
 REQUIRED_OWNERS = {
-    'usr/lib/asahi-boot/m1n1.bin': 'm1n1-aurora',
-    'usr/lib/asahi-boot/u-boot-nodtb.bin': 'uboot-asahi',
+    'usr/lib/asahi-boot/m1n1.bin': 'aura',
+    'usr/share/aura/stage1/aura-raw.bin': 'aura',
+    'usr/lib/asahi-boot/u-boot-nodtb.bin': 'uboot-aurora',
     'usr/lib/omarchy/initcpio/omarchy-mac-encrypt': 'omarchy-mac-boot',
     'usr/lib/omarchy/mac-first-boot/omarchy-mac-first-boot': 'omarchy-mac-boot',
     'usr/share/libalpm/scripts/limine-apple-gate': 'limine-mkinitcpio-hook',
@@ -152,29 +153,6 @@ def load_policy(trust=TRUST):
     return policy
 
 
-def hardware_policy(policy, profile='legacy'):
-    """Only trusted policy defines package requirements; signed manifests select them.
-
-    Channel images retain the qualified legacy boot chain. Neo candidates opt in
-    explicitly and cannot silently switch the boot chain of other Macs.
-    """
-    require(profile in ('legacy', 'neo'), 'unknown hardware profile')
-    if profile == 'legacy':
-        return policy
-    require(profile in policy.get('hardware_profiles', {}), 'hardware profile is not configured')
-    return dict(policy, **policy['hardware_profiles'][profile])
-
-
-def required_owners(profile='legacy'):
-    require(profile in ('legacy', 'neo'), 'unknown hardware profile')
-    owners = dict(REQUIRED_OWNERS)
-    if profile == 'neo':
-        owners['usr/lib/asahi-boot/m1n1.bin'] = 'aura'
-        owners['usr/share/aura/stage1/aura-raw.bin'] = 'aura'
-        owners['usr/lib/asahi-boot/u-boot-nodtb.bin'] = 'uboot-aurora'
-    return owners
-
-
 def set_digest(manifest):
     lines = sorted((f"{p['name']} {p['version']} {p['filename']} {p['sha256']}\n" for p in manifest['packages']),
                    key=lambda line: line.encode())
@@ -240,24 +218,25 @@ def from_channel(origin, filename):
             and origin.get('channel') == f'omacom {match[1]} aarch64' and 'commit' not in origin)
 
 
-def verify_payloads(payloads, profile='legacy'):
-    """Every file has one owner, and each boot payload the image needs its expected one."""
+def verify_payloads(payloads, policy):
+    """Every file has one owner, each boot payload the image needs its expected
+    one, and the kernel carries every supported Mac's device tree."""
     owners = {}
     for name, paths in sorted(payloads.items()):
         for path in paths:
             require(path not in owners, f'candidate payload ownership conflict: {path} ({owners.get(path)}, {name})')
             owners[path] = name
-    for path, owner in required_owners(profile).items():
+    for path, owner in REQUIRED_OWNERS.items():
         require(owners.get(path) == owner, f'{path} is not in {owner}')
     kernels = [p for p in payloads.get('linux-aurora', ()) if PurePosixPath(p).match('usr/lib/modules/*/vmlinuz')]
     require(len(kernels) == 1, 'linux-aurora does not carry one kernel')
     release = PurePosixPath(kernels[0]).parts[3]
     dtbs = [p for p in payloads['linux-aurora'] if PurePosixPath(p).match(f'usr/lib/modules/{release}/dtbs/*.dtb')]
     require(dtbs, 'linux-aurora carries no device trees')
-    if profile == 'neo':
-        # Stage 2 hands U-Boot the kernel's tree; the Aurora U-Boot ships none of its own.
-        require(any(PurePosixPath(path).name == 't8140-j700.dtb' for path in dtbs),
-                'Neo profile requires the J700 kernel device tree')
+    # Stage 2 hands U-Boot the kernel's tree; the Aurora U-Boot ships none of its own.
+    names = {PurePosixPath(path).name for path in dtbs}
+    missing = [tree for tree in policy['device_trees'] if f'{tree}.dtb' not in names]
+    require(not missing, 'linux-aurora lacks the device trees of ' + ', '.join(missing))
     require(not any('omarchy-arm-repository.key' in path for path in owners), 'a fork repository key is in the set')
     return owners
 
@@ -292,8 +271,8 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
                 and source.get('repository') in policy['source_repositories']
                 and source.get('commit') == source_commit, 'wrong build manifest')
         require(data.get('set_sha256') == set_digest(data) == receipt.get('set_sha256'), 'set digest mismatch')
-        profile = data.get('hardware_profile', 'legacy')
-        policy = hardware_policy(policy, profile)
+        # Every image is the one Aurora image; a manifest cannot pick another.
+        require('hardware_profile' not in data, 'hardware profiles are retired: every image is the Aurora image')
         runtime, boot = set(policy['runtime_packages']), set(policy['boot_packages'])
         support = set(policy.get('support_packages', []))
         packages = data['packages']
@@ -360,7 +339,7 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
             versions[name] = package['version']
             payloads[name] = payload_paths(path)
             fields_of[name] = fields
-        verify_payloads(payloads, profile)
+        verify_payloads(payloads, policy)
         require(versions['omarchy'] == versions['omarchy-settings'], 'mixed desktop versions')
         settings_pin = 'omarchy-settings=' + versions['omarchy-settings'].rsplit('-', 1)[0]
         require(settings_pin in fields_of['omarchy'].get('depend', []), 'missing settings version pin')
@@ -373,7 +352,6 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
                 'the Apple package list lacks the add-on or boot package')
     summary = {
         'schema': 1,
-        'hardware_profile': profile,
         'set': data['set'],
         'candidate_only': data['candidate_only'] is True,
         'source_commit': source_commit,
