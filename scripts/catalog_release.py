@@ -267,7 +267,9 @@ def engine_app_floor(engine: dict | None) -> tuple[int, ...]:
     and run the app's signed Contents/Helpers copy, which older apps lack.
     Every other engine needs app 2.1.0, the floor of every catalog."""
     lock = json.loads(SOURCE_LOCK.read_text())
-    if engine is not None and engine.get("sha256") == lock["validation_artifact"]["sha256"]:
+    # A raw engine block carries its digest at the top; check_engine moves it under artifact.
+    digest = None if engine is None else engine.get("sha256", engine.get("artifact", {}).get("sha256"))
+    if digest == lock["validation_artifact"]["sha256"]:
         return version_tuple(lock["downstream_overlay"].get("minimum_app_version", "2.1.0"))
     return (2, 1, 0)
 

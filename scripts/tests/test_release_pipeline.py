@@ -735,6 +735,14 @@ class CatalogInputs(unittest.TestCase):
             with self.subTest(installer=installer, engine=engine):
                 self.assertNotEqual(self.run_step(installer, "false", engine)[0], 0)
 
+    def test_the_app_floor_survives_the_catalogs_engine_normalization(self):
+        # build_catalog passes check_engine's output, whose digest sits under artifact.
+        normalized = catalog.check_engine(self.pinned)
+        self.assertEqual(catalog.engine_app_floor(normalized), (2, 3, 0))
+        with self.assertRaisesRegex(catalog.Refusal, "needs app 2.3.0 or later"):
+            catalog.check_installer({**self.installer(), "minimumVersion": "2.2.0"}, normalized)
+        self.assertEqual(catalog.check_installer(self.installer(), normalized)["minimumVersion"], "2.3.0")
+
     def test_a_good_block_becomes_the_catalogs_inputs(self):
         status, output = self.run_step(self.installer(), "false")
         self.assertEqual(status, 0, output)
