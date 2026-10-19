@@ -15,3 +15,5 @@ The existing publication transaction stages the unchanged signed app and separat
 Ship the rebuilt engine and matching catalog entry with a new app/helper build. The source lock and content-derived engine name identify that runtime. An already completed legacy installation is not converted by replaying its disk-install checkpoints; it needs a separate bounded staging action with fresh owner authorization.
 
 Template preparation and admission run in native Swift. The existing installation engine remains responsible for disk installation.
+
+Shutdown handoff supplies the authenticated app’s current flat template with its existing target ticket. The helper revalidates the target, verifies the new template under its own signing policy, durably refreshes its retained copy, and uses the existing interrupted-update transaction. This allows an updated installer to replace Recovery without starting another disk installation.

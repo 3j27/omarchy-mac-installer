@@ -197,6 +197,7 @@
       _ = try AccountNativeCommand.checked(
         "/usr/bin/codesign",
         ["--verify", "--deep", "--strict", "-R=" + requirement, candidate.path])
+      try RecoveryFileTransaction.flushTree(candidate)
       let backup = system.appendingPathComponent(
         "Aurora/Recovery/AppBackups/\(UUID().uuidString).app", isDirectory: true)
       try fm.createDirectory(
