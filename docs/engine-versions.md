@@ -9,7 +9,7 @@ New engines are named `v0.9.2-omarchy.<YYYYMMDD>.<content id>`, for example `v0.
 - The date is the day the name was chosen. It only helps people see which engine is newer.
 - The content id is the first 12 hex characters of a SHA-256 over the lock's build inputs: the upstream installer and metadata, the downstream overlay (its files, patch, capability and modes, but not its name), the incremental base and upstream delta, the build inputs, toolchain and recipe, and the engine metadata digest. Two branches that change the engine differently get different names, so nobody has to coordinate the next number, and a rebase that changes no input keeps the id.
 
-Engines up to `v0.9.2-omarchy.50` keep their numeric names. Nothing compares or parses names: the catalog and the app pin the exact archive by digest, and every catalog requires app 2.1.0 or later whatever its engine is called.
+`v0.9.2-omarchy.50`, the last engine named by number, keeps its name only while the lock holds the inputs it was built from: `Engine/engine_pin.py` freezes their content id in `LEGACY`. `check` refuses every other name that isn't a well-formed dated one, such as a hand-picked `.51`. So the next engine change must take a dated name. Nothing compares or parses names: the catalog and the app pin the exact archive by digest, and every catalog requires app 2.1.0 or later whatever its engine is called.
 
 ## Who reads the pin
 
@@ -21,7 +21,7 @@ Nothing else in the repository carries a copy of the pin; everything reads the l
 - `.github/workflows/mac-release-pipeline.yml`, whose config adds only the engine's `downstreamRevision`;
 - `scripts/make-unsigned-catalog.py`.
 
-`Engine/tests/test_engine_pin.py`, run by `./test/all`, fails if any file outside the lock, docs and evidence repeats the engine's digest, or if a dated name's content id no longer matches the lock's build inputs.
+`Engine/tests/test_engine_pin.py`, run by `./test/all`, fails if any file outside the lock, docs and evidence repeats the engine's digest, or if `engine_pin.py check` finds a problem: a name that is neither dated nor `LEGACY`, an impossible date, or a content id that no longer matches the lock's build inputs. `scripts/make-unsigned-catalog.py` also refuses an engine archive whose size or SHA-256 isn't the lock's.
 
 ## Changing the engine
 
@@ -29,5 +29,6 @@ Nothing else in the repository carries a copy of the pin; everything reads the l
 2. `python3 Engine/engine_pin.py name --write` names the engine and its archive in the lock.
 3. Rebuild the engine (`Engine/rebuild-python-overlay.py`) and record its `size_bytes` and `sha256` in `validation_artifact`.
 4. `./test/all`.
+5. Before the release pipeline runs on it, publish the archive as this repository's `engine-<version>` release. `catalog_release.pipeline_engine` builds the engine URL from that release name, and `mac-catalog.yml`'s `--verify-remote` refuses a missing or different archive. When mac.omarchy.org hosts engines, that URL changes in `pipeline_engine`, not in the config.
 
-When two branches that both changed the engine meet, Git reports a conflict only in the lock (and in any overlay source both changed). Resolve the overlay sources and the lock's build inputs, then run steps 2 to 4 again: the merged engine gets a new content id, so it can never be mistaken for either branch's engine.
+When two branches that both changed the engine meet, Git reports a conflict only in the lock (and in any overlay source both changed). Resolve the overlay sources and the lock's build inputs, then run steps 2 to 5 again: the merged engine gets a new content id, so it can never be mistaken for either branch's engine.

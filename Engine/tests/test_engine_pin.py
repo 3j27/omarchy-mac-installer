@@ -72,6 +72,32 @@ class EnginePinTests(unittest.TestCase):
         problems = PIN.check(other)
         self.assertTrue(any("names content 000000000000" in problem for problem in problems), problems)
 
+    def renamed(self, version):
+        other = copy.deepcopy(self.lock)
+        other["downstream_overlay"]["version"] = version
+        other["validation_artifact"]["filename"] = PIN.archive_name(version)
+        return other
+
+    def test_the_legacy_engine_passes_only_with_the_inputs_it_was_built_from(self):
+        for version, built_from in PIN.LEGACY.items():
+            with self.subTest(version):
+                other = self.renamed(version)
+                other["downstream_overlay"]["files"][0]["sha256"] = "1" * 64
+                self.assertNotEqual(PIN.content_id(other), built_from)
+                problems = PIN.check(other)
+                self.assertTrue(any(f"built from inputs {built_from}" in problem for problem in problems), problems)
+
+    def test_names_that_are_not_dated_are_refused(self):
+        for version in ("v0.9.2-omarchy.51", "v0.9.2-omarchy.20261019.bad", "v0.9.2-omarchy.20261019",
+                        f"v0.9.2-omarchy.20261019.{PIN.content_id(self.lock).upper()}"):
+            with self.subTest(version):
+                problems = PIN.check(self.renamed(version))
+                self.assertTrue(any("is not a dated engine name" in problem for problem in problems), problems)
+
+    def test_a_dated_name_with_an_impossible_date_is_refused(self):
+        problems = PIN.check(self.renamed(f"v0.9.2-omarchy.20261399.{PIN.content_id(self.lock)}"))
+        self.assertTrue(any("impossible date" in problem for problem in problems), problems)
+
     def test_the_archive_name_must_follow_the_version(self):
         other = copy.deepcopy(self.lock)
         other["validation_artifact"]["filename"] = "installer-something-else.tar.gz"

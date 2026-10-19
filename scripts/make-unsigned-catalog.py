@@ -245,6 +245,7 @@ def load_inputs(path: Path, developer: bool = False) -> dict:
     lock = json.loads(SOURCE_LOCK.read_text())
     document["engine_name"] = lock["validation_artifact"]["filename"]
     document["engine_version"] = lock["downstream_overlay"]["version"]
+    document["engine_identity"] = (lock["validation_artifact"]["size_bytes"], lock["validation_artifact"]["sha256"])
 
     for key in (
         "payload_name",
@@ -391,6 +392,9 @@ def issue_time(override: str | None) -> datetime.datetime:
 def model_group(inputs: dict, group: dict, assets: Path, base_url: str) -> tuple[list[dict], int]:
     """The catalog models for one payload's boards, and its payload part count."""
     engine = require_regular_file(assets / inputs["engine_name"])
+    # The archive under the lock's name must be the lock's engine.
+    if (engine.stat().st_size, digest(engine)) != inputs["engine_identity"]:
+        raise SystemExit(f"{engine.name} is not the engine Engine/source-lock.json pins (size or sha256 differs)")
     metadata = require_regular_file(assets / group["metadata_name"])
     payload = require_regular_file(assets / group["payload_name"])
 

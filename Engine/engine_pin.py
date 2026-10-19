@@ -13,8 +13,9 @@ the release workflows and the catalog tools. See docs/engine-versions.md.
       --write puts the name (and the matching archive file name) in the lock.
 
   engine_pin.py check
-      Fail if a dated name's content id does not match the lock's build inputs, or if
-      the archive name does not follow the name.
+      Fail unless the name is a dated name whose date is real and whose content id matches
+      the lock's build inputs, or the one engine named before dated names (LEGACY) with the
+      inputs it was built from; and fail if the archive name does not follow the name.
 
 After merging two branches that both changed the engine: resolve the lock's build inputs,
 run `name --write`, rebuild the engine and record its size and digest.
@@ -33,6 +34,11 @@ LOCK = ROOT / "Engine" / "source-lock.json"
 
 BASE = "v0.9.2-omarchy"
 DATED = re.compile(r"v0\.9\.2-omarchy\.(\d{8})\.([0-9a-f]{12})")
+
+# The last engine named by number, frozen with the content id of the inputs it
+# was built from (.50 rebuilds byte-identical from them). Any input change
+# under this name, and any other name that isn't dated, fails `check`.
+LEGACY = {"v0.9.2-omarchy.50": "2ede760866d5"}
 
 # The lock's build inputs. Everything else in it either describes the result
 # (the name and the artifact) or is prose.
@@ -83,13 +89,25 @@ def dump_json(document):
 def check(lock):
     problems = []
     version = lock["downstream_overlay"]["version"]
-    # Engines named before dated names (v0.9.2-omarchy.50 and earlier) pass
-    # until the next engine change renames them.
-    if (match := DATED.fullmatch(version)) and match.group(2) != content_id(lock):
-        problems.append(
-            f"{version} names content {match.group(2)}, but the lock's build inputs are {content_id(lock)}; "
-            "run `engine_pin.py name --write`"
-        )
+    actual = content_id(lock)
+    rename = "run `engine_pin.py name --write`"
+    if version in LEGACY:
+        if LEGACY[version] != actual:
+            problems.append(
+                f"{version} was built from inputs {LEGACY[version]}, but the lock's build inputs are {actual}; "
+                + rename
+            )
+    elif match := DATED.fullmatch(version):
+        try:
+            datetime.strptime(match.group(1), "%Y%m%d")
+        except ValueError:
+            problems.append(f"{version} names an impossible date; " + rename)
+        if match.group(2) != actual:
+            problems.append(
+                f"{version} names content {match.group(2)}, but the lock's build inputs are {actual}; " + rename
+            )
+    else:
+        problems.append(f"{version} is not a dated engine name ({BASE}.<YYYYMMDD>.<content id>); " + rename)
     filename = lock["validation_artifact"]["filename"]
     if filename != archive_name(version):
         problems.append(f"validation_artifact.filename is {filename}, expected {archive_name(version)}")
