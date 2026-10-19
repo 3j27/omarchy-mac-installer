@@ -3,7 +3,8 @@ name: Native Recovery app
 # Builds the native Recovery app (Recovery/build-recovery.sh, which runs its
 # fixtures) on macOS and keeps it as the calling run's artifact
 # native-recovery-input: native-recovery.tar (the ad hoc signed
-# `Omarchy Installer.app` and its inventory, omarchy-recovery-app.json) and
+# Recovery app, named in Packaging/identity.conf, and its inventory,
+# omarchy-recovery-app.json) and
 # source.txt (the source commit, the Recovery tree, the inventory's sha256 and
 # the native tools). The inventory's sha256 is also this workflow's output,
 # so the image job can hold the artifact it downloads to the app built here.
