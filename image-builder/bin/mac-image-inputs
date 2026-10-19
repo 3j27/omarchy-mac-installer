@@ -39,7 +39,8 @@ Usage: bin/mac-image-inputs resolve FILE (--candidates DIR | --channel-set) [--c
               against that database and the Omarchy package key
               (builder/channel_set.py); the record names it channel_set=.
               --recovery-app DIR pins the native Recovery build inventory;
-              supply that directory again to build-mac-image.
+              supply that directory again to build-mac-image. A channel set
+              requires it: every public image carries the native Recovery app.
   check       FILE is a canonical record; prints it
   rootfs      put the record's root filesystem at DEST after checking its
               signature and recorded sha256
@@ -339,6 +340,7 @@ case $mode in
   resolve)
     if [[ -n $channel_mode ]]; then
       [[ -z $candidates ]] || usage_error "--candidates and --channel-set exclude each other"
+      [[ -n $recovery_app ]] || usage_error "--channel-set requires --recovery-app: every public image carries the native Recovery app"
     else
       [[ -n $candidates && -d $candidates ]] || usage_error "--candidates names no directory"
     fi

@@ -128,11 +128,14 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
 
 
 class ChannelBuildDirectoryTest(unittest.TestCase):
-    """A channel build's records name the channel set and database, and describe a public image."""
+    """A channel build's records name the channel set and database, and describe a public image: one that
+    carries the native Recovery app, which the installer finishes every public install with."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.out = Path(self.tmp.name) / "out"
+        self.recovery = Path(self.tmp.name) / "recovery"
+        self.inputs = dict(CHANNEL_INPUTS, recovery_app_manifest_sha256=fixtures.make_recovery_app(self.recovery))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -141,8 +144,8 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
         if self.out.exists():
             shutil.rmtree(self.out)
         self.out.mkdir()
-        settings = dict(packages=CHANNEL_PACKAGES, candidates=CHANNEL_PACKAGES[:2], inputs=CHANNEL_INPUTS, pin="",
-                        sources=(("omarchy-mac", "b" * 40),))
+        settings = dict(packages=CHANNEL_PACKAGES, candidates=CHANNEL_PACKAGES[:2], inputs=self.inputs, pin="",
+                        sources=(("omarchy-mac", "b" * 40),), recovery_app=self.recovery)
         build(self.out, **{**settings, **options})
 
     def test_a_channel_build_is_a_public_image_with_its_database_and_digests(self):
@@ -167,6 +170,38 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
                 self.build(**{"provenance_edit" if target == "PROVENANCE" else "image_edit": edit})
                 with self.assertRaisesRegex(check.CheckError, "retired hardware profile"):
                     getattr(check, "check_provenance" if target == "PROVENANCE" else "check_descriptor")("edge", self.out)
+
+    def test_a_channel_build_carries_the_native_recovery_app(self):
+        self.build()
+        metadata = json.loads((self.out / "installer_data.json").read_text())
+        self.assertEqual(metadata["os_list"][0]["recovery_gui"], "omarchy-native-v1")
+        image = check.parse_fields(self.out / "IMAGE")
+        self.assertEqual(image["recovery_app_manifest_sha256"], [self.inputs["recovery_app_manifest_sha256"]])
+        members = {value.split("|", 1)[0] for value in image["image_sha256"]}
+        for member in (check.recovery_app.PREFIX + check.recovery_app.MANIFEST,
+                       check.recovery_app.PREFIX + check.recovery_app.APP + "/Contents/MacOS/OmarchyRecovery"):
+            self.assertIn(member, members)
+
+    def test_a_channel_build_without_the_native_recovery_app_is_refused(self):
+        # The regression this guards: an edge image whose installs the app cannot hand to Recovery.
+        self.build(inputs=CHANNEL_INPUTS, recovery_app=None)
+        for mode, where in (("provenance", "PROVENANCE"), ("descriptor", "the inputs record")):
+            with self.subTest(mode=mode), self.assertRaisesRegex(
+                    check.CheckError, f"{where} pins no native Recovery app: a channel image must carry it"):
+                getattr(check, f"check_{mode}")("edge", self.out)
+        with self.assertRaisesRegex(check.CheckError, "pins no native Recovery app"):
+            check.image_name("edge", self.out)
+        result = subprocess.run([sys.executable, str(ROOT / "bin/mac-image-check"), "descriptor", "edge", str(self.out)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("pins no native Recovery app", result.stderr)
+
+    def test_a_channel_build_must_carry_the_recovery_app_its_inputs_pin(self):
+        # Pinned in the inputs, but the payload neither declares nor carries it.
+        self.build(recovery_app=None)
+        for mode in ("provenance", "descriptor"):
+            with self.subTest(mode=mode), self.assertRaisesRegex(check.CheckError, "Recovery metadata does not match"):
+                getattr(check, f"check_{mode}")("edge", self.out)
 
     def test_native_recovery_inventory_is_bound_to_image_inputs(self):
         recovery = Path(self.tmp.name) / "recovery"
@@ -221,7 +256,7 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
                     check.check_provenance("edge", self.out)
 
     def test_records_name_one_kind_of_set(self):
-        mixed = dict(CHANNEL_INPUTS, candidate_set="apple-test-fixture")
+        mixed = dict(self.inputs, candidate_set="apple-test-fixture")
         self.build(inputs=mixed)
         for mode in ("provenance", "descriptor"):
             with self.subTest(mode=mode), self.assertRaisesRegex(check.CheckError, "names no single set"):
@@ -236,7 +271,8 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
         self.assertEqual(target["supported_fw"], ["13.5", "14.8.3", "26.6.2"])
         for member in ("esp/aurora/stage1-j700.bin", "esp/m1n1/boot-j700.bin"):
             with self.subTest(member):
-                fixtures.write_payload(self.out / NAME, check.BOOT_UUID, check.ROOT_UUID, omit=(member,))
+                fixtures.write_payload(self.out / NAME, check.BOOT_UUID, check.ROOT_UUID, omit=(member,),
+                                       recovery_app=self.recovery)
                 with self.assertRaisesRegex(check.CheckError, "missing members"):
                     check.check_payload("edge", self.out / NAME, self.out / "installer_data.json")
 
@@ -244,7 +280,9 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
         self.build()
         metadata = json.loads((self.out / "installer_data.json").read_text())
         engine = json.loads((ROOT.parent / "Engine/installer_data.json").read_text())
-        engine["os_list"][0].update(package=NAME, supported_fw=["13.5", "14.8.3", "26.6.2"])
+        # A public image adds only the native Recovery declaration to the engine's template.
+        engine["os_list"][0].update(package=NAME, supported_fw=["13.5", "14.8.3", "26.6.2"],
+                                    recovery_gui="omarchy-native-v1")
         self.assertEqual(metadata, engine)
 
     def test_a_public_image_is_named_for_its_lane_date_and_package_set(self):

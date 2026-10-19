@@ -29,7 +29,9 @@ name        a public build directory (descriptor, from a channel set): prints
 A channel build (its inputs record names channel_set=, builder/channel_set.py)
 names its channel set, signer and manifest and the channel database's sha256
 where a candidate build names its candidate set, and must be a public image:
-the release profile and no test image pin.
+the release profile, no test image pin, and the native Recovery app pinned in
+its inputs, declared in installer_data (recovery_gui) and carried under
+esp/aurora/recovery/, since the installer finishes every public install with it.
 
 image and tree refuse lab access (builder/lab_access.py) in every subvolume,
 @factory and the initramfs, unless --profile lab names an edge lab image; a lab
@@ -777,6 +779,7 @@ def check_provenance(lane: str, directory: Path) -> None:
     profile = check_recorded_profile(lane, fields, "PROVENANCE")
     if channel:
         check_public(fields, profile, "PROVENANCE")
+        check_native_recovery(fields.get("input.recovery_app_manifest_sha256", [""])[0], "PROVENANCE")
     require(report.get("lab_access_sha256") == fields.get("lab_access_sha256", [None])[0],
             "INSPECTION's lab access digest does not match PROVENANCE")
     check_image_target_record(report, fields, profile, channel)
@@ -797,6 +800,14 @@ def check_public(fields: dict[str, list[str]], profile: str, where: str) -> None
     """A channel image is a public image: the release profile and no test image pin."""
     require(profile == "release", f"{where} records a {profile} profile for a channel image")
     require(fields.get("test_image_pin") == [""], f"{where} records a test image pin for a channel image")
+
+
+def check_native_recovery(digest: str, where: str) -> None:
+    """A channel image is a public image, and the installer finishes every public
+    install with the native Recovery app: its inputs must pin one. check_payload
+    then holds installer_data's recovery_gui and the ESP's app to that digest."""
+    require(re.fullmatch(r"[0-9a-f]{64}", digest) is not None,
+            f"{where} pins no native Recovery app: a channel image must carry it (--recovery-app)")
 
 
 def check_image_target_record(report: dict, fields: dict[str, list[str]], profile: str, channel: bool = False) -> None:
@@ -883,6 +894,8 @@ def check_descriptor(lane: str, directory: Path) -> None:
         require(fields.get(key) == input_fields.get(key)
                 and provenance_fields.get("input." + key) == input_fields.get(key),
                 f"IMAGE {key} does not match the pinned inputs")
+    if channel:
+        check_native_recovery(input_fields.get("recovery_app_manifest_sha256", [""])[0], "the inputs record")
     digests = check_payload(lane, payload, installer_data, profile,
                             input_fields.get("recovery_app_manifest_sha256", [""])[0])
     recorded = {}

@@ -257,6 +257,9 @@ class RecordsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.out = Path(self.tmp.name) / "out"
+        self.recovery = Path(self.tmp.name) / "recovery"
+        self.inputs = dict(records.CHANNEL_INPUTS,
+                           recovery_app_manifest_sha256=fixtures.make_recovery_app(self.recovery))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -266,7 +269,7 @@ class RecordsTest(unittest.TestCase):
             shutil.rmtree(self.out)
         self.out.mkdir()
         settings = dict(packages=records.CHANNEL_PACKAGES, candidates=records.CHANNEL_PACKAGES[:2],
-                        inputs=records.CHANNEL_INPUTS, pin="", sources=(("omarchy-mac", "b" * 40),))
+                        inputs=self.inputs, pin="", sources=(("omarchy-mac", "b" * 40),), recovery_app=self.recovery)
         records.build(self.out, **{**settings, **options})
 
     def test_a_public_build_passes(self):
@@ -278,11 +281,14 @@ class RecordsTest(unittest.TestCase):
     def test_lab_and_test_builds_are_refused(self):
         cases = {
             "names a candidate set": dict(inputs=records.INPUTS, packages=records.PACKAGES,
-                                          candidates=records.PACKAGES[:2], sources=(("omarchy", "a" * 40),), pin=None),
+                                          candidates=records.PACKAGES[:2], sources=(("omarchy", "a" * 40),), pin=None,
+                                          recovery_app=None),
             "lab profile for a channel image": dict(profile=records.LAB),
             "test image pin for a channel image": dict(pin="omarchy omarchy-mac omarchy-settings"),
             "not signed by the Omarchy package key": dict(
-                inputs=dict(records.CHANNEL_INPUTS, channel_signer=POLICY["primary_fingerprint"])),
+                inputs=dict(self.inputs, channel_signer=POLICY["primary_fingerprint"])),
+            "pins no native Recovery app": dict(inputs=records.CHANNEL_INPUTS, recovery_app=None),
+            "Recovery metadata does not match the pinned inputs": dict(recovery_app=None),
         }
         for message, options in cases.items():
             with self.subTest(message=message):

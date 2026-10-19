@@ -1,10 +1,11 @@
 name: Native Recovery image input check and build
 
 # Manual, secret-free qualification of the edge image with the native Recovery
-# app, which the release image does not ship yet. No releases, catalogs or
-# deployment. Default: authenticate the real edge channel inputs and freeze the
-# native template. A full image build is opt-in and still does not qualify a
-# hardware boot.
+# app, from any branch: the release image (mac-image.yml) builds the same app
+# with the same workflow (recovery-app.yml), but only from main. No releases,
+# catalogs or deployment. Default: authenticate the real edge channel inputs
+# and freeze the native template. A full image build is opt-in and still does
+# not qualify a hardware boot.
 on:
   workflow_dispatch:
     inputs:
@@ -23,34 +24,9 @@ defaults:
 jobs:
   recovery:
     name: Build the native Recovery image input
-    runs-on: macos-26
-    timeout-minutes: 15
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Build and record the Recovery source and native tools
-        run: |
-          mkdir -p "$RUNNER_TEMP/native-recovery"
-          {
-            git rev-parse HEAD
-            git rev-parse HEAD:Recovery
-            sw_vers
-            xcodebuild -version
-            xcrun swift --version
-          } > "$RUNNER_TEMP/native-recovery/source.txt"
-          bash Recovery/build-recovery.sh "$RUNNER_TEMP/native-recovery/template"
-          source Packaging/identity.conf
-          tar -cf "$RUNNER_TEMP/native-recovery/native-recovery.tar" -C "$RUNNER_TEMP/native-recovery/template" "$INSTALLER_RECOVERY_APP_NAME.app" omarchy-recovery-app.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-recovery-input
-          path: |
-            ${{ runner.temp }}/native-recovery/native-recovery.tar
-            ${{ runner.temp }}/native-recovery/source.txt
-          retention-days: 14
+    uses: ./.github/workflows/recovery-app.yml
+    permissions:
+      contents: read
 
   image:
     name: Check real edge channel inputs, optionally build
@@ -67,7 +43,7 @@ jobs:
         run: echo "WORK=$RUNNER_TEMP/recovery-image" >>"$GITHUB_ENV"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: native-recovery-input
+          name: ${{ needs.recovery.outputs.artifact }}
           path: ${{ runner.temp }}/recovery-image/recovery
       - name: Install input verification tools
         run: |

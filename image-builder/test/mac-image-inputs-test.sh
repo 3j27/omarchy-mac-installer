@@ -171,6 +171,14 @@ fi
 grep -Fq "exclude each other" "$work/out" || fail "resolve says --channel-set and --candidates exclude each other"
 pass "resolve takes a candidate set or the channel, not both"
 
+# A public image always carries the native Recovery app: refused before any download.
+if "$BASH" "$inputs" resolve "$work/new" --channel-set --omarchy-server https://pkgs.invalid/edge >"$work/out" 2>&1; then
+  fail "resolve accepts --channel-set without --recovery-app"
+fi
+grep -Fq -- "--channel-set requires --recovery-app" "$work/out" || fail "resolve says a channel set needs the Recovery app"
+[[ ! -e $work/new ]] || fail "a refused channel resolve writes no record"
+pass "resolve refuses a channel set without the native Recovery app"
+
 # Hardware profiles are retired: every channel record builds the one Aurora image.
 refuse "a retired hardware profile" awk '{ print } /^channel_manifest_sha256=/ { print "hardware_profile=neo" }' "$work/channel-inputs"
 refuse "a retired legacy profile" awk '{ print } /^channel_manifest_sha256=/ { print "hardware_profile=legacy" }' "$work/channel-inputs"

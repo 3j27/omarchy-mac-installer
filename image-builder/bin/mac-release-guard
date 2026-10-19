@@ -8,8 +8,10 @@ outputs are kept for publishing, independent of how the build was asked for:
 records  BUILD_DIR   its records (mac-image-check provenance and descriptor)
                      describe a public image: built from a channel set signed
                      by the Omarchy package key, the release profile, no lab
-                     access digest, no test image pin, a release payload name
-                     and an inspection that read a release image target.
+                     access digest, no test image pin, the native Recovery
+                     app pinned, declared and carried (mac-image-check), a
+                     release payload name and an inspection that read a
+                     release image target.
 tree     ROOT...     each ROOT (an image subvolume, boot tree or ESP) carries
                      none of the findings below.
 build    BUILD_DIR   records, then unpacks the payload, mounts root.img (every

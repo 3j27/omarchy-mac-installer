@@ -247,6 +247,10 @@ host_main() {
   else
     [[ -n $candidates && -d $candidates ]] || usage_error "--candidates names no directory"
   fi
+  # The installer finishes every public install with the native Recovery app,
+  # so a channel image without it would install and then fail its handoff.
+  [[ $kind != channel || -n $(record_field recovery_app_manifest_sha256 "$inputs") ]] ||
+    fail "a channel image needs the native Recovery app: resolve and build with --recovery-app"
   if [[ -n $lab_access ]]; then
     [[ $(record_field omarchy_channel "$inputs") == edge ]] || fail "a lab image is built for the edge lane only"
     python3 "$ROOT/builder/lab_access.py" validate "$lab_access" >/dev/null || fail "--lab-access is not lab access"
