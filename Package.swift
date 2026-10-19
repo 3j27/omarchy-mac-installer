@@ -62,11 +62,20 @@ let package = Package(
       capability: .buildTool(),
       dependencies: ["OmarchyInstallerIdentityGenerator"]
     ),
+    .executableTarget(
+      name: "OmarchyEnginePinGenerator",
+      path: "Sources/OmarchyEnginePinGenerator"
+    ),
+    .plugin(
+      name: "OmarchyEnginePinPlugin",
+      capability: .buildTool(),
+      dependencies: ["OmarchyEnginePinGenerator"]
+    ),
     .target(
       name: "OmarchyAppleInstallerTrustCore",
       dependencies: ["OmarchyInstallerSystem", "RecoveryAccountCore"],
       path: "Sources/OmarchyAppleInstaller",
-      plugins: ["OmarchyInstallerIdentityPlugin"]
+      plugins: ["OmarchyInstallerIdentityPlugin", "OmarchyEnginePinPlugin"]
     ),
     .target(
       name: "OmarchyInstallerUXCore",

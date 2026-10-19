@@ -350,7 +350,7 @@
     },
     {
       "path": "rebuild-python-overlay.py",
-      "sha256": "2b9861e574228f69d81e136f93336e67488a889fc788ca6dbbb10c2d5779b7ac"
+      "sha256": "3ea07c0b9b7cb26b371c0bd970405d5ecb223a766c54dd6a31c3d2dcebea1139"
     },
     {
       "path": "RestoreImage/LICENSE",
