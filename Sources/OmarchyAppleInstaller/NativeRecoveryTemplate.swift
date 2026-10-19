@@ -169,6 +169,12 @@
       flushDirectory: (URL) throws -> Void = RecoveryFileTransaction.flushDirectory
     ) throws {
       let parent = destination.deletingLastPathComponent()
+      if !FileManager.default.fileExists(atPath: parent.path) {
+        try requireSafe(parent.deletingLastPathComponent(), directory: true, owner: owner)
+        if mkdir(parent.path, 0o755) != 0 && errno != EEXIST {
+          throw NativeRecoveryTemplateError.unsafeTemplate
+        }
+      }
       try requireSafe(parent, directory: true, owner: owner)
       let staged = parent.appendingPathComponent(".native-recovery-\(UUID().uuidString)")
       try FileManager.default.createDirectory(

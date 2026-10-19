@@ -199,6 +199,22 @@
         ) { try NativeRecoveryTemplate.verify($0, requirement: wrong) })
     }
 
+    func testFirstPublicationCreatesItsMissingValidatedParent() throws {
+      let (root, app) = try fixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let prepared = try NativeRecoveryTemplate.prepare(
+        source: app, in: root, owner: geteuid(), requirement: "identity", verify: { _ in })
+      defer { prepared.remove() }
+      let destination = root.appendingPathComponent("Helpers/RecoveryTemplate")
+      try NativeRecoveryTemplate.publish(
+        prepared, to: destination, owner: geteuid(), verify: { _ in })
+      XCTAssertTrue(
+        FileManager.default.fileExists(
+          atPath:
+            destination.appendingPathComponent(InstallerProductIdentity.recoveryAppBundleName).path)
+      )
+    }
+
     func testPublicationRetainsOldTreeUntilTheNewEntryIsDurable() throws {
       let (root, app) = try fixture()
       defer { try? FileManager.default.removeItem(at: root) }
