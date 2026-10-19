@@ -85,13 +85,16 @@ class EnginePreparationTests(unittest.TestCase):
         self.assertEqual(unrelated.read_bytes(), b'keep this')
         self.assertFalse((cache / digest(self.base)).is_symlink())
 
-    def archive(self, mode=0o644):
+    RUNTIME = b'\xcf\xfa\xed\xfe Developer ID signed runtime'
+
+    def archive(self, mode=0o644, extra=()):
         output = io.BytesIO()
         with tarfile.open(fileobj=output, mode='w:gz') as archive:
-            member = tarfile.TarInfo('./main.py')
-            member.mode = mode
-            member.size = 5
-            archive.addfile(member, io.BytesIO(b'hello'))
+            for name, content in (('./main.py', b'hello'), ('./Frameworks/Python', self.RUNTIME), *extra):
+                member = tarfile.TarInfo(name)
+                member.mode = mode
+                member.size = len(content)
+                archive.addfile(member, io.BytesIO(content))
         return output.getvalue()
 
     def reproduce(self, data, second=None, existing=None):
@@ -103,7 +106,8 @@ class EnginePreparationTests(unittest.TestCase):
         output = self.root / 'engine.tar.gz'
         if existing is not None:
             output.write_bytes(existing)
-        return PREPARE.reproduce(None, None, output, identity, build), calls
+        runtime = {'Frameworks/Python': digest(self.RUNTIME)}
+        return PREPARE.reproduce(None, None, output, identity, build, runtime), calls
 
     def test_two_matching_repacks_are_required_before_publication(self):
         data = self.archive()
@@ -120,6 +124,32 @@ class EnginePreparationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'archive modes'):
             self.reproduce(self.archive(0o666))
         self.assertFalse((self.root / 'engine.tar.gz').exists())
+
+    def test_native_code_beyond_the_authenticated_runtime_is_rejected(self):
+        # The .50 engine carried the ad hoc signed restore helper here, and
+        # notarization refused the app that bundled it.
+        for extra, message in (((('./bin/omarchy-restore-image', b'\xcf\xfa\xed\xfe ad hoc helper'),),
+                                 'bin/omarchy-restore-image: a Mach-O that is not part'),
+                                ((('./lib/x.so', b'\xca\xfe\xba\xbe universal'),), 'lib/x.so: a Mach-O')):
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                self.reproduce(self.archive(extra=extra))
+            self.assertFalse((self.root / 'engine.tar.gz').exists())
+
+    def test_a_changed_or_missing_runtime_file_is_rejected(self):
+        archive = self.root / 'checked.tar.gz'
+        archive.write_bytes(self.archive())
+        with self.assertRaisesRegex(ValueError, 'Frameworks/Python: differs from the authenticated runtime'):
+            PREPARE.verify_contents(archive, {'Frameworks/Python': digest(b'another runtime')})
+        with self.assertRaisesRegex(ValueError, 'Frameworks/Tcl: the authenticated runtime file is missing'):
+            PREPARE.verify_contents(archive, {'Frameworks/Python': digest(self.RUNTIME),
+                                              'Frameworks/Tcl': digest(b'tcl')})
+        PREPARE.verify_contents(archive, {'Frameworks/Python': digest(self.RUNTIME)})
+
+    def test_the_pinned_runtime_is_the_authenticated_bases_78_files(self):
+        runtime = PREPARE.MACHO.inventory()
+        self.assertEqual(len(runtime), 78)
+        self.assertIn('Frameworks/Python.framework/Versions/3.13/bin/python3.13', runtime)
+        self.assertFalse(any(name.startswith('bin/') for name in runtime))
 
     def test_wrong_existing_archive_is_preserved_and_rejected(self):
         with self.assertRaisesRegex(ValueError, 'size or digest mismatch'):

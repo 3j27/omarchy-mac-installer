@@ -43,6 +43,10 @@ class EngineRuntimeTests(unittest.TestCase):
             ],
         }
         self.plan = self._build_plan(self.inventory)
+        # Installs verify the app's decoder first; its own tests cover how.
+        decoder = patch("omarchy_runtime.omarchy_apple_aea.decoder")
+        self.decoder = decoder.start()
+        self.addCleanup(decoder.stop)
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -69,6 +73,35 @@ class EngineRuntimeTests(unittest.TestCase):
                     "OMARCHY_ENGINE_JOURNAL": str(self.journal_path),
                 }
             )
+
+    def test_install_requires_the_apps_verified_decoder_before_any_change(self):
+        import omarchy_apple_aea
+        for mode in ("install", "retry-recovery-authorization"):
+            for key in (omarchy_apple_aea.DECODER_ENVIRONMENT, omarchy_apple_aea.REQUIREMENT_ENVIRONMENT):
+                environment = self._install_environment()
+                environment["OMARCHY_ENGINE_MODE"] = mode
+                del environment[key]
+                with self.subTest(mode=mode, key=key), self.assertRaisesRegex(EngineRuntimeError, key):
+                    EngineRuntime.from_environment(environment)
+            environment = self._install_environment()
+            environment["OMARCHY_ENGINE_MODE"] = mode
+            self.decoder.reset_mock()
+            self.decoder.side_effect = omarchy_apple_aea.AppleInputError("not the installer app's signed decoder")
+            with self.subTest(mode=mode), self.assertRaisesRegex(EngineRuntimeError, "signed decoder"):
+                EngineRuntime.from_environment(environment)
+            self.decoder.assert_called_once()
+            checked = self.decoder.call_args.args[0]
+            self.assertEqual(checked[omarchy_apple_aea.DECODER_ENVIRONMENT], "/var/db/test/omarchy-restore-image")
+            self.decoder.side_effect = None
+        self.decoder.reset_mock()
+        for mode, environment in (("inspect", {"OMARCHY_ENGINE_JOURNAL": str(self.journal_path)}),
+                                  ("plan", {"OMARCHY_ENGINE_JOURNAL": str(self.journal_path),
+                                            "OMARCHY_ENGINE_REQUEST": "request.json",
+                                            "OMARCHY_ENGINE_IDENTITY": "identity.json"})):
+            with self.subTest(mode=mode):
+                runtime = EngineRuntime.from_environment({"OMARCHY_ENGINE_MODE": mode, **environment})
+                self.assertEqual(runtime.mode, mode)
+        self.decoder.assert_not_called()
 
     def test_a_released_app_without_the_installer_name_still_runs(self):
         # Apps released before OMARCHY_INSTALLER_NAME must keep working with
@@ -440,6 +473,12 @@ class EngineRuntimeTests(unittest.TestCase):
             "DISTRO": "Omarchy",
             "OMARCHY_INSTALLER_NAME": "Probe Installer",
             "DISTRO_DOCS": "https://omarchy.org/manual/",
+            "OMARCHY_RESTORE_IMAGE": "/var/db/test/omarchy-restore-image",
+            "OMARCHY_RESTORE_IMAGE_REQUIREMENT": (
+                'anchor apple generic and identifier "org.example.restore-image" '
+                'and certificate 1[field.1.2.840.113635.100.6.2.6] '
+                'and certificate leaf[field.1.2.840.113635.100.6.1.13] '
+                'and certificate leaf[subject.OU] = "ABCDE12345"'),
         }
 
     def _run_layout(self, runtime):

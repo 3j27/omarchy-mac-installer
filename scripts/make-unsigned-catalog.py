@@ -246,6 +246,8 @@ def load_inputs(path: Path, developer: bool = False) -> dict:
     document["engine_name"] = lock["validation_artifact"]["filename"]
     document["engine_version"] = lock["downstream_overlay"]["version"]
     document["engine_identity"] = (lock["validation_artifact"]["size_bytes"], lock["validation_artifact"]["sha256"])
+    # The oldest app the pinned engine runs under (docs/engine-versions.md).
+    minimum_app = lock["downstream_overlay"].get("minimum_app_version", "2.1.0")
 
     for key in (
         "payload_name",
@@ -322,6 +324,8 @@ def load_inputs(path: Path, developer: bool = False) -> dict:
     # and later decode, so every catalog turns older apps away.
     if parse_version(installer["minimum_version"]) < (2, 1, 0):
         raise SystemExit("every catalog needs installer.minimum_version >= 2.1.0")
+    if parse_version(installer["minimum_version"]) < parse_version(minimum_app):
+        raise SystemExit(f"this engine requires installer.minimum_version >= {minimum_app}")
     download_url = installer["download_url"]
     if not isinstance(download_url, str) or not download_url.startswith("https://"):
         raise SystemExit(f"inputs installer.download_url must be https: {download_url}")

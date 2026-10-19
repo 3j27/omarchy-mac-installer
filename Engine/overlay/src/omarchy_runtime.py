@@ -3,6 +3,7 @@
 
 import os
 
+import omarchy_apple_aea
 import omarchy_asahi
 import omarchy_contract
 import omarchy_execution
@@ -25,6 +26,10 @@ ENVIRONMENT_KEYS = {
     "DISTRO",
     "DISTRO_DOCS",
     "OMARCHY_INSTALLER_NAME",
+    # The app's signed decoder and the requirement it must satisfy. Installs
+    # need it (macOS 26 images, the Neo's radios); an engine never carries one.
+    omarchy_apple_aea.DECODER_ENVIRONMENT,
+    omarchy_apple_aea.REQUIREMENT_ENVIRONMENT,
 }
 
 # Released apps predate OMARCHY_INSTALLER_NAME; without it the Recovery
@@ -87,6 +92,12 @@ class EngineRuntime:
             raise EngineRuntimeError(
                 "missing engine environment: " + ",".join(missing)
             )
+        if mode in ("install", "retry-recovery-authorization"):
+            # Refuse before any disk change, not when the first image needs it.
+            try:
+                omarchy_apple_aea.decoder(values)
+            except omarchy_apple_aea.AppleInputError as error:
+                raise EngineRuntimeError(str(error)) from error
         return cls(mode=mode, values=values)
 
     def metadata(self, bundled_metadata):

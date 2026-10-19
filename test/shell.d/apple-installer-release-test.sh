@@ -81,9 +81,11 @@ esac
 STUB
 chmod +x "$stubs/codesign"
 app=$test_tmp/$INSTALLER_APP_NAME.app
-mkdir -p "$app/Contents/Library/LaunchServices"
+mkdir -p "$app/Contents/Library/LaunchServices" "$app/Contents/Helpers"
 : >"$app/Contents/Library/LaunchServices/$INSTALLER_HELPER_IDENTIFIER"
 helper=$app/Contents/Library/LaunchServices/$INSTALLER_HELPER_IDENTIFIER
+decoder=$app/Contents/Helpers/omarchy-restore-image
+: >"$decoder"
 
 sign() {
   CODESIGN_LOG=$test_tmp/codesign.log PATH="$stubs:$PATH" STUB_TEAM=$INSTALLER_TEAM_ID "$@"
@@ -95,10 +97,12 @@ signing=()
 while IFS= read -r line; do
   signing+=("$line")
 done < <(grep -e '--sign ' "$test_tmp/codesign.log")
-(( ${#signing[@]} == 2 )) || fail "sign-app signs exactly the helper and the app" "$(cat "$test_tmp/codesign.log")"
-[[ ${signing[0]} == *"--identifier $INSTALLER_HELPER_IDENTIFIER $helper" ]] ||
-  fail "the helper is signed first, under its own identifier" "${signing[0]}"
-[[ ${signing[1]} == *" $app" && ${signing[1]} != *"--identifier"* ]] || fail "the app is signed second" "${signing[1]}"
+(( ${#signing[@]} == 3 )) || fail "sign-app signs exactly the decoder, the helper and the app" "$(cat "$test_tmp/codesign.log")"
+[[ ${signing[0]} == *"--identifier $INSTALLER_RESTORE_IMAGE_IDENTIFIER $decoder" ]] ||
+  fail "the restore-image decoder is signed first, under its own identifier" "${signing[0]}"
+[[ ${signing[1]} == *"--identifier $INSTALLER_HELPER_IDENTIFIER $helper" ]] ||
+  fail "the helper is signed next, under its own identifier" "${signing[1]}"
+[[ ${signing[2]} == *" $app" && ${signing[2]} != *"--identifier"* ]] || fail "the app is signed last" "${signing[2]}"
 for line in "${signing[@]}"; do
   [[ " $line " == *" --options runtime "* && " $line " == *" --timestamp "* ]] ||
     fail "every Developer ID signature has the hardened runtime and a secure timestamp" "$line"
@@ -110,7 +114,11 @@ grep -qF -- "-R=anchor apple generic and identifier \"$INSTALLER_HELPER_IDENTIFI
   "$test_tmp/codesign.log" || fail "the helper is verified against the team's designated requirement"
 grep -qF -- "-R=anchor apple generic and identifier \"$INSTALLER_APP_IDENTIFIER\" and certificate leaf[subject.OU] = \"$INSTALLER_TEAM_ID\" $app" \
   "$test_tmp/codesign.log" || fail "the app is verified against the team's designated requirement"
-pass "sign-app signs the helper then the app with runtime and timestamps, never --deep, and checks both requirements"
+grep -qF -- "-R=anchor apple generic and identifier \"$INSTALLER_RESTORE_IMAGE_IDENTIFIER\" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$INSTALLER_TEAM_ID\" $decoder" \
+  "$test_tmp/codesign.log" || fail "the decoder is verified against the team's Developer ID Application requirement"
+grep -qF -- "--display --entitlements - --xml $decoder" "$test_tmp/codesign.log" ||
+  fail "sign-app checks that the decoder carries no entitlements"
+pass "sign-app signs the decoder, the helper and the app with runtime and timestamps, never --deep, and checks each requirement"
 
 : >"$test_tmp/codesign.log"
 sign env STUB_SIGNATURE=adhoc bash "$release/sign-app" "$app" - >/dev/null || fail "sign-app signs ad hoc"
@@ -118,7 +126,21 @@ grep -e '--sign ' "$test_tmp/codesign.log" | grep -qv -e '--timestamp=none' &&
   fail "an ad hoc dry run asks for no timestamp" "$(cat "$test_tmp/codesign.log")"
 grep -qF -- "-R=identifier \"$INSTALLER_HELPER_IDENTIFIER\" $helper" "$test_tmp/codesign.log" ||
   fail "an ad hoc helper is verified by its identifier"
+grep -qF -- "-R=identifier \"$INSTALLER_RESTORE_IMAGE_IDENTIFIER\" $decoder" "$test_tmp/codesign.log" ||
+  fail "an ad hoc decoder is verified by its identifier"
 pass "sign-app signs a dry run ad hoc with the same order"
+
+mv "$decoder" "$test_tmp/decoder"
+if sign env STUB_SIGNATURE=adhoc bash "$release/sign-app" "$app" - >/dev/null 2>&1; then
+  fail "sign-app refuses an app without its restore-image decoder"
+fi
+mv "$test_tmp/decoder" "$decoder"
+: >"$app/Contents/Helpers/unsigned-tool"
+if sign env STUB_SIGNATURE=adhoc bash "$release/sign-app" "$app" - >/dev/null 2>&1; then
+  fail "sign-app refuses other code in Contents/Helpers"
+fi
+rm "$app/Contents/Helpers/unsigned-tool"
+pass "sign-app refuses an app without its decoder or with other helpers"
 
 if sign env STUB_SIGNATURE=adhoc bash "$release/sign-app" "$app" "Developer ID Application: Someone ($INSTALLER_TEAM_ID)" \
   >/dev/null 2>&1; then
@@ -242,7 +264,7 @@ if [[ $(uname) == Darwin ]] && command -v hdiutil >/dev/null; then
 import hashlib, json, os, plistlib, sys
 app, app_id, helper_id, team, base = sys.argv[1:]
 c = os.path.join(app, "Contents")
-for d in ("MacOS", "Resources/Release", "Library/LaunchDaemons", "Library/LaunchServices"):
+for d in ("MacOS", "Helpers", "Resources/Release", "Library/LaunchDaemons", "Library/LaunchServices"):
     os.makedirs(os.path.join(c, d))
 req = lambda i: f'anchor apple generic and identifier "{i}" and certificate leaf[subject.OU] = "{team}"'
 plistlib.dump({"CFBundleIdentifier": app_id, "CFBundleShortVersionString": "2.2.0",
@@ -251,6 +273,7 @@ plistlib.dump({"EnvironmentVariables": {"OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT
               open(os.path.join(c, f"Library/LaunchDaemons/{helper_id}.plist"), "wb"))
 open(os.path.join(c, "MacOS/app"), "wb").write(b"app")
 open(os.path.join(c, f"Library/LaunchServices/{helper_id}"), "wb").write(b"helper")
+open(os.path.join(c, "Helpers/omarchy-restore-image"), "wb").write(b"\xcf\xfa\xed\xfe decoder")
 key = bytes(range(1, 33))
 open(os.path.join(c, "Resources/Release/trust-root.ed25519.pub"), "wb").write(key)
 json.dump({"channels": {ch: {"catalog_url": f"{base}/catalog-{ch}.signed.json"} for ch in ("stable", "rc", "edge")},
@@ -286,8 +309,9 @@ STUB
   }
   output=$(package env NOTARY_STATUS=Accepted) || fail "sign-and-package notarizes an accepted app and dmg" "$output"
   steps=$(grep -E -e '--sign |notarytool submit|stapler staple|stapler validate .*/mount/|spctl' "$flow/log" |
-    sed -E -e "s|$INSTALLER_APP_NAME.app/Contents/Library/LaunchServices/||" -e 's|/[^ ]*/||g' -e 's/ --(key|key-id|issuer) [^ ]+//g' -e 's/^codesign --force --sign [^(]*\([^)]*\) /codesign /')
-  expected="codesign --options runtime --timestamp --keychain k.keychain-db --identifier $INSTALLER_HELPER_IDENTIFIER $INSTALLER_HELPER_IDENTIFIER
+    sed -E -e "s|$INSTALLER_APP_NAME.app/Contents/Library/LaunchServices/||" -e "s|$INSTALLER_APP_NAME.app/Contents/Helpers/||" -e 's|/[^ ]*/||g' -e 's/ --(key|key-id|issuer) [^ ]+//g' -e 's/^codesign --force --sign [^(]*\([^)]*\) /codesign /')
+  expected="codesign --options runtime --timestamp --keychain k.keychain-db --identifier $INSTALLER_RESTORE_IMAGE_IDENTIFIER omarchy-restore-image
+codesign --options runtime --timestamp --keychain k.keychain-db --identifier $INSTALLER_HELPER_IDENTIFIER $INSTALLER_HELPER_IDENTIFIER
 codesign --options runtime --timestamp --keychain k.keychain-db $INSTALLER_APP_NAME.app
 xcrun notarytool submit app.zip --wait --timeout 1h --output-format json
 xcrun stapler staple $INSTALLER_APP_NAME.app

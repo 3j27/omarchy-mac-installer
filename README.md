@@ -36,7 +36,7 @@ The Application Support line also frees any image the old app downloaded. A Mac 
 
 Firmware preparation needs HTTPS access to Apple's restore-image CDN (`updates.cdn-apple.com`) and, for AEA-encrypted inputs, Apple's public release-key service (`wkms-public.apple.com` or `fcs-keys-pub-prod.cdn-apple.com`). An offline Linux image bundle does not remove that Apple-input dependency. The helper requests only the admitted FCS key URL from the archive metadata; it sends no installation credentials. Range extraction checks the recipe, response extent, ciphertext authentication and resulting file hashes before publishing any firmware.
 
-The helper is built from the [Swift source in this repository](Engine/RestoreImage/README.md), ported from Eryk Wieliczko's MIT implementation. Its recorded source hashes, toolchain, two-build comparison and binary digest are checked alongside the engine source lock. The helper requires macOS 14 or newer; the installer app already requires macOS 15 or newer.
+The helper is built from the [Swift source in this repository](Engine/RestoreImage/README.md), ported from Eryk Wieliczko's MIT implementation. Its recorded source hashes, toolchain, two-build comparison and binary digest are checked alongside the engine source lock. It ships in the app at `Contents/Helpers/omarchy-restore-image`, signed by the app's release signing (Developer ID, hardened runtime, secure timestamp, no entitlements), not inside the engine archive. The privileged helper passes an install's engine a root-only copy whose signature satisfies the app team's requirement, and the engine refuses to run an install without one. The helper requires macOS 14 or newer; the installer app already requires macOS 15 or newer.
 
 ## Supported Macs
 

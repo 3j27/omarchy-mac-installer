@@ -260,7 +260,19 @@ def version_tuple(value: str) -> tuple[int, ...]:
     return tuple(int(part) for part in value.split("."))
 
 
-def check_installer(document: object) -> dict:
+def engine_app_floor(engine: dict | None) -> tuple[int, ...]:
+    """The oldest app ENGINE runs under. Engine/source-lock.json records it for
+    the engine it pins (downstream_overlay.minimum_app_version), matched by the
+    archive's digest, not its name: engines from that pin on carry no decoder
+    and run the app's signed Contents/Helpers copy, which older apps lack.
+    Every other engine needs app 2.1.0, the floor of every catalog."""
+    lock = json.loads(SOURCE_LOCK.read_text())
+    if engine is not None and engine.get("sha256") == lock["validation_artifact"]["sha256"]:
+        return version_tuple(lock["downstream_overlay"].get("minimum_app_version", "2.1.0"))
+    return (2, 1, 0)
+
+
+def check_installer(document: object, engine: dict | None = None) -> dict:
     document = check_keys(document, "installer", {"minimumVersion", "latestVersion", "downloadURL"})
     for key in ("minimumVersion", "latestVersion"):
         if not isinstance(document[key], str) or not INSTALLER_VERSION.match(document[key]):
@@ -271,6 +283,10 @@ def check_installer(document: object) -> dict:
     # and later decode, so every catalog turns older apps away.
     if version_tuple(document["minimumVersion"]) < (2, 1, 0):
         raise Refusal("every catalog needs app 2.1.0 or later: installer.minimumVersion must be at least 2.1.0")
+    floor = engine_app_floor(engine)
+    if version_tuple(document["minimumVersion"]) < floor:
+        wanted = ".".join(map(str, floor))
+        raise Refusal(f"this engine needs app {wanted} or later: installer.minimumVersion must be at least {wanted}")
     check_url(document["downloadURL"], "installer.downloadURL", installer_bases())
     return document
 
@@ -379,7 +395,7 @@ def build_catalog(
     metadata = check_artifact(metadata, "installer_data")
     engine = check_engine(engine)
     check_evidence(evidence, payload["sha256"])
-    installer = check_installer(installer)
+    installer = check_installer(installer, engine)
 
     def plain(artifact: dict) -> dict:
         return {"sourceURL": artifact["url"], "fileName": artifact["fileName"], "sizeBytes": artifact["sizeBytes"]}

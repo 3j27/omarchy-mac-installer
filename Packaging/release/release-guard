@@ -22,9 +22,16 @@ inside .tar.gz, .tar and .zip archives too (the bundled engine):
 
 and, for every app bundle, when it is not the public product: an identifier
 other than Packaging/identity.conf's, a private test profile flag, a sealed
-catalog, catalogs outside the catalog base, or a helper or client code-signing
-requirement that is not anchored to the configured Developer ID team (the lab
-app pins cdhashes or identifiers only, or switches the client check off).
+catalog, catalogs outside the catalog base, or a helper, client or decoder
+code-signing requirement that is not anchored to the configured Developer ID
+team (the lab app pins cdhashes or identifiers only, or switches the client
+check off).
+
+Notarization rejects any Mach-O the release signing does not reach, archived
+ones included, and the dry run never notarizes. So every app bundle must
+carry its restore-image decoder in Contents/Helpers (and nothing else there),
+and each bundled engine archive may hold no Mach-O beyond the authenticated
+runtime Engine/runtime-macho.json pins.
 
 The guard reads files; it never follows symbolic links (a .dmg's
 /Applications link is expected) and never changes what it scans.
@@ -33,6 +40,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib.machinery
+import importlib.util
 import io
 import json
 import os
@@ -49,6 +58,7 @@ import zipfile
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 IDENTITY = ROOT / "Packaging/identity.conf"
+ENGINE_MACHO = ROOT / "Engine/verify-engine-macho.py"
 LAB_CATALOG_KEY = HERE / "lab-catalog-key.ed25519.pub"
 CANDIDATE_TRUST = ROOT / "image-builder/builder/candidate-trust"
 # Archives are read into memory up to this size; larger ones are a finding.
@@ -78,6 +88,15 @@ LAB_FILE_NAMES = re.compile(
     r"^(?:authorized_keys.*|id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?(?:\.pub)?|sudoers(?:\.d)?)$"
 )
 MACHO = {b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
+
+
+def engine_macho():
+    """Engine/verify-engine-macho.py, the runtime's Mach-O inventory check."""
+    loader = importlib.machinery.SourceFileLoader("verify_engine_macho", str(ENGINE_MACHO))
+    spec = importlib.util.spec_from_loader("verify_engine_macho", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 def identity() -> dict[str, str]:
@@ -323,6 +342,16 @@ class Guard:
         client = daemon.get("EnvironmentVariables", {}).get("OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT")
         if client != client_requirement:
             self.find(label, f"the helper's client requirement {client!r} is not the Developer ID team's")
+        # Released helpers derive the decoder's requirement from that team;
+        # a pin, if any, must be the same team's, never a lab cdhash.
+        decoder_requirement = (f'anchor apple generic and identifier "{v["INSTALLER_RESTORE_IMAGE_IDENTIFIER"]}" '
+                               'and certificate 1[field.1.2.840.113635.100.6.2.6] '
+                               'and certificate leaf[field.1.2.840.113635.100.6.1.13] '
+                               f'and certificate leaf[subject.OU] = "{team}"')
+        pinned = daemon.get("EnvironmentVariables", {}).get("OMARCHY_RESTORE_IMAGE_REQUIREMENT")
+        if pinned is not None and pinned != decoder_requirement:
+            self.find(label, f"the helper's decoder requirement {pinned!r} is not the Developer ID team's")
+        self.check_native_code(app, label)
         release = contents / "Resources/Release"
         for entry in sorted(release.iterdir()) if release.is_dir() else []:
             if entry.is_symlink():
@@ -353,6 +382,29 @@ class Guard:
         else:
             if descriptor.get("trust_root_fingerprint") != f"sha256:{digest}":
                 self.find(label, "release.json does not pin the bundled trust root")
+
+    def check_native_code(self, app: Path, label: str) -> None:
+        helpers = app / "Contents/Helpers"
+        decoder = helpers / "omarchy-restore-image"
+        if decoder.is_symlink() or not decoder.is_file():
+            self.find(label, "Contents/Helpers/omarchy-restore-image, the restore-image decoder, is missing")
+        elif decoder.read_bytes()[:4] not in MACHO:
+            self.find(label, "Contents/Helpers/omarchy-restore-image is not a Mach-O executable")
+        for entry in sorted(helpers.iterdir()) if helpers.is_dir() and not helpers.is_symlink() else []:
+            if entry.name != decoder.name:
+                self.find(label, f"Contents/Helpers/{entry.name} is not the restore-image decoder")
+        artifacts = app / "Contents/Resources/Engine/artifacts"
+        checker = engine_macho()
+        for archive in sorted(artifacts.glob("*.tar.gz")) if artifacts.is_dir() else []:
+            if archive.is_symlink():
+                continue
+            try:
+                findings = checker.verify(archive, complete=False)
+            except (tarfile.TarError, OSError, EOFError) as error:
+                findings = [f"unreadable ({error})"]
+            for finding in findings:
+                self.find(f"{label}/Contents/Resources/Engine/artifacts/{archive.name}",
+                          f"native code the release signing cannot reach: {finding}")
 
     # ── entry points ────────────────────────────────────────────────────────
     def scan_path(self, path: Path) -> None:

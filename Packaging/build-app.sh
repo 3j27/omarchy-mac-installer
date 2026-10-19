@@ -58,21 +58,28 @@ read -r engine_file_name engine_digest engine_size < <(
   python3 "$script_directory/read-validation-engine.py"
 )
 
+restore_image_identifier="$INSTALLER_RESTORE_IMAGE_IDENTIFIER"
 if [[ $signing_identity == "-" ]]; then
   client_requirement="identifier \"$app_identifier\""
   helper_requirement="identifier \"$helper_identifier\""
+  restore_image_requirement="identifier \"$restore_image_identifier\""
   timestamp_arguments=(--timestamp=none)
 else
   [[ $team_identifier =~ ^[A-Z0-9]{10}$ ]] \
     || fail "OMARCHY_TEAM_ID is required for named signing identities"
   client_requirement="anchor apple generic and identifier \"$app_identifier\" and certificate leaf[subject.OU] = \"$team_identifier\""
   helper_requirement="anchor apple generic and identifier \"$helper_identifier\" and certificate leaf[subject.OU] = \"$team_identifier\""
+  restore_image_requirement="anchor apple generic and identifier \"$restore_image_identifier\" and certificate leaf[subject.OU] = \"$team_identifier\""
+  # A Developer ID signature must be a Developer ID Application certificate
+  # (TN3127), as the privileged helper requires of the decoder at run time.
+  developer_id_restore_image_requirement="anchor apple generic and identifier \"$restore_image_identifier\" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$team_identifier\""
   if [[ $signing_identity == "none" ]]; then
     # Assembled for a Developer ID of this team, left unsigned: the release
     # workflow signs it in a separate job (Packaging/release/sign-app).
     timestamp_arguments=()
   elif [[ $signing_identity == "Developer ID Application:"* ]]; then
     timestamp_arguments=(--timestamp)
+    restore_image_requirement=$developer_id_restore_image_requirement
   elif [[ $signing_identity =~ ^[0-9A-Fa-f]{40}$ ]] \
     && security find-identity -p codesigning -v \
       | grep -i "$signing_identity" | grep -q "Developer ID Application"; then
@@ -80,6 +87,7 @@ else
     # names ambiguous): resolve the certificate kind from the keychain so
     # Developer ID builds keep the secure timestamp notarization requires.
     timestamp_arguments=(--timestamp)
+    restore_image_requirement=$developer_id_restore_image_requirement
   else
     timestamp_arguments=(--timestamp=none)
   fi
@@ -188,6 +196,17 @@ if [[ $actual_engine_digest != "$engine_digest" ]]; then
 fi
 [[ $(stat -f %z "$engine_source") == "$engine_size" ]] \
   || fail "the pinned validation engine size is incorrect"
+# The engine archive is notarized as part of the app but never signed by it,
+# so it may carry no native code beyond its Developer ID signed runtime.
+python3 "$package_directory/Engine/verify-engine-macho.py" "$engine_source" >/dev/null \
+  || fail "the validation engine carries native code outside its pinned runtime"
+
+# The Swift restore-image decoder ships here, in Contents/Helpers, where the
+# app's signing reaches it. The tracked unsigned build must match its source
+# record; the copy is checked again before anything signs it.
+restore_image_source="$package_directory/Engine/RestoreImage/bin/omarchy-restore-image"
+python3 "$package_directory/Engine/verify-restore-image.py" >/dev/null \
+  || fail "the restore-image decoder differs from its source build record"
 
 mkdir -p "$output_directory"
 final_app="$output_directory/$app_name"
@@ -268,6 +287,7 @@ helper_path="$assembled_app/$helper_relative_path"
 
 mkdir -p \
   "$contents/MacOS" \
+  "$contents/Helpers" \
   "$resources/Release" \
   "$resources/Engine/artifacts" \
   "$contents/Library/LaunchDaemons" \
@@ -275,6 +295,11 @@ mkdir -p \
 
 install -m 0755 "$app_binary" "$contents/MacOS/$app_executable_name"
 install -m 0755 "$helper_binary" "$helper_path"
+restore_image_path="$contents/Helpers/omarchy-restore-image"
+install -m 0755 "$restore_image_source" "$restore_image_path"
+python3 "$package_directory/Engine/verify-restore-image.py" "$restore_image_path" >/dev/null \
+  || fail "the bundled restore-image decoder differs from its source build"
+install -m 0444 "$package_directory/Engine/RestoreImage/LICENSE" "$resources/omarchy-restore-image.LICENSE"
 install -m 0444 "$release_descriptor" "$resources/Release/release.json"
 install -m 0444 "$trust_root" "$resources/Release/trust-root.ed25519.pub"
 install -m 0444 "$package_directory/Design/Assets/MacBookPowerButton.png" "$resources/MacBookPowerButton.png"
@@ -396,6 +421,13 @@ if grep -q REPLACED_DURING_PACKAGING \
 fi
 
 if [[ $signing_identity != "none" ]]; then
+  # Nested code first, each under its own identifier and with no
+  # entitlements: the decoder needs none.
+  codesign --force --sign "$signing_identity" \
+    "${timestamp_arguments[@]}" \
+    --options runtime \
+    --identifier "$restore_image_identifier" \
+    "$restore_image_path"
   codesign --force --sign "$signing_identity" \
     "${timestamp_arguments[@]}" \
     --options runtime \
@@ -410,6 +442,9 @@ if [[ $signing_identity != "none" ]]; then
   codesign --verify --strict \
     -R="$helper_requirement" \
     "$helper_path"
+  codesign --verify --strict \
+    -R="$restore_image_requirement" \
+    "$restore_image_path"
 fi
 embedded_version="$(launchctl plist __TEXT,__info_plist "$helper_path" 2>/dev/null \
   | awk -F'"' '/"CFBundleVersion"/ {print $4}')"

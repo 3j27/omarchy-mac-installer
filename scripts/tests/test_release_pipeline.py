@@ -714,8 +714,8 @@ class CatalogInputs(unittest.TestCase):
         return result.returncode, output.read_text() + result.stdout + result.stderr
 
     def installer(self) -> dict:
-        return {"minimumVersion": "2.1.0", "latestVersion": "2.2.0",
-                "downloadURL": f"https://github.com/{catalog.stopgap_repo()}/releases/download/v2.2.0/app.dmg"}
+        return {"minimumVersion": "2.3.0", "latestVersion": "2.3.0",
+                "downloadURL": f"https://github.com/{catalog.stopgap_repo()}/releases/download/v2.3.0/app.dmg"}
 
     def test_a_real_run_without_an_app_release_stops_before_the_upload(self):
         status, output = self.run_step(None, "false")
@@ -727,6 +727,8 @@ class CatalogInputs(unittest.TestCase):
 
     def test_a_malformed_block_stops_a_real_run(self):
         for installer, engine in (({**self.installer(), "minimumVersion": "2.0.0"}, None),
+                                  # An app older than 2.3.0 passes no decoder to the pinned engine.
+                                  ({**self.installer(), "minimumVersion": "2.2.0"}, None),
                                   ({**self.installer(), "downloadURL": "https://example.invalid/app.dmg"}, None),
                                   (self.installer(), {**self.engine, "downstreamRevision": "nope"}),
                                   (self.installer(), {**self.engine, "sha256": "0" * 64})):
