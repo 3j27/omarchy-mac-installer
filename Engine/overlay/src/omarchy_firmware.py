@@ -10,6 +10,32 @@ TARGET = "apple-silicon-full-os"
 MACOS26 = "26.0"
 
 
+class FirmwareRequirementError(Exception):
+    """No OS firmware the payload allows can be installed from this Mac.
+
+    Upstream choose_ipsw prints the reason and exits. The engine raises this
+    instead, so the app can name the macOS version to update to.
+    """
+
+
+def require_available(minver, avail, version_key):
+    """Raise FirmwareRequirementError when avail is empty.
+
+    minver and avail are available_ipsws' lists. As upstream, the remedy names
+    the lowest version this Mac and payload may use.
+    """
+    if avail:
+        return
+    # The engine never runs in expert mode, so an expert-only entry is no
+    # reason to update macOS.
+    usable = [ipsw for ipsw in minver if not ipsw.expert_only]
+    if not usable:
+        raise FirmwareRequirementError("no installation firmware fits this Mac")
+    lowest = min(usable, key=lambda ipsw: version_key(ipsw.version))
+    raise FirmwareRequirementError(
+        f"system firmware is older than macOS {lowest.version}")
+
+
 def available_ipsws(
     ipsw_versions,
     chip_min_versions,
