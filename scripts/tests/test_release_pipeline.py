@@ -27,6 +27,8 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 SCRIPTS = ROOT / "scripts"
 PIPELINE = WORKFLOWS / "mac-release-pipeline.yml"
 ACCEPTANCE = WORKFLOWS / "mac-acceptance.yml"
+IMAGE = WORKFLOWS / "mac-image.yml"
+RECOVERY_APP = WORKFLOWS / "recovery-app.yml"
 CONFIG = ROOT / ".github" / "mac-release-pipeline.json"
 SHA = "a" * 64
 RUN_URL = "https://github.com/omacom/omarchy-mac-installer/actions/runs/1"
@@ -43,6 +45,7 @@ def load(name: str, path: Path):
 upload = load("mac_upload", SCRIPTS / "mac-upload.py")
 catalog = load("catalog_release", SCRIPTS / "catalog_release.py")
 fixture = load("mac_upload_fixture", SCRIPTS / "tests" / "make-mac-upload-fixture.py")
+image_fixtures = load("image_builder_fixtures", ROOT / "image-builder" / "test" / "fixtures.py")
 
 
 def text(path: Path) -> str:
@@ -106,6 +109,7 @@ class Triggers(unittest.TestCase):
         "mac-acceptance.yml": {"workflow_call", "workflow_dispatch"},
         "mac-image.yml": {"workflow_call", "workflow_dispatch"},
         "recovery-image.yml": {"workflow_dispatch"},
+        "recovery-app.yml": {"workflow_call"},
         "mac-upload.yml": {"workflow_call", "workflow_dispatch"},
         "mac-catalog.yml": {"workflow_call", "workflow_dispatch"},
         "edge-dispatch.yml": {"repository_dispatch"},
@@ -226,8 +230,8 @@ class Secrets(unittest.TestCase):
 
 
 class Hardening(unittest.TestCase):
-    PIPELINE_FILES = ("mac-release-pipeline.yml", "mac-acceptance.yml", "mac-image.yml", "mac-upload.yml",
-                      "mac-catalog.yml", "edge-dispatch.yml")
+    PIPELINE_FILES = ("mac-release-pipeline.yml", "mac-acceptance.yml", "mac-image.yml", "recovery-app.yml",
+                      "mac-upload.yml", "mac-catalog.yml", "edge-dispatch.yml")
 
     def test_every_action_is_pinned_to_a_commit(self):
         for workflow in sorted(WORKFLOWS.glob("*.yml")):
@@ -628,6 +632,141 @@ class Record(unittest.TestCase):
                                          "--out", str(out)], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 2)
                 self.assertFalse(out.exists())
+
+
+def condition(job: str) -> str:
+    """A job's if:, a folded block or one line, as one line."""
+    match = re.search(r"^    if: >-\n((?:      .*\n?)+)", job, re.M)
+    if match:
+        return " ".join(line.strip() for line in match.group(1).splitlines())
+    return field(job, "if")
+
+
+def commands(script: str, tool: str) -> list[str]:
+    """Each command line of SCRIPT that runs TOOL, its continuation lines joined."""
+    joined = re.sub(r"\\\n\s*", " ", script)
+    return [line.strip() for line in joined.splitlines() if tool in line]
+
+
+class NativeRecovery(unittest.TestCase):
+    """Every image the pipeline builds carries the native Recovery app: mac-image.yml builds it on macOS
+    (recovery-app.yml) and passes it to the resolver and the builder. The app finishes every install
+    with it; an edge image without it (pipeline run 39228692384) could not complete an install."""
+
+    def setUp(self) -> None:
+        self.jobs = jobs(IMAGE)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.work = Path(self.tmp.name) / "work"
+        (self.work / "evidence").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_the_image_job_waits_for_the_recovery_app(self):
+        self.assertEqual(list(self.jobs), ["recovery", "build", "attest"])
+        self.assertEqual(field(self.jobs["recovery"], "uses"), "./.github/workflows/recovery-app.yml")
+        self.assertEqual(field(self.jobs["build"], "needs"), "recovery")
+        self.assertIn("RECOVERY_SHA256: ${{ needs.recovery.outputs.manifest-sha256 }}", self.jobs["build"])
+        self.assertIn("name: ${{ needs.recovery.outputs.artifact }}", self.jobs["build"])
+        # Nothing builds for a run that builds no image, and no pull request starts either.
+        self.assertEqual(condition(self.jobs["recovery"]), condition(self.jobs["build"]))
+        self.assertIn("github.ref == 'refs/heads/main'", condition(self.jobs["recovery"]))
+        self.assertRegex(self.jobs["recovery"], r"(?m)^    permissions:\n      contents: read$")
+
+    def test_the_resolver_and_the_builder_both_take_the_recovery_app(self):
+        workflow = text(IMAGE)
+        resolves = commands(workflow, "mac-image-inputs resolve")
+        builds = commands(workflow, "build-mac-image ")
+        self.assertEqual(len(resolves), 1, resolves)
+        self.assertEqual(len(builds), 1, builds)
+        for command in (*resolves, *builds):
+            with self.subTest(command):
+                self.assertIn('--recovery-app "$WORK/recovery"', command)
+        self.assertIn("--channel-set", resolves[0])
+
+    def test_the_pipeline_and_edge_dispatch_build_through_mac_image(self):
+        # edge-dispatch.yml starts the pipeline, whose build is mac-image.yml: automatic runs build the app too.
+        self.assertIn("gh workflow run mac-release-pipeline.yml", text(WORKFLOWS / "edge-dispatch.yml"))
+        self.assertEqual(field(jobs(PIPELINE)["build"], "uses"), "./.github/workflows/mac-image.yml")
+        # The manual qualification builds the same app the same way.
+        self.assertEqual(field(jobs(WORKFLOWS / "recovery-image.yml")["recovery"], "uses"),
+                         "./.github/workflows/recovery-app.yml")
+
+    def test_the_recovery_app_is_built_on_macos_and_recorded(self):
+        job = jobs(RECOVERY_APP)["recovery"]
+        self.assertEqual(runs_on(job), "macos-26")
+        self.assertIn("DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer", job)
+        script = step_script(RECOVERY_APP, "Build and record the Recovery source and native tools")
+        for line in ('bash Recovery/build-recovery.sh "$out/template"', "git rev-parse HEAD)",
+                     "git rev-parse HEAD:Recovery)", "recovery_app_manifest_sha256=$digest",
+                     'echo "manifest-sha256=$digest" >>"$GITHUB_OUTPUT"', '"$INSTALLER_RECOVERY_APP_NAME.app" omarchy-recovery-app.json'):
+            self.assertIn(line, script)
+        self.assertIn("manifest-sha256: ${{ steps.build.outputs.manifest-sha256 }}", job)
+        self.assertIn("name: native-recovery-input", job)
+        self.assertNotIn("secrets.", text(RECOVERY_APP))
+
+    def recovery_input(self) -> str:
+        """The recovery job's artifact as the image job downloads it, and its inventory digest."""
+        template = Path(self.tmp.name) / "template"
+        digest = image_fixtures.make_recovery_app(template)
+        download = self.work / "recovery-input"
+        download.mkdir()
+        subprocess.run(["tar", "-cf", str(download / "native-recovery.tar"), "-C", str(template),
+                        image_fixtures.recovery_app.APP, "omarchy-recovery-app.json"], check=True)
+        (download / "source.txt").write_text(f"source_commit={'a' * 40}\nrecovery_app_manifest_sha256={digest}\n")
+        return digest
+
+    def run_step(self, name: str, digest: str, cwd: Path = ROOT, path: str = "") -> subprocess.CompletedProcess:
+        env = {"PATH": path + os.environ["PATH"], "WORK": str(self.work), "RECOVERY_SHA256": digest}
+        return subprocess.run(["bash", "--noprofile", "--norc", "-e", "-c", step_script(IMAGE, name)], cwd=cwd,
+                              env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+
+    def test_the_image_job_takes_only_the_app_the_recovery_job_built(self):
+        digest = self.recovery_input()
+        result = self.run_step("Unpack the native Recovery app", digest)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.work / "recovery" / image_fixtures.recovery_app.APP).is_dir())
+        self.assertTrue((self.work / "evidence" / "recovery-source.txt").is_file())
+        for wrong in ("0" * 64, ""):
+            with self.subTest(digest=wrong):
+                shutil.rmtree(self.work / "recovery")
+                self.assertNotEqual(self.run_step("Unpack the native Recovery app", wrong).returncode, 0)
+
+    def stub_tools(self, pinned: str) -> Path:
+        """A checkout whose resolver and builder record their arguments; the resolver pins PINNED."""
+        checkout = Path(self.tmp.name) / "checkout"
+        tools = checkout / "image-builder" / "bin"
+        tools.mkdir(parents=True)
+        log = Path(self.tmp.name) / "calls"
+        (tools / "mac-image-inputs").write_text(
+            f'printf "mac-image-inputs %s\\n" "$*" >>{log}\n'
+            f'printf "format=2\\nrecovery_app_manifest_sha256=%s\\n" {pinned} >"$2"\n')
+        (tools / "build-mac-image").write_text(f'printf "build-mac-image %s\\n" "$*" >>{log}\n')
+        return checkout
+
+    def test_the_resolver_must_pin_the_app_the_build_then_takes(self):
+        digest = "a" * 64
+        checkout = self.stub_tools(digest)
+        for step in ("Resolve the edge inputs", "Build the image"):
+            result = self.run_step(step, digest, cwd=checkout)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        calls = (Path(self.tmp.name) / "calls").read_text().splitlines()
+        recovery = f"--recovery-app {self.work}/recovery"
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0].startswith(f"mac-image-inputs resolve {self.work}/inputs --channel-set --channel edge"))
+        self.assertIn(recovery, calls[0])
+        self.assertTrue(calls[1].startswith(f"build-mac-image --inputs {self.work}/inputs {recovery} "), calls[1])
+
+    def test_inputs_pinning_another_app_stop_the_build(self):
+        checkout = self.stub_tools("b" * 64)
+        result = self.run_step("Resolve the edge inputs", "a" * 64, cwd=checkout)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not pin the Recovery app built for this run", result.stdout + result.stderr)
+
+    def test_the_records_check_requires_the_native_recovery_declaration(self):
+        script = step_script(IMAGE, "Check the records")
+        self.assertIn('jq -e \'.os_list[0].recovery_gui == "omarchy-native-v1"\'', script)
+        self.assertIn('"$WORK/evidence/recovery-source.txt"', step_script(IMAGE, "Stage the image"))
 
 
 class Plan(unittest.TestCase):

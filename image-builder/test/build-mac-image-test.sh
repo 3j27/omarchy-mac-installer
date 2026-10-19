@@ -767,6 +767,18 @@ done
 [[ ! -e $scratch/out ]] || fail "a refused channel build writes nothing"
 pass "a channel record refuses --candidates and --lab-access"
 
+# The installer hands every public install to the native Recovery app, so a
+# channel record that pins none is refused before any container or download.
+refusal=$( (command() { return 0; }; host_main --inputs "$channel/inputs" "$scratch/out") 2>&1 >/dev/null) &&
+  fail "a channel record without the native Recovery app builds"
+[[ $refusal == *"a channel image needs the native Recovery app: resolve and build with --recovery-app" ]] ||
+  fail "a channel record without the native Recovery app is refused: $refusal"
+refusal=$( (command() { return 0; }; host_main --inputs "$channel/inputs" --dry-run "$scratch/out") 2>&1 >/dev/null) &&
+  fail "a channel record without the native Recovery app passes a dry run"
+[[ $refusal == *"needs the native Recovery app"* ]] || fail "a dry run refuses a channel record without Recovery: $refusal"
+[[ ! -e $scratch/out ]] || fail "a refused channel build writes nothing"
+pass "a channel record without the native Recovery app is refused, dry runs included"
+
 # ── repository order ───────────────────────────────────────────────────────
 # A channel image searches the repositories in the order of the Apple template
 # its runtime settings package ships (omarchy-settings-dev on edge), which
