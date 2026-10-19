@@ -25,7 +25,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "a" * 40
 BOOT_SOURCE = "b" * 40
 RELEASE = "7.0.0-1-ARCH"
-MODELS = ("t6000-j314s", "t8103-j274")
+# Every supported Mac's kernel device tree, as the trust policy names them.
+MODELS = tuple(json.loads((Path(__file__).resolve().parents[1] / "builder/candidate-trust/policy.json")
+                          .read_text())["device_trees"])
 # The runtime layouts the builder takes, by the omacom/omarchy commit that has
 # them: the Apple package list and the pacman template directories it ships,
 # and the directories build-mac-image installs pacman.conf and the mirror list
@@ -58,13 +60,7 @@ VERSIONS = {
     "omarchy-mac-boot": "20260921-10",
     "linux-aurora": "7.0.0.aurora1-1",
     "linux-aurora-headers": "7.0.0.aurora1-1",
-    "m1n1-aurora": "1.5.0-1",
-    "uboot-asahi": "2026.07.asahi2-1",
     "limine-mkinitcpio-hook": "1.39.0-2",
-}
-
-NEO_VERSIONS = {name: version for name, version in VERSIONS.items() if name not in ("m1n1-aurora", "uboot-asahi")}
-NEO_VERSIONS.update({
     "aura": "0.1.0.r20261014-2",
     "uboot-aurora": "2026.07.asahi2-1",
     "aurora-audio": "4.1.aurora2-1",
@@ -74,7 +70,7 @@ NEO_VERSIONS.update({
     "mesa-aurora": "26.3.0_devel-1",
     "vulkan-aurora": "26.3.0_devel-1",
     "aurora-bless": "0.4.4.aurora2-1",
-})
+}
 
 
 def dtb(model: str) -> bytes:
@@ -87,7 +83,20 @@ def aura_stage1() -> bytes:
     return b"stage1" + b"AURORA-S1-CFG01\0" + body + struct.pack("<I", zlib.crc32(body)) + b"STACKBOT"
 
 
-def default_contents(layout: str | None = None, hardware_profile: str = "legacy") -> dict[str, dict[str, bytes]]:
+SPEAKERGUARDD_RULES = (
+    b'SUBSYSTEM=="sound", DRIVERS=="snd-soc-macaudio", GOTO="speakerguardd_macaudio"\n'
+    b'GOTO="speakerguardd_end"\n\nLABEL="speakerguardd_macaudio"\n'
+    b'KERNEL=="pcmC*D2c", ATTRS{id}=="AppleJ*", ENV{ACP_IGNORE}="1"\n\n'
+    b'KERNEL=="pcmC*D2c", ATTRS{id}=="AppleJ700", TAG+="systemd", ENV{SYSTEMD_WANTS}="speakerguardd.service"\n\n'
+    b'LABEL="speakerguardd_end"\n')
+SPEAKERGUARDD_SERVICE = (b"[Unit]\nDescription=Speaker Protection Daemon (feed-forward)\n\n[Service]\n"
+                         b"ExecStart=/usr/bin/speakerguardd -c /usr/share/speakerguardd -C AppleJ700\n\n"
+                         b"[Install]\nWantedBy=multi-user.target\n")
+USE_FEEDBACK_GUARD = (b"#!/bin/sh\ntest -r /proc/device-tree/compatible || exit 0\n"
+                      b"tr '\\000' '\\n' < /proc/device-tree/compatible | grep -Fxq apple,j700 && exit 1\nexit 0\n")
+
+
+def default_contents(layout: str | None = None) -> dict[str, dict[str, bytes]]:
     first_boot = b"#!/bin/bash\ncmp -s \"$steps\" <(printf '%s\\n' 'install/hardware/apple/limine-boot.sh')\n"
     contents = {
         "omarchy": {
@@ -113,22 +122,20 @@ def default_contents(layout: str | None = None, hardware_profile: str = "legacy"
         },
         "linux-aurora-headers": {f"usr/lib/modules/{RELEASE}/build/Makefile": b"# headers\n",
                                  f"usr/lib/modules/{RELEASE}/source": "build"},
-        "m1n1-aurora": {"usr/lib/asahi-boot/m1n1.bin": b"m1n1 stage 1 payload"},
-        "uboot-asahi": {
-            "usr/lib/asahi-boot/u-boot-nodtb.bin": b"u-boot for apple silicon" * 8,
-            **{f"usr/lib/asahi-boot/dtb/{model}.dtb": b"uboot " + model.encode() for model in MODELS},
-        },
-        "limine-mkinitcpio-hook": {"usr/share/libalpm/scripts/limine-apple-gate": b"#!/bin/bash\n"},
-    }
-    if hardware_profile == "neo":
-        contents["linux-aurora"][f"usr/lib/modules/{RELEASE}/dtbs/t8140-j700.dtb"] = dtb("t8140-j700")
-    contents["aura"] = {**contents["m1n1-aurora"],
-                        "usr/share/aura/stage1/aura-raw.bin": aura_stage1()}
-    contents["uboot-aurora"] = contents["uboot-asahi"]
-    if hardware_profile == "neo":
+        "aura": {"usr/lib/asahi-boot/m1n1.bin": b"m1n1 stage 1 payload",
+                 "usr/share/aura/stage1/aura-raw.bin": aura_stage1()},
         # Like the published package: U-Boot only, its device trees come from the kernel.
-        contents["uboot-aurora"] = {path: data for path, data in contents["uboot-asahi"].items()
-                                    if not path.startswith("usr/lib/asahi-boot/dtb/")}
+        "uboot-aurora": {"usr/lib/asahi-boot/u-boot-nodtb.bin": b"u-boot for apple silicon" * 8},
+        "limine-mkinitcpio-hook": {"usr/share/libalpm/scripts/limine-apple-gate": b"#!/bin/bash\n"},
+        # The speaker routing of omacom/omarchy-pkgs pkgbuilds/speakerguardd.
+        "speakerguardd": {
+            "usr/lib/udev/rules.d/95-speakerguardd.rules": SPEAKERGUARDD_RULES,
+            "usr/lib/systemd/system/speakerguardd.service": SPEAKERGUARDD_SERVICE,
+            "usr/lib/systemd/system/speakersafetyd.service.d/50-j700-guard.conf":
+                b"[Service]\nExecCondition=/usr/lib/speakerguardd/use-feedback-guard\n",
+            "usr/lib/speakerguardd/use-feedback-guard": USE_FEEDBACK_GUARD,
+        },
+    }
     if layout:
         install = "usr/share/omarchy/install/"
         runtime = contents["omarchy"]
@@ -203,14 +210,13 @@ def channel_source(filename: str, lane: str = "edge") -> dict:
 
 
 def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, names=None,
-             manifest_edit=None, key_signer: Signer | None = None, channel=(), arches=None, hardware_profile="legacy") -> str:
+             manifest_edit=None, key_signer: Signer | None = None, channel=(), arches=None) -> str:
     """Writes a signed set into DIRECTORY; returns its receipt's sha256. Packages
     named in CHANNEL, and any outside the plan (the closure), come from edge."""
-    base_versions = NEO_VERSIONS if hardware_profile == "neo" else VERSIONS
-    policy = candidate_set.hardware_policy(POLICY, hardware_profile)
-    versions = dict(base_versions, **(versions or {}))
-    contents = contents or default_contents(hardware_profile=hardware_profile)
-    names = names or list(base_versions)
+    policy = POLICY
+    versions = dict(VERSIONS, **(versions or {}))
+    contents = contents or default_contents()
+    names = names or list(VERSIONS)
     arches = arches or {}
     directory.mkdir(parents=True)
     packages = []
@@ -230,7 +236,7 @@ def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, n
             "name": name, "version": version, "arch": arch, "filename": filename,
             "sha256": candidate_set.digest(directory / filename), "source": source,
         })
-    manifest = {"schema": 1, "hardware_profile": hardware_profile, "candidate_only": True, "set": "apple-test-fixture",
+    manifest = {"schema": 1, "candidate_only": True, "set": "apple-test-fixture",
                 "source": {"repository": POLICY["source_repositories"][0], "commit": SOURCE}, "packages": packages}
     manifest["set_sha256"] = candidate_set.set_digest(manifest)
     if manifest_edit:
@@ -275,9 +281,9 @@ def channel_trust(base: Path, candidate: Signer, channel: Signer) -> Path:
     return trust
 
 
-def channel_contents(hardware_profile="legacy") -> dict[str, dict[str, bytes]]:
+def channel_contents() -> dict[str, dict[str, bytes]]:
     """Each set package's files as edge builds them: the -dev runtime ships no source revision."""
-    contents = default_contents("e1b0e5e9b", hardware_profile)
+    contents = default_contents("e1b0e5e9b")
     for role in CHANNEL_NAMES:
         contents[role] = {path: data for path, data in contents[role].items() if "source-revision" not in path}
     return contents
@@ -291,14 +297,14 @@ def desc(name: str, version: str, filename: str, path: Path, arch: str, provides
 
 
 def make_channel(directory: Path, signer: Signer, *, versions=None, contents=None, extra=(), unsigned=(),
-                 signers=None, entry_edit=None, hardware_profile="legacy") -> tuple[Path, str]:
+                 signers=None, entry_edit=None) -> tuple[Path, str]:
     """An edge snapshot in DIRECTORY: packages/ holds every set archive and its detached signature by
     SIGNER (SIGNERS per name, none for UNSIGNED), and omarchy.db lists them, plus EXTRA (name, version)
     entries. ENTRY_EDIT(name, desc) may rewrite an entry. Returns the database and its sha256."""
-    base_versions = dict(NEO_VERSIONS if hardware_profile == "neo" else VERSIONS)
+    base_versions = dict(VERSIONS)
     base_versions.update({role: version for role, version in CHANNEL_VERSIONS.items() if role in base_versions})
     versions = dict(base_versions, **(versions or {}))
-    contents = contents or channel_contents(hardware_profile)
+    contents = contents or channel_contents()
     packages = directory / "packages"
     packages.mkdir(parents=True)
     entries = directory / "entries"
@@ -366,7 +372,7 @@ def payload_pe(extra: bytes) -> bytes:
 
 
 def write_payload(zip_path: Path, boot_uuid: str, root_uuid: str, omit: tuple[str, ...] = (),
-                  empty: tuple[str, ...] = (), grow: dict[str, int] | None = None, hardware_profile: str = "legacy", recovery_app: Path | None = None) -> None:
+                  empty: tuple[str, ...] = (), grow: dict[str, int] | None = None, recovery_app: Path | None = None) -> None:
     """The payload zip build-mac-image packages, with small stand-ins for its images. OMIT drops members,
     EMPTY truncates them and GROW appends that many zero bytes to each member it names."""
     with tempfile.TemporaryDirectory() as temporary:
@@ -389,10 +395,9 @@ def write_payload(zip_path: Path, boot_uuid: str, root_uuid: str, omit: tuple[st
                                                  "  protocol: efi\n  path: boot():/EFI/Linux/omarchy_linux-aurora.efi\n")
         (payload / "esp/m1n1/boot.bin").write_bytes(b"m1n1" * 64)
         shutil.copy(ROOT / "builder/omarchy-volume.icns", payload / "omarchy-volume.icns")
-        if hardware_profile == "neo":
-            (payload / "esp/aurora").mkdir()
-            (payload / "esp/aurora/stage1-j700.bin").write_bytes(aura_stage1())
-            shutil.copy(payload / "esp/m1n1/boot.bin", payload / "esp/m1n1/boot-j700.bin")
+        (payload / "esp/aurora").mkdir()
+        (payload / "esp/aurora/stage1-j700.bin").write_bytes(aura_stage1())
+        shutil.copy(payload / "esp/m1n1/boot.bin", payload / "esp/m1n1/boot-j700.bin")
         if recovery_app is not None:
             shutil.copytree(recovery_app, payload / "esp/aurora/recovery")
         for member in omit:
@@ -543,19 +548,18 @@ def make_root(root: Path, candidates: Path, layout: str | None = None) -> None:
     for path in (f"usr/lib/modules/{RELEASE}/vmlinuz", f"usr/lib/modules/{RELEASE}/pkgbase",
                  *[f"usr/lib/modules/{RELEASE}/dtbs/{m}.dtb" for m in (*MODELS, "s8000-n66")]):
         write(root, path, member("linux-aurora", path))
-    m1n1 = member(candidate_set.required_owners(summary.get("hardware_profile", "legacy"))["usr/lib/asahi-boot/m1n1.bin"], "usr/lib/asahi-boot/m1n1.bin")
-    uboot = member(candidate_set.required_owners(summary.get("hardware_profile", "legacy"))["usr/lib/asahi-boot/u-boot-nodtb.bin"], "usr/lib/asahi-boot/u-boot-nodtb.bin")
+    m1n1 = member(candidate_set.REQUIRED_OWNERS["usr/lib/asahi-boot/m1n1.bin"], "usr/lib/asahi-boot/m1n1.bin")
+    uboot = member(candidate_set.REQUIRED_OWNERS["usr/lib/asahi-boot/u-boot-nodtb.bin"], "usr/lib/asahi-boot/u-boot-nodtb.bin")
     write(root, "usr/lib/asahi-boot/m1n1.bin", m1n1)
     write(root, "usr/lib/asahi-boot/u-boot-nodtb.bin", uboot)
-    models = (*MODELS, "s8000-n66", *(("t8140-j700",) if summary.get("hardware_profile") == "neo" else ()))
+    models = (*MODELS, "s8000-n66")
     dtbs = sorted((f"{m}.dtb" for m in models), key=str.encode)
     stage2 = m1n1 + b"".join(dtb(name.removesuffix(".dtb")) for name in dtbs)
     compressor = zlib.compressobj(wbits=31)
     stage2 += compressor.compress(uboot) + compressor.flush() + b"chosen.asahi,efi-system-partition=EFI\n"
     write(root, "boot/efi/m1n1/boot.bin", stage2)
-    if summary.get("hardware_profile") == "neo":
-        write(root, "boot/efi/m1n1/boot-j700.bin", stage2)
-        write(root, "boot/efi/aurora/stage1-j700.bin", member("aura", "usr/share/aura/stage1/aura-raw.bin"))
+    write(root, "boot/efi/m1n1/boot-j700.bin", stage2)
+    write(root, "boot/efi/aurora/stage1-j700.bin", member("aura", "usr/share/aura/stage1/aura-raw.bin"))
     write(root, "etc/m1n1.conf", "# m1n1 options\nchosen.asahi,efi-system-partition=EFI\nunknown=ignored\n")
     loader = pe_image({".text": b"Limine loader"})
     write(root, "usr/share/limine/BOOTAA64.EFI", loader)

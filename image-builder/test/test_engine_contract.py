@@ -94,27 +94,31 @@ def engine_metadata(package: str) -> dict:
     metadata = omarchy_asahi.load_metadata(str(ENGINE / "installer_data.json"))
     templates = [t for t in metadata["os_list"] if t.get("omarchy_target") == omarchy_asahi.TARGET]
     assert len(templates) == 1, "Engine/installer_data.json has exactly one full-OS target"
-    templates[0].update(package=package, allowed_device_classes=None, excluded_device_classes=["j700ap"])
+    # The image adds the MacBook Neo's 26.6.2, which the engine's per-device
+    # table gives only to the M3 Airs and the Neo (UnifiedFirmwareTest).
+    templates[0].update(package=package, supported_fw=["13.5", "14.8.3", "26.6.2"])
     return metadata
 
 
-def written_metadata(package: str, out: Path, hardware_profile: str = "legacy", recovery_digest: str = "") -> dict:
+def written_metadata(package: str, out: Path, recovery_digest: str = "") -> dict:
     """The installer_data.json build-mac-image writes for PACKAGE."""
     candidates = out.parent / "metadata-set"
     candidates.mkdir(exist_ok=True)
-    (candidates / "import.json").write_text(json.dumps({"hardware_profile": hardware_profile}))
+    (candidates / "import.json").write_text("{}")
     subprocess.run(["bash", "-c", 'source "$1" && candidates="$4" && field() { printf %s "$recovery_digest"; }; recovery_digest="$5"; write_installer_data "$2" "$3"', "bash",
                     str(ROOT / "bin/build-mac-image"), package, str(out), str(candidates), recovery_digest], check=True)
     return json.loads(out.read_text())
 
 
-def engine_admits(metadata: Path, payload: Path, device_class: str = "j314sap") -> list:
-    """Runs the engine's preflight on METADATA and PAYLOAD; returns the firmware it chose from."""
+def engine_admits(metadata: Path, payload: Path, device_class: str = "j314sap", firmware: str | None = None) -> list:
+    """Runs the engine's preflight on METADATA and PAYLOAD with FIRMWARE as the
+    OS firmware upstream's choose_ipsw picks (default: the last offered);
+    returns the firmware it chose from."""
     chosen = []
     installer = SimpleNamespace(
         dutil=None, sysinfo=SimpleNamespace(device_class=device_class), osinfo=None,
         choose_ipsw=lambda supported: chosen.append(supported)
-        or SimpleNamespace(version=supported[-1]),
+        or SimpleNamespace(version=firmware or supported[-1]),
     )
     adapter = omarchy_asahi.AsahiStage1Adapter(installer=installer, metadata_path=str(metadata),
                                                payload_path=str(payload), stub_size=0)
@@ -124,6 +128,45 @@ def engine_admits(metadata: Path, payload: Path, device_class: str = "j314sap") 
         if adapter.osins is not None and getattr(adapter.osins, "pkg", None) is not None:
             adapter.osins.pkg.close()
     return chosen
+
+
+def engine_firmware_table():
+    """The engine's patched OS firmware table and its helpers, as its own
+    firmware tests rebuild them from the downstream patch."""
+    spec = importlib.util.spec_from_file_location("engine_firmware_tests",
+                                                  ENGINE / "overlay/tests/test_omarchy_firmware.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class UnifiedFirmwareTest(unittest.TestCase):
+    """The engine's per-device table, not the image, picks each Mac's OS firmware
+    from the image's supported_fw."""
+
+    def setUp(self):
+        self.table = engine_firmware_table()
+        self.supported_fw = check.expected_metadata(NAME)["os_list"][0]["supported_fw"]
+        self.chips = {**self.table.CHIP_MIN_VER, 0x6030: "14.8.3"}
+        self.minimums = {**self.table.DEVICE_MIN, "j433ap": "14.8.3", "j514sap": "14.8.3"}
+
+    def choose(self, device_class, chip_id, expert=False):
+        sysinfo = SimpleNamespace(device_class=device_class, chip_id=chip_id, **self.table.ON_26_6_2)
+        device = SimpleNamespace(min_ver=self.minimums[device_class])
+        _, avail = self.table.available_ipsws(self.table.IPSW_VERSIONS, self.chips, sysinfo, device,
+                                              self.supported_fw, expert, self.table.split_ver)
+        return [ipsw.version for ipsw in avail]
+
+    def test_every_mac_takes_its_own_firmware_from_the_one_image(self):
+        self.assertEqual(self.supported_fw, ["13.5", "14.8.3", "26.6.2"])
+        # A default install takes the last available entry, in the table's order.
+        for device_class, chip_id, firmware in (("j313ap", 0x8103, "13.5"), ("j413ap", 0x8112, "13.5"),
+                                                ("j433ap", 0x8122, "14.8.3"), ("j514sap", 0x6030, "14.8.3"),
+                                                ("j613ap", 0x8122, "14.8.3"), ("j615ap", 0x8122, "14.8.3"),
+                                                ("j700ap", 0x8140, "26.6.2")):
+            with self.subTest(device_class):
+                self.assertEqual(self.choose(device_class, chip_id)[-1], firmware)
+        self.assertEqual(self.choose("j700ap", 0x8140, expert=True), ["26.6.2"], "the Neo can take nothing else")
 
 
 class EngineContractTest(unittest.TestCase):
@@ -143,48 +186,52 @@ class EngineContractTest(unittest.TestCase):
                 self.assertEqual(written_metadata(name, self.out / "installer_data.json"), expected,
                                  "build-mac-image writes the engine's installer_data.json")
 
-    def test_neo_profile_firmware_and_board_payloads_pass_engine_preflight(self):
+    def test_every_mac_passes_engine_preflight_with_the_one_image(self):
         metadata = self.out / "installer_data.json"
-        expected = check.expected_metadata(NAME, "neo")
-        self.assertEqual(written_metadata(NAME, metadata, "neo"), expected)
+        self.assertEqual(written_metadata(NAME, metadata), check.expected_metadata(NAME))
         payload = self.out / NAME
-        fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID, hardware_profile="neo")
-        check.check_payload("edge", payload, metadata, hardware_profile="neo")
-        self.assertEqual(engine_admits(metadata, payload, "j700ap"), [["26.6.2"]])
-        with self.assertRaisesRegex(omarchy_asahi.AsahiAdapterError, "not qualified"):
-            engine_admits(metadata, payload, "j314sap")
+        fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID)
+        check.check_payload("edge", payload, metadata)
+        # Each Mac's default from the engine's per-device table (UnifiedFirmwareTest).
+        for device_class, firmware in (("j274ap", "13.5"), ("j314sap", "13.5"), ("j413ap", "13.5"),
+                                       ("j433ap", "14.8.3"), ("j613ap", "14.8.3"), ("j615ap", "14.8.3"),
+                                       ("j700ap", "26.6.2")):
+            with self.subTest(device_class):
+                self.assertEqual(engine_admits(metadata, payload, device_class, firmware),
+                                 [["13.5", "14.8.3", "26.6.2"]])
+        # The engine boots a J613 on 26.6.2 through a J613 Stage 1 the image does not carry; the
+        # table never makes 26.6.2 its default, and a forced pick is refused before any disk change.
+        with self.assertRaisesRegex(omarchy_asahi.AsahiAdapterError, "no esp/aurora/stage1-j613.bin"):
+            engine_admits(metadata, payload, "j613ap", "26.6.2")
 
     def test_native_recovery_input_passes_builder_and_engine_admission(self):
         recovery = self.out / "recovery"
         digest = fixtures.make_recovery_app(recovery)
         metadata = self.out / "installer_data.json"
-        self.assertEqual(written_metadata(NAME, metadata, "neo", digest),
-                         check.expected_metadata(NAME, "neo", native_recovery=True))
+        self.assertEqual(written_metadata(NAME, metadata, digest),
+                         check.expected_metadata(NAME, native_recovery=True))
         payload = self.out / NAME
-        fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID,
-                               hardware_profile="neo", recovery_app=recovery)
-        check.check_payload("edge", payload, metadata, hardware_profile="neo", recovery_digest=digest)
-        self.assertEqual(engine_admits(metadata, payload, "j700ap"), [["26.6.2"]])
+        fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID, recovery_app=recovery)
+        check.check_payload("edge", payload, metadata, recovery_digest=digest)
+        self.assertEqual(engine_admits(metadata, payload, "j700ap"), [["13.5", "14.8.3", "26.6.2"]])
         executable = recovery / fixtures.recovery_app.APP / "Contents/MacOS/OmarchyRecovery"
         executable.write_bytes(b"changed executable")
-        fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID,
-                               hardware_profile="neo", recovery_app=recovery)
+        fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID, recovery_app=recovery)
         with self.assertRaisesRegex(check.CheckError, "Recovery"):
-            check.check_payload("edge", payload, metadata, hardware_profile="neo", recovery_digest=digest)
+            check.check_payload("edge", payload, metadata, recovery_digest=digest)
         with self.assertRaisesRegex(omarchy_asahi.AsahiAdapterError, "Recovery"):
             engine_admits(metadata, payload, "j700ap")
 
-    def test_neo_missing_or_empty_board_boot_payloads_are_rejected(self):
+    def test_missing_or_empty_j700_boot_payloads_are_rejected(self):
         metadata = self.out / "installer_data.json"
-        written_metadata(NAME, metadata, "neo")
+        written_metadata(NAME, metadata)
         for member in ("esp/aurora/stage1-j700.bin", "esp/m1n1/boot-j700.bin"):
             for kind in ("omit", "empty"):
                 with self.subTest(member=member, kind=kind):
                     payload = self.out / NAME
-                    fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID,
-                                           hardware_profile="neo", **{kind: (member,)})
+                    fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID, **{kind: (member,)})
                     with self.assertRaises(check.CheckError):
-                        check.check_payload("edge", payload, metadata, hardware_profile="neo")
+                        check.check_payload("edge", payload, metadata)
                     with self.assertRaises(omarchy_asahi.AsahiAdapterError):
                         engine_admits(metadata, payload, "j700ap")
 

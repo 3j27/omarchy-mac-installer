@@ -2,16 +2,16 @@
 """The Macs every Omarchy Mac catalog must enable, and the ones it must refuse.
 
 `supported-models.json` is the single list: every M1, M2 and M3 Mac the
-pinned engine can inspect. A catalog that offers any Mac offers all of them,
-so a release or preview can never ship a subset by accident. A channel with no
-Mac release yet (an empty catalog) is the only exception. `refused` names each
-board that stays out and why. `developer` names each board only a developer
-build's sealed catalog may add, with its own image; channel catalogs never
-carry one, so check-catalog rejects it like any unknown board.
-
-board that stays out and why. `untested` marks the supported Macs that no
-image has been installed on yet (the M3 generation), with the note a catalog
-shows for each.
+pinned engine can inspect, and the MacBook Neo, all installed from the one
+Aurora image. A catalog that offers any Mac offers all of them, so a release
+or preview can never ship a subset by accident. A channel with no Mac release
+yet (an empty catalog) is the only exception. `refused` names each board that
+stays out and why. `developer` names each board only a developer build's
+sealed catalog may add, with its own image; channel catalogs never carry one,
+so check-catalog rejects it like any unknown board. `untested` marks the
+supported Macs no image has been qualified on yet (the M3 generation and the
+Neo, which the testing team qualifies on edge), with the note a catalog shows
+for each.
 
 Usage:
   supported_models.py check-catalog FILE   exit 1 unless FILE covers every Mac
@@ -66,7 +66,7 @@ def coverage_errors(identifiers: list[str]) -> list[str]:
     missing = [identifier for identifier in supported if identifier not in identifiers]
     if missing:
         errors.append(
-            "every M1, M2 and M3 Mac must be enabled; missing "
+            "every supported Mac must be enabled; missing "
             + ", ".join(missing)
         )
     for identifier in identifiers:

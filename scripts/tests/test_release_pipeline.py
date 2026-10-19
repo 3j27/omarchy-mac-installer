@@ -105,7 +105,7 @@ class Triggers(unittest.TestCase):
         "mac-release-pipeline.yml": {"workflow_dispatch"},
         "mac-acceptance.yml": {"workflow_call", "workflow_dispatch"},
         "mac-image.yml": {"workflow_call", "workflow_dispatch"},
-        "neo-image.yml": {"workflow_dispatch"},
+        "recovery-image.yml": {"workflow_dispatch"},
         "mac-upload.yml": {"workflow_call", "workflow_dispatch"},
         "mac-catalog.yml": {"workflow_call", "workflow_dispatch"},
         "edge-dispatch.yml": {"repository_dispatch"},

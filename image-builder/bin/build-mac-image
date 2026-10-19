@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # Builds an Apple Silicon image payload from a signed candidate set: the
-# Omarchy runtime, its Apple add-on and boot packages, the Aurora kernel, m1n1
-# and U-Boot exactly as the set signed them, the rest from the package
+# Omarchy runtime, its Apple add-on and boot packages, the Aurora stack (the
+# kernel with every Mac's device tree, Aura's m1n1 and Stage 1, the Aurora
+# U-Boot and the Aurora support packages) exactly as the set signed them, the rest from the package
 # databases the inputs record pins, set up by the runtime's own system setup
 # inside an isolated chroot, with a sealed @factory snapshot, first boot armed
 # and owner provisioning deferred. The layout is the full payload the installer
@@ -30,7 +31,9 @@ ESP_UUID=4F4D-5801
 ESP_SIZE=524288000
 BOOT_SIZE=2147483648
 ROOT_SIZE=34359738368
-SUPPORTED_FW=(13.5 14.8.3)
+# Every Mac's OS firmware: the engine's per-device table picks each Mac's
+# (13.5 for M1 and M2, 14.8.3 for M3, 26.6.2 for the MacBook Neo).
+SUPPORTED_FW=(13.5 14.8.3 26.6.2)
 ICON_SHA256=cf26ed5d2831db99c00d62ca046040e01a18e08e63363d629340d04ac6ec8c23
 KERNEL=linux-aurora
 # The hardware this image is for. It is written to the image-target manifest
@@ -190,14 +193,12 @@ record_kind() {
 # and archives fetched now: each must be that database's, signed by the Omarchy
 # package key.
 import_channel_set() {
-  local inputs=$1 key field hardware_profile
+  local inputs=$1 key field
   shift
-  hardware_profile=$(record_field hardware_profile "$inputs")
   mkdir "$host_work/channel-packages"
   "$BASH" "$ROOT/bin/mac-image-inputs" packages "$inputs" "$host_work/channel-packages" "$@"
   python3 "$ROOT/builder/channel_set.py" import --db "$host_work/dbs/omarchy.db" \
     --db-sha256 "$(record_field omarchy_db_sha256 "$inputs")" --lane "$(record_field omarchy_channel "$inputs")" \
-    --hardware-profile "${hardware_profile:-legacy}" \
     --packages "$host_work/channel-packages" --output "$host_work/candidates" >"$host_work/import.txt" ||
     fail "the channel set does not verify against the inputs record"
   rm -rf "$host_work/channel-packages"
@@ -836,13 +837,11 @@ available_base() {
 # is pulled in, and the set resolves at all.
 precheck_transaction() {
   local resolved refused name
-  # The selected Neo profile requires its complete reviewed support stack.
-  if [[ $(jq -r '.hardware_profile // "legacy"' "$candidates/import.json") == neo ]]; then
-    for name in $(jq -r '.hardware_profiles.neo.support_packages[]' "$ROOT/builder/candidate-trust/policy.json"); do
-      jq -e --arg name "$name" '.packages[] | select(.name == $name and .group == "support")' \
-        "$candidates/import.json" >/dev/null || fail "Neo support package is missing: $name"
-    done
-  fi
+  # Every image carries the complete reviewed Aurora support stack.
+  for name in $(jq -r '.support_packages[]' "$ROOT/builder/candidate-trust/policy.json"); do
+    jq -e --arg name "$name" '.packages[] | select(.name == $name and .group == "support")' \
+      "$candidates/import.json" >/dev/null || fail "Aurora support package is missing: $name"
+  done
   available_base
   resolved=$(target_pacman -Sp --print-format '%r %n %v' "${BOOTSTRAP[@]}" "${PLATFORM_PACKAGES[@]}" \
     "$(qualified omarchy)" "$(qualified omarchy-settings)" "${base_names[@]}" $(qualified "${APPLE_AUDIO[@]}") \
@@ -946,12 +945,10 @@ require_build_identity() {
 
 install_runtime() {
   local graphics=()
-  # A Neo image's reviewed Mesa must be a target here: it then satisfies the
+  # The reviewed Aurora Mesa must be a target here: it then satisfies the
   # desktop's mesa dependency, so stock mesa never installs. The Apple set
   # cannot replace it later without answering a conflict prompt.
-  if [[ $(jq -r '.hardware_profile // "legacy"' "$candidates/import.json") == neo ]]; then
-    mapfile -t graphics < <(qualified mesa-aurora vulkan-aurora)
-  fi
+  mapfile -t graphics < <(qualified mesa-aurora vulkan-aurora)
   mount_api
   target_pacman -S "$(qualified omarchy)" "${base_names[@]}" "${graphics[@]}" >>"$logs/install.log" 2>&1 ||
     fail "could not install the runtime (logs/install.log)"
@@ -1261,7 +1258,7 @@ configure_image() {
   isolated_chroot "$target" env LC_ALL=C update-m1n1 >"$logs/update-m1n1.log" 2>&1 ||
     fail "update-m1n1 failed (logs/update-m1n1.log)"
   activate_limine
-  stage_neo_boot_payloads
+  stage_board_boot_payloads
   stage_recovery_app
   arm_first_boot
   # Recorded once the boot setup, which could change packages, is done.
@@ -1292,14 +1289,15 @@ stage_recovery_app() {
 }
 
 # Board payloads come from the same authenticated Aura package as Stage 2.
-# Keep the established board-specific engine contract until common-image
-# qualification is recorded; do not claim qualification for other Macs.
-stage_neo_boot_payloads() {
-  [[ $(jq -r '.hardware_profile // "legacy"' "$candidates/import.json") == neo ]] || return 0
+# The engine's per-board contract (BOARD_STAGE1, BOARD_STAGE2): the MacBook
+# Neo boots Aura's raw Stage 1 as esp/aurora/stage1-j700.bin and takes
+# esp/m1n1/boot-j700.bin, the same bundle as m1n1/boot.bin, in its place.
+# Every other Mac drops boot-j700.bin.
+stage_board_boot_payloads() {
   local stage1="$target/usr/share/aura/stage1/aura-raw.bin"
   local stage2="$target/boot/efi/m1n1/boot.bin"
   [[ -s $stage1 && ! -L $stage1 && -s $stage2 && ! -L $stage2 ]] ||
-    fail "the Neo image lacks matched Aura Stage 1 and Stage 2 payloads"
+    fail "the image lacks matched Aura Stage 1 and Stage 2 payloads for the MacBook Neo"
   mkdir -p "$target/boot/efi/aurora" "$target/boot/efi/m1n1"
   install -m 0644 "$stage1" "$target/boot/efi/aurora/stage1-j700.bin"
   install -m 0644 "$stage2" "$target/boot/efi/m1n1/boot-j700.bin"
@@ -1561,26 +1559,20 @@ payload_name() {
 }
 
 write_installer_data() {
-  local hardware_profile
-  hardware_profile=$(jq -r '.hardware_profile // "legacy"' "$candidates/import.json")
-  local firmware=("${SUPPORTED_FW[@]}")
-  [[ $hardware_profile != neo ]] || firmware=(26.6.2)
   jq -S -n --arg package "$1" --argjson esp "$ESP_SIZE" --argjson boot "$BOOT_SIZE" --argjson root "$ROOT_SIZE" \
     --arg volume_id "$ESP_VOLUME_ID" \
     --arg recovery_app_manifest "$(field recovery_app_manifest_sha256)" \
-    --arg hardware_profile "$hardware_profile" --args '{os_list: [{
+    --args '{os_list: [{
       name: "Omarchy MX Mac", default_os_name: "Omarchy", omarchy_target: "apple-silicon-full-os",
       boot_object: "m1n1.bin", next_object: "m1n1/boot.bin", package: $package, icon: "omarchy-volume.icns",
       supported_fw: $ARGS.positional,
-      allowed_device_classes: (if $hardware_profile == "neo" then ["j700ap"] else null end),
-      excluded_device_classes: (if $hardware_profile == "legacy" then ["j700ap"] else [] end),
       partitions: [
         {name: "EFI", type: "EFI", size: "\($esp)B", format: "fat", volume_id: $volume_id,
           copy_firmware: true, copy_installer_data: true, source: "esp"},
         {name: "Boot", type: "Linux", size: "\($boot)B", image: "boot.img"},
         {name: "Root", type: "Linux", size: "\($root)B", expand: true, image: "root.img"}]}
       + (if $recovery_app_manifest != "" then {recovery_gui: "omarchy-native-v1"} else {} end)]}' \
-    "${firmware[@]}" >"$2"
+    "${SUPPORTED_FW[@]}" >"$2"
 }
 
 # The key a reproduced build must match: every installed package's name,
@@ -1608,7 +1600,6 @@ write_provenance() {
       "$candidates/import.json"
     printf 'hardware_setup=%s\n' "$hardware_setup"
     printf 'test_image_pin=%s\n' "$test_image_pin"
-    printf 'hardware_profile=%s\n' "$(jq -r '.hardware_profile // "legacy"' "$candidates/import.json")"
     [[ $profile == release ]] || printf 'profile=%s\nlab_access_sha256=%s\n' "$profile" "$lab_access_sha256"
     while read -r name; do
       [[ -z $name ]] || printf 'unavailable=%s\n' "$name"
@@ -1656,7 +1647,6 @@ write_image() {
     done
     printf 'hardware_setup=%s\n' "$hardware_setup"
     printf 'test_image_pin=%s\n' "$test_image_pin"
-    printf 'hardware_profile=%s\n' "$(jq -r '.hardware_profile // "legacy"' "$candidates/import.json")"
     [[ $profile == release ]] || printf 'profile=%s\nlab_access_sha256=%s\n' "$profile" "$lab_access_sha256"
     printf 'package_set_sha256=%s\n' "$package_set_digest"
     printf 'built=%s\n' "$built"

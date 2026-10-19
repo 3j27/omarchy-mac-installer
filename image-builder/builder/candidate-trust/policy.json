@@ -21,8 +21,8 @@
   "boot_packages": [
     "linux-aurora",
     "linux-aurora-headers",
-    "m1n1-aurora",
-    "uboot-asahi",
+    "aura",
+    "uboot-aurora",
     "limine-mkinitcpio-hook"
   ],
   "channel_runtime_packages": [
@@ -37,7 +37,9 @@
     "omarchy-first-boot",
     "linux-asahi",
     "m1n1",
-    "grub"
+    "grub",
+    "m1n1-aurora",
+    "uboot-asahi"
   ],
   "minimum_versions": {
     "omarchy-mac-boot": "20260921-10",
@@ -59,25 +61,50 @@
       "omarchy-mac-boot": "omarchy-mac-boot"
     }
   },
-  "support_packages": [],
-  "hardware_profiles": {
-    "neo": {
-      "boot_packages": [
-        "linux-aurora",
-        "linux-aurora-headers",
-        "aura",
-        "uboot-aurora",
-        "limine-mkinitcpio-hook"
-      ],
-      "support_packages": [
-        "aurora-audio",
-        "alsa-ucm-conf-aurora",
-        "speakerguardd",
-        "omarchy-aurora-firmware",
-        "mesa-aurora",
-        "vulkan-aurora",
-        "aurora-bless"
-      ]
-    }
-  }
+  "support_packages": [
+    "aurora-audio",
+    "alsa-ucm-conf-aurora",
+    "speakerguardd",
+    "omarchy-aurora-firmware",
+    "mesa-aurora",
+    "vulkan-aurora",
+    "aurora-bless"
+  ],
+  "device_trees": [
+    "t6000-j314s",
+    "t6000-j316s",
+    "t6001-j314c",
+    "t6001-j316c",
+    "t6001-j375c",
+    "t6002-j375d",
+    "t6020-j414s",
+    "t6020-j416s",
+    "t6020-j474s",
+    "t6021-j414c",
+    "t6021-j416c",
+    "t6021-j475c",
+    "t6022-j180d",
+    "t6022-j475d",
+    "t6030-j514s",
+    "t6030-j516s",
+    "t6031-j514c",
+    "t6031-j516c",
+    "t6034-j514m",
+    "t6034-j516m",
+    "t8103-j274",
+    "t8103-j293",
+    "t8103-j313",
+    "t8103-j456",
+    "t8103-j457",
+    "t8112-j413",
+    "t8112-j415",
+    "t8112-j473",
+    "t8112-j493",
+    "t8122-j433",
+    "t8122-j434",
+    "t8122-j504",
+    "t8122-j613",
+    "t8122-j615",
+    "t8140-j700"
+  ]
 }

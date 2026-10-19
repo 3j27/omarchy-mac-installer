@@ -18,7 +18,7 @@ inspection.OWNER_UID = os.geteuid()
 CHECKS = ("candidate-versions", "runtime-sources", "minimum-versions", "refused-packages", "apple-packages", "installed-boot-payloads",
           "candidate-files", "package-mtrees",
           "m1n1-stage2", "aurora-device-trees", "limine-uki", "embedded-initramfs", "boot-splash", "boot-maintenance",
-          "image-target", "first-boot", "snapshots", "pacman-config", "installed-system", "factory")
+          "image-target", "first-boot", "snapshots", "pacman-config", "installed-system", "speaker-routing", "factory")
 # Fixture roots live on whatever filesystem the tests run on: these paths stand in for btrfs subvolumes.
 SUBVOLUMES: set[Path] = set()
 real_is_subvolume = inspection.is_subvolume
@@ -67,8 +67,8 @@ class InspectionTest(unittest.TestCase):
         return report
 
     def stage2(self, m1n1=None, dtbs=None, uboot=None, tail=b""):
-        m1n1 = m1n1 if m1n1 is not None else fixtures.default_contents()["m1n1-aurora"]["usr/lib/asahi-boot/m1n1.bin"]
-        uboot = uboot if uboot is not None else fixtures.default_contents()["uboot-asahi"]["usr/lib/asahi-boot/u-boot-nodtb.bin"]
+        m1n1 = m1n1 if m1n1 is not None else fixtures.default_contents()["aura"]["usr/lib/asahi-boot/m1n1.bin"]
+        uboot = uboot if uboot is not None else fixtures.default_contents()["uboot-aurora"]["usr/lib/asahi-boot/u-boot-nodtb.bin"]
         if dtbs is None:
             dtbs = sorted(["s8000-n66", *fixtures.MODELS], key=str.encode)
         compressor = zlib.compressobj(wbits=31)
@@ -103,55 +103,83 @@ class InspectionTest(unittest.TestCase):
         for check in CHECKS:
             self.assertEqual(report["checks"][check]["result"], "passed", (check, report["checks"][check]))
         self.assertEqual(report["result"], "passed")
-        self.assertEqual(report["m1n1_stage2"]["device_trees"], 3)
-        self.assertEqual(report["supported_models"], list(fixtures.MODELS))
+        self.assertEqual(report["m1n1_stage2"]["device_trees"], 36)
+        self.assertEqual(report["supported_models"], sorted(fixtures.MODELS))
+        self.assertEqual(len(report["supported_models"]), 35)
+        self.assertNotIn("hardware_profile", report)
         self.assertEqual(report["hardware_setup"], "build")
 
-    def test_incidental_neo_dtb_does_not_admit_neo_with_legacy_boot_chain(self):
+    def test_every_supported_mac_comes_from_the_policy_and_needs_its_kernel_tree(self):
         candidates = inspection.Candidates(self.candidates)
         boot_owner = candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"]
-        original = candidates.listing(boot_owner)
-        candidates._listings[boot_owner] = original + ["usr/lib/asahi-boot/dtb/t8140-j700.dtb"]
-        report = {}
-        inspection.check_supported_models(self.root, candidates, report)
-        self.assertNotIn("t8140-j700", report["supported_models"])
+        self.assertEqual(boot_owner, "uboot-aurora")
+        self.assertFalse([p for p in candidates.listing(boot_owner) if "/dtb/" in p])
+        for tree in ("t8140-j700", "t8122-j613", "t6034-j516m", "t8103-j274"):
+            with self.subTest(tree):
+                candidates.dtbs = lambda tree=tree: [p for p in inspection.Candidates.dtbs(candidates)
+                                                     if not p.endswith(f"/{tree}.dtb")]
+                with self.assertRaisesRegex(inspection.InspectionError, f"lacks device trees for {tree}"):
+                    inspection.check_supported_models(self.root, candidates, {}, fixtures.POLICY)
 
-    def test_neo_candidate_admits_only_neo_and_binds_its_profile(self):
-        directory = self.root.parent / "neo-input"
-        imported = self.root.parent / "neo-import"
-        receipt = fixtures.make_set(directory, self.signer, hardware_profile="neo")
-        fixtures.import_set(directory, imported, self.signer, receipt)
-        candidates = inspection.Candidates(imported)
-        report = {}
-        inspection.check_supported_models(self.root, candidates, report)
-        self.assertEqual(report["supported_models"], ["t8140-j700"])
+    def test_a_set_recording_a_hardware_profile_is_refused(self):
+        imported = self.root.parent / "profile-import"
+        shutil.copytree(self.candidates, imported)
         summary = imported / "import.json"
         summary.chmod(0o644)
         value = __import__("json").loads(summary.read_text())
-        value["hardware_profile"] = "legacy"
+        value["hardware_profile"] = "neo"
         summary.write_text(__import__("json").dumps(value))
-        with self.assertRaisesRegex(inspection.InspectionError, "authenticated manifest"):
+        with self.assertRaisesRegex(inspection.InspectionError, "retired hardware profile"):
             inspection.Candidates(imported)
 
-    def test_neo_model_comes_from_the_profile_and_needs_the_kernel_tree(self):
-        directory = self.root.parent / "neo-nokernel-input"
-        imported = self.root.parent / "neo-nokernel-import"
-        receipt = fixtures.make_set(directory, self.signer, hardware_profile="neo")
-        fixtures.import_set(directory, imported, self.signer, receipt)
-        candidates = inspection.Candidates(imported)
-        boot_owner = candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"]
-        self.assertFalse([p for p in candidates.listing(boot_owner) if "/dtb/" in p])
-        candidates.dtbs = lambda: [p for p in inspection.Candidates.dtbs(candidates)
-                                   if not p.endswith("/t8140-j700.dtb")]
-        with self.assertRaisesRegex(inspection.InspectionError, "lacks device trees for t8140-j700"):
-            inspection.check_supported_models(self.root, candidates, {})
+    def test_the_j700_boot_payloads_must_be_the_sets(self):
+        for rel, data in (("boot/efi/aurora/stage1-j700.bin", b"another stage 1"),
+                          ("boot/efi/m1n1/boot-j700.bin", b"another stage 2")):
+            with self.subTest(rel):
+                self.setUp()
+                (self.root / rel).write_bytes(data)
+                self.assertFails("installed-boot-payloads", "J700 Stage")
+
+    def test_speakerguardd_starts_only_for_the_j700_and_speakersafetyd_skips_it(self):
+        self.assertIn("starts only for AppleJ700", self.inspect()["checks"]["speaker-routing"]["detail"])
+
+        def rules():
+            return self.root / "usr/lib/udev/rules.d/95-speakerguardd.rules"
+
+        def guard():
+            return self.root / "usr/lib/systemd/system/speakersafetyd.service.d/50-j700-guard.conf"
+
+        def enable():
+            wants = self.root / "etc/systemd/system/multi-user.target.wants"
+            wants.mkdir(parents=True, exist_ok=True)
+            (wants / "speakerguardd.service").symlink_to("/usr/lib/systemd/system/speakerguardd.service")
+
+        cases = (
+            ("for more than the AppleJ700 codec", lambda: rules().write_text(
+                rules().read_text().replace('ATTRS{id}=="AppleJ700", TAG', 'ATTRS{id}=="AppleJ*", TAG'))),
+            ("no udev rule starts", lambda: rules().write_text(
+                "\n".join(line for line in rules().read_text().splitlines() if "SYSTEMD_WANTS" not in line))),
+            ("90-speaker.rules:1 starts speakerguardd.service for more than", lambda: fixtures.write(
+                self.root, "etc/udev/rules.d/90-speaker.rules",
+                'SUBSYSTEM=="sound", ENV{SYSTEMD_WANTS}="speakerguardd.service"\n')),
+            ("enabled for every Mac", enable),
+            ("also runs on the J700", lambda: guard().unlink()),
+            ("does not hold speakersafetyd", lambda: guard().write_text("[Service]\nExecCondition=/bin/true\n")),
+            ("does not test for the J700", lambda: (self.root / "usr/lib/speakerguardd/use-feedback-guard")
+                .write_text("#!/bin/sh\nexit 0\n")),
+        )
+        for pattern, change in cases:
+            with self.subTest(pattern):
+                self.setUp()
+                change()
+                self.assertFails("speaker-routing", re.escape(pattern))
 
     def test_m1n1_stage2_mismatches(self):
         cases = {
             "another m1n1": dict(m1n1=b"some other m1n1 build"),
-            "a missing device tree": dict(dtbs=["s8000-n66", "t6000-j314s"]),
-            "device trees out of C order": dict(dtbs=["t6000-j314s", "s8000-n66", "t8103-j274"]),
-            "an extra device tree": dict(dtbs=[*sorted(["s8000-n66", *fixtures.MODELS]), "t6020-j414s"]),
+            "a missing device tree": dict(dtbs=sorted(["s8000-n66", *fixtures.MODELS], key=str.encode)[:-1]),
+            "device trees out of C order": dict(dtbs=sorted(["s8000-n66", *fixtures.MODELS], key=str.encode, reverse=True)),
+            "an extra device tree": dict(dtbs=[*sorted(["s8000-n66", *fixtures.MODELS], key=str.encode), "t8132-j604"]),
             "another U-Boot": dict(uboot=b"stock asahi u-boot"),
             "trailing bytes": dict(tail=b"\x00\x01binary"),
             "options the image does not set": dict(tail=b"chosen.bootargs=init=/bin/sh\n"),
@@ -206,12 +234,10 @@ class InspectionTest(unittest.TestCase):
         self.assertFails("boot-maintenance", "Limine loader")
 
     def test_mac_without_an_aurora_device_tree(self):
-        contents = fixtures.default_contents()
-        contents["uboot-asahi"]["usr/lib/asahi-boot/dtb/t6020-j414s.dtb"] = b"uboot t6020"
-        work = Path(tempfile.mkdtemp(dir=self.base))
-        receipt = fixtures.make_set(work / "set", self.signer, contents=contents)
-        fixtures.import_set(work / "set", work / "candidates", self.signer, receipt)
-        self.assertFails("aurora-device-trees", "t6020-j414s", work / "candidates")
+        policy = dict(fixtures.POLICY, device_trees=[*fixtures.POLICY["device_trees"], "t8132-j604"])
+        report = {}
+        with self.assertRaisesRegex(inspection.InspectionError, "t8132-j604"):
+            inspection.check_supported_models(self.root, inspection.Candidates(self.candidates), report, policy)
 
     def test_limine_loader_menu_and_uki(self):
         esp = type("Esp", (), {"__truediv__": lambda _, rel: self.root / "boot/efi" / rel})()
@@ -354,18 +380,20 @@ class InspectionTest(unittest.TestCase):
         self.assertFalse(real_is_subvolume(self.root / "etc"))
 
     def test_audio_stack_missing(self):
-        for name in ("alsa-ucm-conf-asahi", "asahi-audio"):
+        # The image fills each role with its Aurora replacement.
+        for name, package in (("alsa-ucm-conf-asahi", "alsa-ucm-conf-aurora"), ("asahi-audio", "aurora-audio")):
             with self.subTest(name):
                 self.setUp()
-                shutil.rmtree(next((self.root / "var/lib/pacman/local").glob(f"{name}-1.0-1")))
+                shutil.rmtree(next((self.root / "var/lib/pacman/local").glob(f"{package}-*")))
                 report = self.assertFails("installed-system", "packages-required-present")
                 self.assertIn(name, report["installed_system"]["packages-required-present"]["detail"])
 
     def test_first_boot_packages_missing(self):
-        for name in ("vulkan-asahi", "asahi-bless"):
+        # The image fills each role with its Aurora replacement.
+        for name, package in (("vulkan-asahi", "vulkan-aurora"), ("asahi-bless", "aurora-bless")):
             with self.subTest(name):
                 self.setUp()
-                shutil.rmtree(next((self.root / "var/lib/pacman/local").glob(f"{name}-1.0-1")))
+                shutil.rmtree(next((self.root / "var/lib/pacman/local").glob(f"{package}-*")))
                 report = self.assertFails("installed-system", "packages-required-present")
                 self.assertIn(name, report["installed_system"]["packages-required-present"]["detail"])
 
@@ -423,8 +451,8 @@ class InspectionTest(unittest.TestCase):
         install = self.root / "usr/share/omarchy/install"
         (install / "omarchy-aarch64-apple.packages").write_text("omarchy-mac\nasahi-bless\n")
         local = self.root / "var/lib/pacman/local"
-        for stock in local.glob("asahi-bless-*"):
-            shutil.rmtree(stock)
+        for installed in (*local.glob("asahi-bless-*"), *local.glob("aurora-bless-*")):
+            shutil.rmtree(installed)
         self.assertFails("apple-packages", "names packages that are not installed: asahi-bless$")
         fixtures.local_package(self.root, "aurora-bless", "0.4.4.aurora2-1", [], provides=("asahi-bless=0.4.4.aurora2",))
         report = self.inspect()
@@ -735,7 +763,7 @@ class ClosureInspectionTest(unittest.TestCase):
                 report = inspection.inspect(root, candidates, "edge", trust=signer.trust)
                 self.assertEqual(report["checks"]["candidate-files"]["result"], "passed", report["checks"]["candidate-files"])
                 self.assertEqual(report["checks"]["candidate-versions"]["result"], "passed")
-                self.assertIn("of the 9 required packages", report["checks"]["candidate-files"]["detail"])
+                self.assertIn("of the 16 required packages", report["checks"]["candidate-files"]["detail"])
                 (root / "usr/share/icons/Yaru/scalable/actions/go-next-symbolic.svg").unlink()
                 local = next((root / "var/lib/pacman/local").glob("yaru-icon-theme-*"))
                 (local / "desc").write_text((local / "desc").read_text().replace("26.04-1", "26.04-2"))
@@ -796,7 +824,6 @@ class RuntimeLayoutInspectionTest(unittest.TestCase):
 
 
 class ChannelImageInspectionTest(unittest.TestCase):
-    hardware_profile = "legacy"
     """A public image built from an edge channel set (builder/channel_set.py)."""
 
     @classmethod
@@ -806,10 +833,10 @@ class ChannelImageInspectionTest(unittest.TestCase):
         cls.candidate = fixtures.Signer(cls.base / "candidate")
         cls.channel = fixtures.Signer(cls.base / "channel", "Omarchy fixture <pkgs@example.invalid>")
         cls.trust = fixtures.channel_trust(cls.base, cls.candidate, cls.channel)
-        database, sha256 = fixtures.make_channel(cls.base / "edge", cls.channel, hardware_profile=cls.hardware_profile)
+        database, sha256 = fixtures.make_channel(cls.base / "edge", cls.channel)
         channel_set = fixtures.load("channel_set", "builder/channel_set.py")
         cls.set = cls.base / "set"
-        cls.summary = channel_set.snapshot(database, sha256, "edge", cls.base / "edge/packages", cls.set, cls.trust, cls.hardware_profile)
+        cls.summary = channel_set.snapshot(database, sha256, "edge", cls.base / "edge/packages", cls.set, cls.trust)
         cls.good = cls.base / "root"
         fixtures.make_root(cls.good, cls.set, "e1b0e5e9b")
 
@@ -851,6 +878,7 @@ class ChannelImageInspectionTest(unittest.TestCase):
         self.assertEqual(report["runtime_sources"], {"omarchy-mac": fixtures.SOURCE, "omarchy-mac-boot": fixtures.SOURCE})
         self.assertNotIn("test image pin", report["checks"]["pacman-config"]["detail"])
         self.assertEqual(report["installed_versions"]["omarchy-dev"], fixtures.CHANNEL_VERSIONS["omarchy"])
+        self.assertEqual(len(report["supported_models"]), 35)
 
     def test_the_image_target_must_name_the_channel_set_as_a_public_image(self):
         target = self.root / "var/lib/omarchy/image/target"
@@ -878,15 +906,6 @@ class ChannelImageInspectionTest(unittest.TestCase):
         self.assertFails("factory", "records another channel set")
 
 
-class NeoChannelImageInspectionTest(ChannelImageInspectionTest):
-    hardware_profile = "neo"
-
-    def test_supported_models_remain_neo_only(self):
-        report = self.inspect()
-        self.assertEqual(report["hardware_profile"], "neo")
-        self.assertEqual(report["supported_models"], ["t8140-j700"])
-
-
 class TestImagePinTest(unittest.TestCase):
     TEMPLATE = b"# pacman\n\n[options]\nArchitecture = auto\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n"
 
@@ -894,7 +913,7 @@ class TestImagePinTest(unittest.TestCase):
         return {"candidate_only": candidate_only, "packages": [
             {"name": "omarchy", "origin": "commit"}, {"name": "omarchy-settings", "origin": "commit"},
             {"name": "omarchy-mac", "origin": "commit"}, {"name": "omarchy-mac-boot", "origin": "channel " + "b" * 40},
-            {"name": "linux-aurora", "origin": "channel"}, {"name": "uboot-asahi", "origin": "pull-request"},
+            {"name": "linux-aurora", "origin": "channel"}, {"name": "uboot-aurora", "origin": "pull-request"},
             {"name": "hyprland", "origin": "channel"}]}
 
     def test_pins_only_what_the_source_commit_built(self):

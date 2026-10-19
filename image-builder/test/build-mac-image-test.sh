@@ -64,7 +64,7 @@ pass "only the set and the empty [omarchy-aarch64] come from disk; the rest from
 candidates=$scratch/candidates
 mkdir -p "$candidates"
 cat >"$candidates/import.json" <<'EOF'
-{"hardware_profile": "neo", "packages": [
+{"packages": [
   {"name": "omarchy", "version": "4.0.0-1", "filename": "omarchy-4.0.0-1-aarch64.pkg.tar.xz", "group": "runtime"},
   {"name": "omarchy-settings", "version": "4.0.0-1", "filename": "s.pkg.tar.xz", "group": "runtime"},
   {"name": "omarchy-mac", "version": "0.1.0-1", "filename": "m.pkg.tar.xz", "group": "runtime"},
@@ -871,31 +871,27 @@ else
   echo "skip - pacman resolution of the repository order (no pacman on this host)"
 fi
 
-# Neo stages a matched, authenticated board contract; legacy images keep theirs.
+# Every image stages the engine's matched J700 board contract from the authenticated Aura package.
 (
-  candidates=$scratch/neo-boot-inputs
-  target=$scratch/neo-boot-target
+  candidates=$scratch/board-boot-inputs
+  target=$scratch/board-boot-target
   mkdir -p "$candidates" "$target/usr/share/aura/stage1" "$target/boot/efi/m1n1"
-  echo '{"hardware_profile":"neo"}' >"$candidates/import.json"
+  echo '{}' >"$candidates/import.json"
   printf 'authenticated raw Stage 1' >"$target/usr/share/aura/stage1/aura-raw.bin"
   printf 'assembled Stage 2' >"$target/boot/efi/m1n1/boot.bin"
-  stage_neo_boot_payloads
+  stage_board_boot_payloads
   cmp "$target/usr/share/aura/stage1/aura-raw.bin" "$target/boot/efi/aurora/stage1-j700.bin" || exit 1
   cmp "$target/boot/efi/m1n1/boot.bin" "$target/boot/efi/m1n1/boot-j700.bin" || exit 1
   rm "$target/usr/share/aura/stage1/aura-raw.bin"
-  if (fail() { builder_fail "$@"; }; stage_neo_boot_payloads) >/dev/null 2>&1; then
+  if (fail() { builder_fail "$@"; }; stage_board_boot_payloads) >/dev/null 2>&1; then
     exit 1
   fi
-  rm "$target/boot/efi/aurora/stage1-j700.bin" "$target/boot/efi/m1n1/boot-j700.bin"
-  echo '{"hardware_profile":"legacy"}' >"$candidates/import.json"
-  stage_neo_boot_payloads
-  [[ ! -e $target/boot/efi/aurora/stage1-j700.bin && ! -e $target/boot/efi/m1n1/boot-j700.bin ]]
-) || fail "Neo boot payloads are missing, mismatched, or staged for a legacy image"
-pass "Neo stages matched board payloads and rejects missing Aura Stage 1; legacy stages none"
+) || fail "the J700 boot payloads are missing or mismatched"
+pass "every image stages matched J700 board payloads and rejects a missing Aura Stage 1"
 
-# Neo's base runtime requests must resolve to the same reviewed stack as Apple requests.
+# Base runtime requests must resolve to the same reviewed stack as Apple requests.
 (
-  candidates=$scratch/neo-runtime-inputs
+  candidates=$scratch/runtime-inputs
   mkdir -p "$candidates"
   printf '%s\n' '{"packages":[{"name":"mesa-aurora"},{"name":"vulkan-aurora"},{"name":"aurora-bless"}]}' >"$candidates/import.json"
   [[ $(qualified mesa vulkan-asahi asahi-bless | paste -sd' ' -) == "omarchy-candidates/mesa-aurora omarchy-candidates/vulkan-aurora omarchy-candidates/aurora-bless" ]] || exit 1
@@ -903,23 +899,20 @@ pass "Neo stages matched board payloads and rejects missing Aura Stage 1; legacy
   target_pacman() { [[ $* == "-Sp --print-format x omarchy-candidates/mesa-aurora" ]]; }
   available_base
   [[ ${base_names[*]} == "omarchy-candidates/mesa-aurora" ]]
-) || fail "Neo base package request bypasses the reviewed Mesa archive"
-pass "Neo base and Apple runtime requests use the reviewed Mesa, Vulkan and bless packages"
+) || fail "a base package request bypasses the reviewed Mesa archive"
+pass "base and Apple runtime requests use the reviewed Mesa, Vulkan and bless packages"
 
-# Neo's runtime transaction carries the reviewed Mesa, so stock mesa never installs
-# and the Apple set needs no conflict prompt. Legacy's runtime is unchanged.
+# The runtime transaction carries the reviewed Mesa, so stock mesa never installs
+# and the Apple set needs no conflict prompt.
 (
-  candidates=$scratch/neo-runtime-mesa
+  candidates=$scratch/runtime-mesa
   mkdir -p "$candidates"
-  printf '%s\n' '{"hardware_profile":"neo","packages":[{"name":"omarchy-dev","role":"omarchy"},{"name":"mesa-aurora"},{"name":"vulkan-aurora"}]}' >"$candidates/import.json"
+  printf '%s\n' '{"packages":[{"name":"omarchy-dev","role":"omarchy"},{"name":"mesa-aurora"},{"name":"vulkan-aurora"}]}' >"$candidates/import.json"
   mount_api() { :; }
   unmount_api() { :; }
-  target_pacman() { printf '%s\n' "$*" >"$scratch/neo-runtime-transaction"; }
+  target_pacman() { printf '%s\n' "$*" >"$scratch/runtime-transaction"; }
   base_names=(hyprland)
   install_runtime
-  [[ $(<"$scratch/neo-runtime-transaction") == "-S omarchy-candidates/omarchy-dev hyprland omarchy-candidates/mesa-aurora omarchy-candidates/vulkan-aurora" ]] || exit 1
-  printf '%s\n' '{"packages":[{"name":"omarchy-dev","role":"omarchy"},{"name":"mesa-aurora"},{"name":"vulkan-aurora"}]}' >"$candidates/import.json"
-  install_runtime
-  [[ $(<"$scratch/neo-runtime-transaction") == "-S omarchy-candidates/omarchy-dev hyprland" ]]
-) || fail "the Neo runtime transaction does not carry the reviewed Mesa, or legacy's does"
-pass "Neo installs the reviewed Mesa and Vulkan with the runtime; legacy's runtime is unchanged"
+  [[ $(<"$scratch/runtime-transaction") == "-S omarchy-candidates/omarchy-dev hyprland omarchy-candidates/mesa-aurora omarchy-candidates/vulkan-aurora" ]]
+) || fail "the runtime transaction does not carry the reviewed Mesa"
+pass "the runtime installs the reviewed Mesa and Vulkan"

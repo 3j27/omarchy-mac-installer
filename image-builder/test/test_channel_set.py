@@ -38,8 +38,8 @@ class ChannelSetTest(unittest.TestCase):
     def snapshot(self, **options) -> tuple[Path, str]:
         return fixtures.make_channel(self.work / "edge", self.channel, **options)
 
-    def freeze(self, database: Path, sha256: str, lane: str = "edge", hardware_profile="legacy") -> dict:
-        return channel_set.snapshot(database, sha256, lane, self.work / "edge/packages", self.work / "set", self.trust, hardware_profile)
+    def freeze(self, database: Path, sha256: str, lane: str = "edge") -> dict:
+        return channel_set.snapshot(database, sha256, lane, self.work / "edge/packages", self.work / "set", self.trust)
 
     def refused(self, message: str, database: Path, sha256: str, lane: str = "edge") -> None:
         with self.assertRaisesRegex(ValueError, message):
@@ -72,68 +72,64 @@ class ChannelSetTest(unittest.TestCase):
                          "the frozen set is read-only")
         self.assertEqual(fixtures.test_image_pin.pinned(summary), [], "a public image carries no test image pin")
 
-    def test_channel_keeps_legacy_boot_chain_without_neo_packages(self):
+    def test_the_channel_takes_the_aurora_stack_for_every_mac(self):
         entries = {}
         for role, name in fixtures.POLICY["channel"]["runtime_packages"].items():
             entries[name] = {"NAME": [name], "ARCH": ["aarch64"], "PROVIDES": [role]}
-        for name in fixtures.POLICY["boot_packages"]:
+        for name in fixtures.POLICY["boot_packages"] + fixtures.POLICY["support_packages"]:
             entries[name] = {"NAME": [name], "ARCH": ["aarch64"]}
         chosen = channel_set.resolve(entries, fixtures.POLICY, fixtures.POLICY["channel"])
         self.assertEqual({entry["NAME"][0] for _, _, entry in chosen}, set(entries))
-        self.assertEqual(sum(group == "support" for _, group, _ in chosen), 0)
-        self.assertIn("m1n1-aurora", entries)
-        self.assertIn("uboot-asahi", entries)
-        self.assertNotIn("aura", entries)
+        self.assertEqual(sum(group == "support" for _, group, _ in chosen), len(fixtures.POLICY["support_packages"]))
+        for name in ("aura", "uboot-aurora", "mesa-aurora", "vulkan-aurora", "aurora-bless", "speakerguardd"):
+            self.assertIn(name, entries)
 
-    def test_neo_channel_uses_signed_neo_boot_chain_and_dev_runtime(self):
-        database, sha256 = self.snapshot(hardware_profile="neo")
-        summary = self.freeze(database, sha256, hardware_profile="neo")
+    def test_the_channel_set_is_the_unified_aurora_set_with_the_dev_runtime(self):
+        database, sha256 = self.snapshot()
+        summary = self.freeze(database, sha256)
         manifest = json.loads((self.work / "set/manifest.json").read_text())
-        self.assertEqual(summary["hardware_profile"], "neo")
-        self.assertEqual(manifest["hardware_profile"], "neo")
-        self.assertIs(summary["candidate_only"], False)
+        self.assertNotIn("hardware_profile", summary)
+        self.assertNotIn("hardware_profile", manifest)
         names = {p.get("role", p["name"]): p["name"] for p in summary["packages"]}
         self.assertEqual(names["omarchy"], "omarchy-dev")
         self.assertEqual(names["omarchy-settings"], "omarchy-settings-dev")
-        self.assertIn("aura", names)
-        self.assertIn("uboot-aurora", names)
-        for package in ("mesa-aurora", "vulkan-aurora", "aurora-bless"):
+        for package in ("aura", "uboot-aurora", "mesa-aurora", "vulkan-aurora", "aurora-bless"):
             self.assertIn(package, names)
         self.assertNotIn("m1n1-aurora", names)
         self.assertNotIn("uboot-asahi", names)
-        self.assertEqual(set(channel_set.files(database, "edge", self.trust, "neo")),
+        self.assertEqual(set(channel_set.files(database, "edge", self.trust)),
                          {p["filename"] for p in summary["packages"]})
-        described = channel_set.describe(database, "edge", self.work / "edge/packages", self.trust, "neo")
+        described = channel_set.describe(database, "edge", self.work / "edge/packages", self.trust)
         self.assertEqual(described["manifest_sha256"], summary["manifest_sha256"])
         inspection = fixtures.load("inspection", "builder/inspection.py")
         imported = inspection.Candidates(self.work / "set")
         report = {}
-        inspection.check_supported_models(self.work, imported, report)
-        self.assertEqual(report["supported_models"], ["t8140-j700"])
+        inspection.check_supported_models(self.work, imported, report, fixtures.POLICY)
+        self.assertEqual(len(report["supported_models"]), 35)
+        self.assertIn("t8140-j700", report["supported_models"])
+        self.assertIn("t8122-j613", report["supported_models"])
 
-    def test_neo_channel_rejects_missing_unsigned_and_wrong_boot_payloads(self):
-        for defect in ("missing", "unsigned", "wrong-key", "wrong-payload"):
+    def test_the_channel_rejects_missing_unsigned_and_wrong_boot_payloads(self):
+        for defect in ("missing", "unsigned", "wrong-key", "wrong-payload", "replaced"):
             with self.subTest(defect=defect):
                 self.work = Path(tempfile.mkdtemp(dir=self.base))
-                options = {"hardware_profile": "neo"}
+                options = {}
                 if defect == "missing":
                     options["entry_edit"] = lambda name, text: text.replace("%NAME%\naura\n", "%NAME%\nother\n")
                 elif defect == "unsigned":
                     options["unsigned"] = ("aura",)
                 elif defect == "wrong-key":
                     options["signers"] = {"aura": self.candidate}
-                else:
-                    contents = fixtures.channel_contents("neo")
+                elif defect == "wrong-payload":
+                    contents = fixtures.channel_contents()
                     del contents["aura"]["usr/share/aura/stage1/aura-raw.bin"]
                     options["contents"] = contents
+                else:
+                    # Only the Asahi boot chain: the Aurora stack is gone from the channel.
+                    options["entry_edit"] = lambda name, text: text.replace("%NAME%\nuboot-aurora\n", "%NAME%\nuboot-asahi\n")
                 database, sha256 = self.snapshot(**options)
                 with self.assertRaises(ValueError):
-                    self.freeze(database, sha256, hardware_profile="neo")
-
-    def test_legacy_channel_cannot_be_relabelled_neo(self):
-        database, sha256 = self.snapshot()
-        with self.assertRaisesRegex(ValueError, "aura"):
-            self.freeze(database, sha256, hardware_profile="neo")
+                    self.freeze(database, sha256)
 
     def test_files_lists_the_archives_the_set_needs(self):
         database, sha256 = self.snapshot()
@@ -157,14 +153,14 @@ class ChannelSetTest(unittest.TestCase):
 
     def test_a_tampered_package_is_refused(self):
         database, sha256 = self.snapshot()
-        archive = next((self.work / "edge/packages").glob("uboot-asahi-*.xz"))
+        archive = next((self.work / "edge/packages").glob("uboot-aurora-*.xz"))
         archive.write_bytes(archive.read_bytes() + b"\0")
         self.refused("is not the archive the channel database lists", database, sha256)
 
     def test_a_tampered_package_signed_again_is_refused(self):
         database, sha256 = self.snapshot()
-        archive = next((self.work / "edge/packages").glob("m1n1-aurora-*.xz"))
-        fixtures.write_archive(archive, "m1n1-aurora", fixtures.VERSIONS["m1n1-aurora"],
+        archive = next((self.work / "edge/packages").glob("aura-*.xz"))
+        fixtures.write_archive(archive, "aura", fixtures.VERSIONS["aura"],
                                {"usr/lib/asahi-boot/m1n1.bin": b"another m1n1"}, [])
         self.channel.sign(archive)
         self.refused("is not the archive the channel database lists", database, sha256)
@@ -181,9 +177,9 @@ class ChannelSetTest(unittest.TestCase):
         self.refused("omarchy-dev does not provide omarchy", database, sha256)
 
     def test_a_database_without_a_set_package_is_refused(self):
-        database, sha256 = self.snapshot(entry_edit=lambda name, text: text.replace("%NAME%\nuboot-asahi", "%NAME%\nuboot")
-                                         if name == "uboot-asahi" else text)
-        self.refused("uboot-asahi", database, sha256)
+        database, sha256 = self.snapshot(entry_edit=lambda name, text: text.replace("%NAME%\nuboot-aurora", "%NAME%\nuboot")
+                                         if name == "uboot-aurora" else text)
+        self.refused("uboot-aurora", database, sha256)
 
     def test_archive_metadata_must_match_the_database(self):
         database, sha256 = self.snapshot(entry_edit=lambda name, text: text.replace("%ARCH%\naarch64", "%ARCH%\nany")

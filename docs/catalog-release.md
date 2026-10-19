@@ -87,6 +87,8 @@ The `sign` job waits for the owner's approval in the run page, in a dry run too:
 
 > **Parked.** rc and stable promotion waits for the kernel work. Run `mac-promote.yml` only as a dry run until the owner unparks it. A real promotion needs `dry-run` off, `confirm` set to `promote-<channel>` and `source-sha256` pinning the source catalog, then the owner's approval in `promote` and again in `catalog-release`.
 
+**What a promotion carries.** A promotion keeps every model, pin, preview note and installer requirement of the edge catalog it re-signs (`promote_catalog` in `scripts/catalog_release.py`). Promoting today's edge catalog to rc or stable would therefore ship the unified Aurora image (Aura's m1n1 and Stage 1, the Aurora U-Boot and Mesa, `speakerguardd`), the edge `omarchy-dev` runtime, the MacBook Neo, its `untested` note and app 2.3.0 as the minimum, all unchanged. Nothing narrows that scope. Accepting it is a maintainer decision to record before promotion is unparked.
+
 `.github/workflows/mac-promote.yml` (`workflow_dispatch` only) writes a signed `rc` or `stable` catalog over exactly the bytes a published channel catalog pins. Nothing is built and nothing new is uploaded: the image, engine and `installer_data.json` keep their URLs, sizes and digests; only `sequence` (the current Unix time) and `issuedAt` change. Promotion goes forward only: edge to rc or stable, rc to stable.
 
 | Job | Holds | Does |

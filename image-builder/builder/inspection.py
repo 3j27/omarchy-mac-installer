@@ -97,11 +97,8 @@ class Candidates:
         self.summary = json.loads((directory / "import.json").read_text())
         self.packages = {p["name"]: p for p in self.summary["packages"]}
         self.kind = self.summary.get("kind", "candidate")
-        self.hardware_profile = self.summary.get("hardware_profile", "legacy")
-        self.boot_owners = candidate_set.required_owners(self.hardware_profile)
-        manifest = json.loads((directory / "manifest.json").read_text())
-        require(manifest.get("hardware_profile", "legacy") == self.hardware_profile,
-                "hardware profile differs from the authenticated manifest")
+        self.boot_owners = candidate_set.REQUIRED_OWNERS
+        require("hardware_profile" not in self.summary, "the set records a retired hardware profile")
         require(self.kind in ("candidate", "channel"), f"the set is of an unknown kind: {self.kind}")
         self.roles = {p.get("role", p["name"]): p["name"] for p in self.summary["packages"]}
         self._listings: dict[str, list[str]] = {}
@@ -218,7 +215,7 @@ def check_apple_packages(root: Path, report: dict) -> str:
              if fields and not fields[0].startswith("#")]
     require(bool(names), f"{path.name} names no package")
     packages = installed_system.installed_provides(root)
-    # A Neo image installs aurora-bless where the list names asahi-bless.
+    # The image installs aurora-bless where the list names asahi-bless.
     filled = set(packages) | installed_system.aurora_replaced(packages)
     report["apple_package_list"] = path.name
     missing = [name for name in names if name not in filled]
@@ -235,6 +232,46 @@ def check_minimum_versions(root: Path, policy: dict) -> str:
         require(candidate_set.vercmp(installed, minimum) >= 0, f"{name} {installed} is below the minimum {minimum}")
         details.append(f"{name} {installed} >= {minimum}")
     return "; ".join(details)
+
+
+# speakerguardd (omacom/omarchy-pkgs pkgbuilds/speakerguardd) protects the
+# J700's speakers, and speakersafetyd every other Mac's. One image installs
+# both, so each must stand down where the other runs.
+SPEAKER_RULES_DIRS = ("usr/lib/udev/rules.d", "etc/udev/rules.d")
+SPEAKERGUARDD_RULES = "usr/lib/udev/rules.d/95-speakerguardd.rules"
+SPEAKERGUARDD_UNIT = "speakerguardd.service"
+SPEAKERSAFETYD_GUARD = "usr/lib/systemd/system/speakersafetyd.service.d/50-j700-guard.conf"
+FEEDBACK_GUARD = "usr/lib/speakerguardd/use-feedback-guard"
+
+
+def check_speaker_routing(root: Path) -> str:
+    """speakerguardd starts only for the J700's speaker codec, from its udev
+    rule, and is never enabled on its own; speakersafetyd skips the J700."""
+    require((root / SPEAKERGUARDD_RULES).is_file(), f"/{SPEAKERGUARDD_RULES} is missing")
+    wants = []
+    for directory in SPEAKER_RULES_DIRS:
+        for rules in sorted((root / directory).glob("*.rules")) if (root / directory).is_dir() else ():
+            for number, line in enumerate(rules.read_text(errors="replace").splitlines(), 1):
+                if SPEAKERGUARDD_UNIT in line and "SYSTEMD_WANTS" in line and not line.lstrip().startswith("#"):
+                    wants.append((f"/{rules.relative_to(root)}:{number}", line))
+    require(wants, f"no udev rule starts {SPEAKERGUARDD_UNIT}")
+    for where, line in wants:
+        require('ATTRS{id}=="AppleJ700"' in line, f"{where} starts {SPEAKERGUARDD_UNIT} for more than the AppleJ700 codec")
+    # The image's links point into the image, so they may dangle here: lexists, not exists.
+    enabled = sorted(f"/{wants.relative_to(root)}/{SPEAKERGUARDD_UNIT}" for base in ("etc/systemd/system", "usr/lib/systemd/system")
+                     if (root / base).is_dir() for wants in (root / base).glob("*.wants")
+                     if os.path.lexists(wants / SPEAKERGUARDD_UNIT))
+    require(not enabled, f"{SPEAKERGUARDD_UNIT} is enabled for every Mac: " + ", ".join(enabled))
+    guard = root / SPEAKERSAFETYD_GUARD
+    require(guard.is_file(), f"/{SPEAKERSAFETYD_GUARD} is missing, so speakersafetyd also runs on the J700")
+    lines = [line.strip() for line in guard.read_text(errors="replace").splitlines()]
+    require("[Service]" in lines and f"ExecCondition=/{FEEDBACK_GUARD}" in lines[lines.index("[Service]"):],
+            f"/{SPEAKERSAFETYD_GUARD} does not hold speakersafetyd to /{FEEDBACK_GUARD}")
+    condition = root / FEEDBACK_GUARD
+    require(condition.is_file() and os.access(condition, os.X_OK), f"/{FEEDBACK_GUARD} is missing or not executable")
+    require("apple,j700" in condition.read_text(errors="replace"), f"/{FEEDBACK_GUARD} does not test for the J700")
+    return (f"{SPEAKERGUARDD_UNIT} starts only for AppleJ700 ({len(wants)} udev rule) and is not enabled; "
+            "speakersafetyd skips the J700")
 
 
 def check_refused(root: Path, policy: dict) -> str:
@@ -255,15 +292,15 @@ def check_installed_payloads(root: Path, candidates: Candidates) -> str:
         installed = root / path
         require(installed.is_file() and not installed.is_symlink(), f"/{path} is missing")
         require(installed.read_bytes() == candidates.member(package, path), f"/{path} is not {package}'s from the set")
-    if candidates.hardware_profile == "neo":
-        stage1 = root / "boot/efi/aurora/stage1-j700.bin"
-        stage2 = root / "boot/efi/m1n1/boot-j700.bin"
-        require(stage1.is_file() and not stage1.is_symlink()
-                and stage1.read_bytes() == candidates.member("aura", "usr/share/aura/stage1/aura-raw.bin"),
-                "Neo Stage 1 does not match the authenticated Aura package")
-        require(stage2.is_file() and not stage2.is_symlink()
-                and stage2.read_bytes() == (root / "boot/efi/m1n1/boot.bin").read_bytes(),
-                "Neo Stage 2 does not match the inspected common bundle")
+    # The engine's J700 Stage 1 and Stage 2 (BOARD_STAGE1, BOARD_STAGE2).
+    stage1 = root / "boot/efi/aurora/stage1-j700.bin"
+    stage2 = root / "boot/efi/m1n1/boot-j700.bin"
+    require(stage1.is_file() and not stage1.is_symlink()
+            and stage1.read_bytes() == candidates.member("aura", "usr/share/aura/stage1/aura-raw.bin"),
+            "the J700 Stage 1 does not match the authenticated Aura package")
+    require(stage2.is_file() and not stage2.is_symlink()
+            and stage2.read_bytes() == (root / "boot/efi/m1n1/boot.bin").read_bytes(),
+            "the J700 Stage 2 does not match the inspected common bundle")
     return f"m1n1, U-Boot, the kernel and {len(candidates.dtbs())} device trees match the set's archives"
 
 
@@ -382,16 +419,13 @@ def check_package_mtrees(root: Path, candidates: Candidates) -> str:
     return f"all {len(candidates.packages)} package mtree references match their frozen archives"
 
 
-def check_supported_models(root: Path, candidates: Candidates, report: dict) -> str:
-    """Every Mac the image admits has its Aurora device tree in stage 2."""
+def check_supported_models(root: Path, candidates: Candidates, report: dict, policy: dict | None = None) -> str:
+    """Every Mac the image admits has its Aurora device tree in stage 2. The
+    trusted policy names them; the Aurora U-Boot ships no device trees."""
+    policy = policy if policy is not None else candidate_set.load_policy()
     kernel_dtbs = {PurePosixPath(p).name for p in candidates.dtbs()}
-    if candidates.hardware_profile == "neo":
-        # The Neo profile admits one board, and the Aurora U-Boot ships no device trees.
-        models = ["t8140-j700.dtb"]
-    else:
-        models = sorted(PurePosixPath(p).name for p in candidates.listing(candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"])
-                        if PurePosixPath(p).match("usr/lib/asahi-boot/dtb/*.dtb") and PurePosixPath(p).name != "t8140-j700.dtb")
-    require(models, "the set's U-Boot names no Mac")
+    models = sorted(f"{tree}.dtb" for tree in policy["device_trees"])
+    require(models, "the trust policy names no Mac")
     missing = [name for name in models if name not in kernel_dtbs]
     require(not missing, "the Aurora kernel lacks device trees for " + ", ".join(missing))
     report["supported_models"] = [name.removesuffix(".dtb") for name in models]
@@ -673,7 +707,6 @@ def inspect(root: Path, candidates_dir: Path, channel: str, factory: Path | None
     report: dict = {
         "schema": 1,
         "kind": "apple-image-inspection",
-        "hardware_profile": candidates.hardware_profile,
         "set": candidates.summary["set"],
         "source_commit": candidates.summary["source_commit"],
         "signer": candidates.summary["signer"],
@@ -692,7 +725,7 @@ def inspect(root: Path, candidates_dir: Path, channel: str, factory: Path | None
         ("candidate-files", lambda: check_candidate_files(root, candidates, report)),
         ("package-mtrees", lambda: check_package_mtrees(root, candidates)),
         ("m1n1-stage2", lambda: m1n1_stage2(root, candidates, report)),
-        ("aurora-device-trees", lambda: check_supported_models(root, candidates, report)),
+        ("aurora-device-trees", lambda: check_supported_models(root, candidates, report, policy)),
         ("limine-uki", lambda: check_limine(root, candidates, report)),
         ("embedded-initramfs", lambda: check_embedded_initramfs(root, report)),
         ("boot-splash", lambda: check_boot_splash(root, report)),
@@ -702,6 +735,7 @@ def inspect(root: Path, candidates_dir: Path, channel: str, factory: Path | None
         ("snapshots", lambda: check_snapshots(root)),
         ("pacman-config", lambda: check_pacman_config(root, channel, candidates)),
         ("installed-system", lambda: check_installed_system(root, report, candidates)),
+        ("speaker-routing", lambda: check_speaker_routing(root)),
     ]
     if factory is not None:
         checks.append(("factory", lambda: check_factory(factory, root, candidates)))

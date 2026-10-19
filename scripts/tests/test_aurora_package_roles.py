@@ -35,16 +35,20 @@ class AuroraPackageRolesTests(unittest.TestCase):
         result = self.inspect({"asahi-audio": ("impostor", ["asahi-audio=100"])} )
         self.assertIn("packages-required-present", result.failed)
 
-    def test_neo_support_packages_are_mandatory_authenticated_candidates(self):
+    def test_every_image_takes_the_aurora_stack_as_mandatory_authenticated_candidates(self):
         import json
         policy = json.loads((ROOT / "image-builder/builder/candidate-trust/policy.json").read_text())
-        self.assertEqual(set(policy["hardware_profiles"]["neo"]["support_packages"]), {
+        self.assertEqual(set(policy["support_packages"]), {
             "aurora-audio", "alsa-ucm-conf-aurora", "speakerguardd", "omarchy-aurora-firmware",
             "mesa-aurora", "vulkan-aurora", "aurora-bless",
         })
-        self.assertEqual(policy["support_packages"], [])
-        self.assertIn("m1n1-aurora", policy["boot_packages"])
-        self.assertNotIn("aura", policy["boot_packages"])
+        self.assertNotIn("hardware_profiles", policy)
+        self.assertIn("aura", policy["boot_packages"])
+        self.assertIn("uboot-aurora", policy["boot_packages"])
+        self.assertTrue({"m1n1", "m1n1-aurora", "uboot-asahi"} <= set(policy["refused_packages"]))
+        # Every supported Mac's kernel device tree, one per board of scripts/supported-models.json.
+        supported = json.loads((ROOT / "scripts/supported-models.json").read_text())["supported"]
+        self.assertEqual(sorted("apple," + tree.split("-", 1)[1] for tree in policy["device_trees"]), sorted(supported))
         self.assertFalse((ROOT / "image-builder/audio").exists())
         self.assertFalse((ROOT / "image-builder/firmware-ordering").exists())
 

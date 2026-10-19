@@ -123,7 +123,7 @@ jobs:
         run: xcodebuildmcp swift-package test --package-path "$PWD" --configuration release 2>&1 | tee "$RUNNER_TEMP/installer-ci/swift-release.log"
       - name: Build Recovery enrollment app and run its standalone fixtures
         run: bash Recovery/build-app.sh recovery "$RUNNER_TEMP/installer-ci/recovery-enrollment" 2>&1 | tee "$RUNNER_TEMP/installer-ci/recovery-enrollment.log"
-      - name: Export the immutable native Recovery input for Neo checks
+      - name: Export the immutable native Recovery input for the image contract check
         run: |
           source Packaging/identity.conf
           tar -cf "$RUNNER_TEMP/installer-ci/native-recovery.tar" -C "$RUNNER_TEMP/installer-ci/recovery-enrollment" "$INSTALLER_RECOVERY_APP_NAME.app" omarchy-recovery-app.json
@@ -186,8 +186,8 @@ jobs:
           path: ${{ runner.temp }}/image-builder-ci/
           retention-days: 14
 
-  neo-recovery:
-    name: Neo and native Recovery image contract (check only)
+  native-recovery:
+    name: Native Recovery image contract (check only)
     needs: macos
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -203,14 +203,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libarchive-tools jq gnupg zstd xz-utils
-      - name: Check the macOS-built Recovery artifact with the Neo profile
+      - name: Check the macOS-built Recovery artifact through the image contract
         run: |
           tar -xf "$RUNNER_TEMP/native-recovery/native-recovery.tar" -C "$RUNNER_TEMP/native-recovery"
-          python3 image-builder/test/neo-recovery-check.py --recovery-app "$RUNNER_TEMP/native-recovery" --output "$RUNNER_TEMP/neo-recovery-check"
+          python3 image-builder/test/native-recovery-check.py --recovery-app "$RUNNER_TEMP/native-recovery" --output "$RUNNER_TEMP/native-recovery-check"
       - name: Save check-only evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: neo-recovery-check-only
-          path: ${{ runner.temp }}/neo-recovery-check/
+          name: native-recovery-check-only
+          path: ${{ runner.temp }}/native-recovery-check/
           retention-days: 14

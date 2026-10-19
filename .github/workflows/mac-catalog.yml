@@ -6,7 +6,7 @@ name: Mac catalog
 #   prepare  no secrets: refuses unless the VM evidence record passed for the
 #            image's exact sha256, checks every artifact URL serves its pinned
 #            bytes, and builds catalog-<channel>.json enabling every supported
-#            M1, M2 and M3 Mac
+#            Mac (M1, M2, M3 and the MacBook Neo)
 #   release  mac-catalog-sign.yml, shared with the promote workflow: signs in
 #            the catalog-release environment (main only, the owner approves
 #            each run) after re-checking the evidence, then publishes from a

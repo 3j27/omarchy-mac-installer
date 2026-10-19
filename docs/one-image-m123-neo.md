@@ -1,5 +1,7 @@
 # One image for M1–M3 and the MacBook Neo
 
+> Historical design notes for the split developer images. The release builder now makes one Aurora image for every Mac ([image-builder/README.md](../image-builder/README.md#hardware-scope)).
+
 Pre-release `neo-preview-dev5-20261011` ships two developer images built from the same Aurora 2026.10.11.14 kernel: one for M1, M2 and M3 Macs (`build5-m123.sh`) and one for the MacBook Neo (`apple,j700`, T8140, `build5-neo.sh`). Two images mean two builds, two 3.7 GB downloads, two catalog groups and two qualification runs for every kernel bump. This note records how one image replaces both. It condenses the spec and tickets kept in `.scratch/one-image-m123-neo/` in the omacom/omarchy-mac-installer working tree (local files; tickets are named by number below, under `.scratch/one-image-m123-neo/issues/`).
 
 Status: design and source prototype. Nothing here has been built on pancake, installed on a Mac, signed or published. `apple,j614s` and every M4 or later Mac stay refused.
@@ -61,7 +63,7 @@ Ticket 04. These changes are in the working tree of `Engine/overlay/src/omarchy_
 
 ## The update-m1n1 selector
 
-Ticket 03. Two files in `image-builder/one-image/`, uncommitted:
+Ticket 03. Two files in `image-builder/archive/one-image/` (archived; the release builder makes one Aurora image):
 
 - **`update-m1n1.default`** becomes the image's `/etc/default/update-m1n1`. Its first 14 lines are `omarchy-mac-boot`'s packaged file byte for byte (`export LC_ALL=C` and the `dtb_overlays_update_m1n1` call, from omacom/omarchy-mac-pkgs `2dc0ad6c`). One appended block sources the selector, or exits 1 if the selector is missing.
 - **`update-m1n1-board`** installs at `/usr/lib/omarchy-mac-image/update-m1n1-board`, unowned until a package adopts it. It reads `/proc/device-tree/compatible` (NUL-separated):
@@ -110,7 +112,7 @@ The image also needs `omarchy-mac-boot` (omacom/omarchy-mac-pkgs) to adopt the s
 
 ## Build script
 
-Ticket 05: `image-builder/one-image/build6-m123-neo.sh`, written but not yet run. It starts from `build5-m123.sh` (stock 2026.09.26 edge base, one pass) and installs `m1n1-neo` beside `m1n1-aurora`, refusing a package whose `.PKGINFO` still declares `conflict`, `provides` or `replaces` `= m1n1`. It adds the J700 U-Boot, both Stage 1s, the MT7932 policy, the gated Bluetooth unit (`/usr/lib/aurora-j700/bluetooth-admit`, `aurora-j700-bluetooth.service`), `arm64.nowfxt` and the selector, after checking that the image's `/etc/default/update-m1n1` is `omarchy-mac-boot`'s unmodified file. It skips `WIRELESS_REGDOM` and the stale J700 `m1n1.bin`. It runs update-m1n1 with `OMARCHY_M1N1_BOARD=j700` (moved to `esp/m1n1/boot-j700.bin`) and then `=m123` (`esp/m1n1/boot.bin`).
+Ticket 05: `image-builder/archive/one-image/build6-m123-neo.sh` (archived), written but not yet run. It starts from `build5-m123.sh` (stock 2026.09.26 edge base, one pass) and installs `m1n1-neo` beside `m1n1-aurora`, refusing a package whose `.PKGINFO` still declares `conflict`, `provides` or `replaces` `= m1n1`. It adds the J700 U-Boot, both Stage 1s, the MT7932 policy, the gated Bluetooth unit (`/usr/lib/aurora-j700/bluetooth-admit`, `aurora-j700-bluetooth.service`), `arm64.nowfxt` and the selector, after checking that the image's `/etc/default/update-m1n1` is `omarchy-mac-boot`'s unmodified file. It skips `WIRELESS_REGDOM` and the stale J700 `m1n1.bin`. It runs update-m1n1 with `OMARCHY_M1N1_BOARD=j700` (moved to `esp/m1n1/boot-j700.bin`) and then `=m123` (`esp/m1n1/boot.bin`).
 
 Post-checks: each `boot.bin` starts with its m1n1, carries the required device trees and ends with the right gzipped U-Boot; Stage 1 and selector digests match; sourcing the config refuses the build host's generic device tree; the Bluetooth gate is present; `wireless-regdom` is stock; no snapshots were created. Outputs are `omarchy-2026.10.11-aarch64-apple-silicon-mac-edge-m123-neo-os-package.zip` and three metadata files (`installer_data-m123-neo.json`, `-j613.json` with `["26.6.2"]`, `-j700.json`). The `m1n1-neo` inputs are `TICKET-02-PLACEHOLDER` values and the script refuses to start until they're filled. Running it is ticket 08.
 

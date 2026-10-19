@@ -5,7 +5,7 @@
   "asahi_installer_tag": "v0.9.2",
   "asahi_installer_revision": "dffbb38ef0c00c0431c609ecd8a00f42deb5b24c",
   "asahi_installer_data_revision": "42648e71423eba308d2e3e6228253eff679b068b",
-  "downstream_revision": "6b644750fa3165d47838892cdbc46801cfe75018",
+  "downstream_revision": "e884dc7b77da6eab2c7588744d15e373224c5094",
   "device_identifiers": [
     "apple,j314s",
     "apple,j314c",
@@ -40,7 +40,8 @@
     "apple,j514m",
     "apple,j516s",
     "apple,j516c",
-    "apple,j516m"
+    "apple,j516m",
+    "apple,j700"
   ],
   "installer": {
     "minimum_version": "2.3.0",
