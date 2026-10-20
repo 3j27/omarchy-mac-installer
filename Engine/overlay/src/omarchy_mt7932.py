@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Collect the MacBook Neo's MediaTek MT7932 radio inputs from macOS.
 
 aurora-silicon/linux's mt7932-fullmac (Wi-Fi) and mt7932_bt_pcie (Bluetooth)
@@ -11,9 +12,10 @@ lists them. Each comes from this Mac's own macOS:
 - config-original.bin (J7CF): the driver extension's IZUBA_wifi.cfg;
 - the Bluetooth firmware and PTX: /usr/share/firmware/bluetooth;
 - the Bluetooth address: the device tree's /chosen.
+- the country policy (policy/world-XZ.bin and policy/US.bin, J7RP): derived
+  from the driver extension's power tables by omarchy_mt7932_policy.
 
-The country policy (policy/world-XZ.bin, J7RP) is not derived here yet, so
-Wi-Fi does not start without it; Bluetooth does not need it.
+Wi-Fi does not start without the country policy; Bluetooth does not need it.
 
 Every output is checked the way the drivers check it before it is used.
 """
@@ -23,6 +25,8 @@ import os
 import plistlib
 import struct
 import subprocess
+
+import omarchy_mt7932_policy
 
 IZUBA = "System/Library/DriverExtensions/com.apple.AppleSunriseWLAN.dext/IZUBA"
 FACTORY_DATA = "System/Volumes/Hardware/FactoryData/System/Library/Caches/com.apple.factorydata"
@@ -233,10 +237,24 @@ def _read(root, *parts):
         return source.read()
 
 
-def collect(root="/", chosen=None):
+def country_policy(root="/"):
+    """{firmware path: bytes} for the Wi-Fi country policy files.
+
+    Each is derived from the driver extension's tables, passes the driver's
+    policy parser and has its pinned sha256.
+    """
+    try:
+        return omarchy_mt7932_policy.derive(omarchy_mt7932_policy.read_tables(os.path.join(root, IZUBA)))
+    except (omarchy_mt7932_policy.PolicyError, ValueError, RuntimeError) as error:
+        raise Mt7932Error(f"the Wi-Fi country policy cannot be derived: {error}") from error
+
+
+def collect(root="/", chosen=None, policy=True):
     """{firmware path: bytes} for this Mac's MT7932, all checked.
 
     Firmware paths are relative to /lib/firmware, as the drivers request them.
+    With policy false the country policy is left to country_policy(), so a
+    caller can keep Bluetooth when only the policy fails.
     """
     files = {}
     wifi = "mediatek/mt7932/"
@@ -266,6 +284,8 @@ def collect(root="/", chosen=None):
 
     config = _read(root, IZUBA, "IZUBA_wifi.cfg").decode("ascii")
     files[wifi + "config-original.bin"] = j7cf(config)
+    if policy:
+        files.update(country_policy(root))
 
     for name in BT_FIRMWARE:
         firmware = _read(root, BLUETOOTH, name)

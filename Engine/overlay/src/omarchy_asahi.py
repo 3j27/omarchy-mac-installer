@@ -27,6 +27,7 @@ import stub
 import omarchy_apple_aea
 import omarchy_mesa
 import omarchy_mt7932
+import omarchy_mt7932_policy
 import omarchy_als
 import omarchy_isp
 import omarchy_recovery
@@ -751,20 +752,38 @@ def _validate_neo_firmware_package(pkg):
         raise AsahiAdapterError("MacBook Neo firmware package is incomplete: " + ", ".join(sorted(missing)))
 
 
-def _collect_neo_radios(installer, pkg, collect=None, *, required=False):
+def _neo_country_policy(derive):
+    """(files, None) or ({}, error): the Wi-Fi country policy on its own,
+    so its failure costs Wi-Fi only and not Bluetooth."""
+    try:
+        files = derive() if derive is not None else {}
+        missing = sorted(name for name, _country in omarchy_mt7932_policy.POLICIES if not files.get(name))
+        if missing:
+            raise omarchy_mt7932.Mt7932Error("missing required files: " + ", ".join(missing))
+        return files, None
+    except Exception as error:  # any failure here costs the policy files only
+        return {}, error
+
+
+def _collect_neo_radios(installer, pkg, collect=None, policy=None, *, required=False):
     """Collect the Neo's complete MT7932 Wi-Fi and Bluetooth input set.
 
     The model-wide files are Apple's pinned 25G83 ones, fetched by the
-    bundled decoder; the calibration and address are this Mac's own.
+    bundled decoder; the calibration and address are this Mac's own. The
+    Wi-Fi country policy is derived from those files in a step of its own:
+    when radios are not required, its failure drops only the policy files,
+    and when they are, the policy is required with the rest.
     """
     if getattr(getattr(installer, "sysinfo", None), "device_class", "") != "j700ap":
         return
     try:
         if collect is None:
             with omarchy_apple_aea.neo_radio_root() as root:
-                files = omarchy_mt7932.collect(root)
+                files = omarchy_mt7932.collect(root, policy=False)
+                policy_files, policy_error = _neo_country_policy(lambda: omarchy_mt7932.country_policy(root))
         else:
             files = collect()
+            policy_files, policy_error = _neo_country_policy(policy)
         required_files = {
             "mediatek/mt7932/" + name for name in (
                 omarchy_mt7932.WIFI_PATCH, omarchy_mt7932.WIFI_RAM,
@@ -774,6 +793,11 @@ def _collect_neo_radios(installer, pkg, collect=None, *, required=False):
             "mediatek/" + omarchy_mt7932.BT_PTX,
             "mediatek/j700-mt7932-btcal.bin", "mediatek/j700-mt7932-bdaddr.bin",
         }
+        if required:
+            if policy_error is not None:
+                raise omarchy_mt7932.Mt7932Error(f"Wi-Fi country policy: {policy_error}")
+            required_files |= {name for name, _country in omarchy_mt7932_policy.POLICIES}
+        files = {**files, **policy_files}
         missing = sorted(name for name in required_files if not files.get(name))
         if missing:
             raise omarchy_mt7932.Mt7932Error("missing required files: " + ", ".join(missing))
@@ -783,6 +807,8 @@ def _collect_neo_radios(installer, pkg, collect=None, *, required=False):
             raise AsahiAdapterError(f"MacBook Neo radio firmware collection failed: {error}") from error
         logging.warning("MacBook Neo radio firmware unavailable; Wi-Fi and Bluetooth may be unavailable: %s", error)
         return
+    if policy_error is not None:
+        logging.warning("MacBook Neo Wi-Fi country policy unavailable; Wi-Fi will not start: %s", policy_error)
     for name, data in sorted(files.items()):
         pkg.add_file(name, asahi_firmware.core.FWFile(name, data))
     logging.info("MacBook Neo radio firmware: %d files", len(files))
