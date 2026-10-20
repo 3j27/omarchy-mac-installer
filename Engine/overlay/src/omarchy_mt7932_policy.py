@@ -21,15 +21,18 @@ change. Table 0 is the unsupported-rate bitmap, both passes included.
 
 Inputs and pins. The engine's inputs are the pinned 25G83 tables that
 omarchy_apple_aea's J700 range recipe fetches by raw_sha256, not the live
-macOS's. Two pins guard them:
+macOS's. Input and output checks guard the derivation:
 
 - PINNED_VERSION holds each table's {Ver:...} line as 25G83 ships it, and
   the format line where there is one. A table with another version line is
   refused before any row is read (a later macOS's IZUBA_db.dat, for one, has
   a newer channel matrix).
-- PINNED_OUTPUT holds the sha256 of each derived file. The recipe pins every
-  input and the derivation is deterministic, so any other result is a defect
-  here, and derive() refuses the policy rather than ship it.
+- PINNED_INPUT verifies every source table before parsing, including fields
+  used only by a country outside the original world/US pair.
+- PINNED_OUTPUT checks the qualified world, US and Canada results. Every
+  complete country is generated from the same authenticated tables and
+  checked with policy_parse before publication. PINNED_INVENTORY checks the
+  path and blob digest of every generated policy, including untested countries.
 
 build_country_policy gives table 2 six records (2.4 GHz channels 9 to 14)
 for every country, as macOS does. The stock mt7932_policy_parse accepts six only for XZ and requires
@@ -51,6 +54,14 @@ DB_NAME = "IZUBA_db.dat"
 SDB_NAME = "IZUBA_TxPwrLimit_SDB.dat"
 TABLES = (POWER_NAME, SAR_NAME, COMMON_NAME, DB_NAME, SDB_NAME)
 
+PINNED_INPUT = {
+    POWER_NAME: "03ee51df5231d131c1976f1d2ea7f81a1396988e63a132a318a9893e8ef5ec38",
+    SAR_NAME: "d8dc9dfff2ad2d1ddf301d892e60c93f476603992f71de9e742194a395ca850d",
+    COMMON_NAME: "43185e334cb074b9c89b71aa6440d5d22cc45e9d8dc1fdc66c8a4933f2376b6c",
+    DB_NAME: "a61e0b70cbc9a381fc41ff9afa8f036cbd032cadad66209134d4a5adfa18c8b2",
+    SDB_NAME: "042906f4b23f05d82f211549b22f195a57d3437b137009fda0a0e40935abbfd0",
+}
+
 # The version lines of the 26.6.2 (25G83) tables the J700 range recipe pins.
 PINNED_VERSION = {
     POWER_NAME: "{Ver:Izuba_WLAN_Final_dedicated_v8 Date:2025-12-18 06:17:25}",
@@ -67,17 +78,20 @@ PINNED_FORMAT = {
     SDB_NAME: None,
 }
 
-# Firmware path (relative to /lib/firmware) and country of each derived file.
+# Required baseline countries. Complete country rows are enumerated below.
 POLICIES = (
     ("mediatek/mt7932/policy/world-XZ.bin", "XZ"),
     ("mediatek/mt7932/policy/US.bin", "US"),
 )
-# sha256 of each file derived from the pinned 25G83 tables. Both equal the
-# files a MacBook Neo has brought Wi-Fi up with on the stock driver.
+# Qualified outputs from the pinned tables; each brought Wi-Fi up on Neo.
 PINNED_OUTPUT = {
     "mediatek/mt7932/policy/world-XZ.bin": "cbc887013ca6cc31ea1a326cba485a2c89c70ad6d3f85bbf4bbda65f60ebb97b",
     "mediatek/mt7932/policy/US.bin": "9e519590d4a66972cfd7909132f3567c7b47a5252f89d345c1e7083a7d5bb9fe",
+    "mediatek/mt7932/policy/CA.bin": "cf6f05261985ae48efa4c2802d645c26e6fb13d7eed3a5a64888ef372497f0da",
 }
+
+# SHA-256 of sorted ASCII "path<TAB>blob-sha256<LF>" records for all 244 outputs.
+PINNED_INVENTORY = "37419c03c0ba222d60eb78fdbdf9fed9ef1d005ef76a8bae0255d4a978defd5d"
 
 TEMPLATE_SECTIONS = frozenset({"MH"})
 NOT_LINUX_COUNTRY = frozenset({"X0", "X2", "X3"})
@@ -1373,12 +1387,37 @@ def _text(tables, name):
         raise SchemaError("grammar") from error
 
 
-def derive(tables, pins=PINNED_OUTPUT):
-    """{firmware path: bytes} for world-XZ.bin and US.bin, each parser-gated.
+def inventory_digest(policies):
+    records = "".join(f"{path}\t{hashlib.sha256(policies[path]).hexdigest()}\n"
+                      for path in sorted(policies))
+    return hashlib.sha256(records.encode("ascii")).hexdigest()
 
-    `tables` maps each table's file name to its bytes. With `pins`, each
-    result must have its pinned sha256; tests pass None for synthetic tables.
+
+def verify_outputs(policies, pins, inventory_pin):
+    for path, expected in pins.items():
+        if path not in policies:
+            raise PolicyError(f"missing pinned policy {os.path.basename(path)}")
+        digest = hashlib.sha256(policies[path]).hexdigest()
+        if digest != expected:
+            raise PolicyError(f"{os.path.basename(path)} is not the pinned policy (sha256 {digest})")
+    if inventory_pin is not None and inventory_digest(policies) != inventory_pin:
+        raise PolicyError("complete policy inventory does not match the pinned output")
+
+
+def derive(tables, pins=PINNED_OUTPUT, input_pins=PINNED_INPUT,
+           inventory_pin=PINNED_INVENTORY):
+    """{firmware path: bytes} for every complete country, each parser-gated.
+
+    `tables` maps each table's file name to its bytes. With `pins`, every
+    pinned output must be present and match, and the complete inventory must
+    match `inventory_pin`. Tests pass None for synthetic output checks.
     """
+    if input_pins is not None:
+        for name in TABLES:
+            if name not in tables:
+                raise SchemaError("missing " + name)
+            if hashlib.sha256(tables[name]).hexdigest() != input_pins.get(name):
+                raise SchemaError(name + " is not the pinned input")
     power = parse_power_cells(_text(tables, POWER_NAME))
     sar = parse_sar_cells(_text(tables, SAR_NAME))
     common = parse_common_cells(_text(tables, COMMON_NAME))
@@ -1386,10 +1425,18 @@ def derive(tables, pins=PINNED_OUTPUT):
     sdb = parse_sdb(_text(tables, SDB_NAME))
     db_rows = {label for label, _cells in db["2gCC"]}
     policies = {}
-    for path, country in POLICIES:
+    candidates = (set(power) | set(sar) | set(common) | db_rows) - {"00"}
+    countries = {
+        country for country in candidates
+        if join_status(country, power, sar, common, db_rows) == "ready"
+    }
+    for _path, country in POLICIES:
         status = join_status(country, power, sar, common, db_rows)
         if status != "ready":
             raise PolicyError(f"join {country} {status}")
+    for country in sorted(countries, key=lambda value: (value != "XZ", value)):
+        name = "world-XZ" if country == "XZ" else country
+        path = f"mediatek/mt7932/policy/{name}.bin"
         try:
             blob = _assemble_policy(country, power, sar, common, db, sdb)
         except (ValueError, RuntimeError) as error:
@@ -1398,11 +1445,9 @@ def derive(tables, pins=PINNED_OUTPUT):
             blob = five_record_table2(blob)
         if policy_parse(blob, country.encode("ascii")) != 0:
             raise PolicyError(f"{country} policy does not parse")
-        if pins is not None:
-            digest = hashlib.sha256(blob).hexdigest()
-            if digest != pins.get(path):
-                raise PolicyError(f"{os.path.basename(path)} is not the pinned policy (sha256 {digest})")
         policies[path] = blob
+    if pins is not None:
+        verify_outputs(policies, pins, inventory_pin)
     return policies
 
 
