@@ -492,13 +492,21 @@ isolated_chroot() {
     [[ -z $resolve_output ]] || echo "$resolve_output"
     return "$resolve_status"
   fi
+  # The image's own limine-entry-tool: noise, then its command line last.
+  if [[ $1 == limine-entry-tool ]]; then
+    [[ $* == "limine-entry-tool --get-cmdline $KERNEL --no-mutex --no-hooks" ]] || return 99
+    printf 'limine-entry-tool: notice\n%s' "$entry_tool_output"
+    return "$entry_tool_status"
+  fi
   local mode=${*: -1} script
   script=$(sed -e "s|/dev/disk/by-uuid|$boot_root/by-uuid|g" -e "s|/var/lib/omarchy/limine.enabled|$boot_root/gate|g" \
     -e "s|/usr/bin/omarchy-lifecycle-dispatch|$boot_root/bin/omarchy-lifecycle-dispatch|g")
   PATH=$boot_root/bin:$PATH OMARCHY_PATH=$boot_root/runtime /bin/bash -eE -s -- /dev/loop7 "$ROOT_UUID" "$mode" <<<"$script" || return
   mkdir -p "$target/boot/efi/EFI/Linux" "$target/boot/efi/EFI/BOOT" "$target/usr/share/limine" "$target/etc"
   echo "/Omarchy" >"$target/boot/efi/limine.conf"
-  echo uki >"$target/boot/efi/EFI/Linux/omarchy_$KERNEL.efi"
+  python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fixtures
+open(sys.argv[2], "wb").write(fixtures.pe_image({".cmdline": sys.argv[3].encode() + b" \n\0"}))' \
+    "$here/test" "$target/boot/efi/EFI/Linux/omarchy_$KERNEL.efi" "$uki_cmdline"
   echo limine | tee "$target/usr/share/limine/BOOTAA64.EFI" >"$target/boot/efi/EFI/BOOT/BOOTAA64.EFI"
 }
 boot_layout() {
@@ -507,6 +515,8 @@ boot_layout() {
   mkdir -p "$boot_root/bin" "$boot_root/runtime/install/hardware/apple" "$target/usr/bin" "$logs"
   : >"$boot_root/ran"
   resolve_output=/usr/lib/omarchy/mac-boot/setup-boot resolve_status=0
+  uki_cmdline="root=UUID=$ROOT_UUID rw rootfstype=btrfs" entry_tool_status=0
+  entry_tool_output=$'root=UUID='"$ROOT_UUID"$' rw rootfstype=btrfs\n'
   local part
   for part in "$@"; do
     case $part in
@@ -580,6 +590,26 @@ mkdir -p "$target/var/lib/omarchy"
 : >"$target/var/lib/omarchy/limine.enabled"
 if activate 2>/dev/null; then fail "a gate set before the boot setup is refused"; fi
 pass "the Limine gate must not be set before the boot setup runs"
+
+# The UKI carries what the image's limine-entry-tool composes from the
+# defaults and its drop-ins, in the tool's order.
+boot_layout dispatcher entry
+uki_cmdline="root=UUID=$ROOT_UUID rw quiet b=2 a=1" entry_tool_output=$'root=UUID='"$ROOT_UUID"$' rw quiet b=2 a=1\n'
+activate || fail "a UKI with limine-entry-tool's command line passes"
+[[ $(<"$work/limine-cmdline") == "root=UUID=$ROOT_UUID rw quiet b=2 a=1" && ! -e $target/boot/efi/limine-cmdline ]] ||
+  fail "the tool's command line stays in the builder's work directory" "$(<"$work/limine-cmdline")"
+for case in "order:root=UUID=$ROOT_UUID rw quiet a=1 b=2:0" "missing:root=UUID=$ROOT_UUID rw quiet b=2:0" \
+  "failed:root=UUID=$ROOT_UUID rw quiet b=2 a=1:1" "empty::0"; do
+  IFS=: read -r name output status <<<"$case"
+  boot_layout dispatcher entry
+  uki_cmdline="root=UUID=$ROOT_UUID rw quiet b=2 a=1" entry_tool_output=${output:+$output$'\n'} entry_tool_status=$status
+  if activate 2>"$scratch/boot-error"; then
+    fail "a UKI without limine-entry-tool's command line is refused ($name)"
+  fi
+  grep -Eq "limine-entry-tool cannot compose|does not carry limine-entry-tool's command line" "$scratch/boot-error" ||
+    fail "the refusal names the command line ($name)" "$(<"$scratch/boot-error")"
+done
+pass "the build holds the UKI's command line to the image's limine-entry-tool --get-cmdline, word for word and in its order"
 unset -f findmnt isolated_chroot
 
 # ── lab access ─────────────────────────────────────────────────────────────
