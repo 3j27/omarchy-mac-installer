@@ -26,6 +26,39 @@
     let espUUID: String
   }
 
+  /// The code identity the helper holds the native Recovery template to
+  /// before staging it. An explicit `OMARCHY_RECOVERY_TEMPLATE_REQUIREMENT`
+  /// (the template's exact cdhash, which the signing scripts write into the
+  /// package's daemon plist) wins and must have that form. An SMJobBless
+  /// helper runs from the job embedded in its binary, which is linked before
+  /// the template is signed and carries only the client requirement, so a
+  /// client pinned to a Developer ID team holds the template to that team.
+  enum RecoveryTemplateIdentity {
+    static let requirementEnvironmentVariable = "OMARCHY_RECOVERY_TEMPLATE_REQUIREMENT"
+    static let identifier = "org.aurorasilicon.omarchy.recovery.recovery"
+
+    static func developerIDRequirement(team: String) -> String {
+      "anchor apple generic and identifier \"\(identifier)\""
+        + " and certificate 1[field.1.2.840.113635.100.6.2.6]"
+        + " and certificate leaf[field.1.2.840.113635.100.6.1.13]"
+        + " and certificate leaf[subject.OU] = \"\(team)\""
+    }
+
+    static func requirement(environment: [String: String]) -> String? {
+      if let pinned = environment[requirementEnvironmentVariable] {
+        return pinned.range(of: "\\Acdhash H\"[0-9a-f]{40,64}\"\\z", options: .regularExpression)
+          != nil ? pinned : nil
+      }
+      guard
+        let client = environment[InstallerProductIdentity.clientRequirementEnvironmentVariable],
+        let team = RestoreImageHelper.teamIdentifier(inClientRequirement: client)
+      else {
+        return nil
+      }
+      return developerIDRequirement(team: team)
+    }
+  }
+
   enum RecoveryAccountHandoff {
     static func requireStartupSelection(for target: RecoveryAccountTarget) throws {
       let bytes = try AccountNativeCommand.checked(
@@ -114,10 +147,8 @@
         )
       }
       guard
-        let requirement = ProcessInfo.processInfo.environment[
-          "OMARCHY_RECOVERY_TEMPLATE_REQUIREMENT"],
-        requirement.range(of: "\\Acdhash H\"[0-9a-f]{40,64}\"\\z", options: .regularExpression)
-          != nil
+        let requirement = RecoveryTemplateIdentity.requirement(
+          environment: ProcessInfo.processInfo.environment)
       else {
         throw AccountSetupFailure(
           "The helper has no verified Recovery-template identity. Reinstall this build’s helper.")

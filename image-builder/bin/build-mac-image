@@ -1458,6 +1458,7 @@ SCRIPT
     fail "the image has no $KERNEL UKI for Limine (logs/limine-boot.log)"
   cmp -s "$target/usr/share/limine/BOOTAA64.EFI" "$target/boot/efi/EFI/BOOT/BOOTAA64.EFI" ||
     fail "the U-Boot slot does not carry Limine (logs/limine-boot.log)"
+  verify_uki_cmdline
   # limine-entry-tool gives an empty /etc/machine-id a value and keys its
   # history directory on the ESP by it. The image ships neither: the Mac
   # takes its own identity on the first boot, and the leaf rewrites the menu
@@ -1469,6 +1470,21 @@ SCRIPT
   done < <(grep -o 'machine-id=[0-9a-f]\{32\}' "$target/boot/efi/limine.conf" | cut -d= -f2 | sort -u)
   sed -i '/^comment: machine-id=/d' "$target/boot/efi/limine.conf"
   mkdir -p "$target/boot/efi/omarchy"
+}
+
+# The UKI embeds the command line limine-entry-tool composes from
+# /etc/default/limine and its drop-ins. The image's checkers read those files
+# without running image tools; here the image's own tool says what the UKI must
+# carry. Its answer stays in the builder's work directory, outside the image.
+verify_uki_cmdline() {
+  local expected=$work/limine-cmdline
+  : >"$logs/limine-cmdline.log"
+  isolated_chroot "$target" limine-entry-tool --get-cmdline "$KERNEL" --no-mutex --no-hooks 2>>"$logs/limine-cmdline.log" |
+    tail -n 1 >"$expected" ||
+    fail "limine-entry-tool cannot compose the $KERNEL command line (logs/limine-cmdline.log)"
+  python3 "$ROOT/builder/apple_limine.py" built-cmdline "$target/boot/efi/EFI/Linux/omarchy_$KERNEL.efi" "$expected" \
+    >>"$logs/limine-cmdline.log" 2>&1 ||
+    fail "the $KERNEL UKI does not carry limine-entry-tool's command line (logs/limine-cmdline.log)"
 }
 
 # Every installed package, traced to the pinned database that lists it and
