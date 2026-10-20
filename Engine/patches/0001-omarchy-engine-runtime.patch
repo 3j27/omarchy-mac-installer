@@ -101,7 +101,7 @@ index 88dd2ab..47aad7c 100644
          self.credentials_validated = False
          self.expert = False
          self.ipsw = None
-@@ -585,20 +611,9 @@ class InstallerMain:
+@@ -585,20 +611,11 @@ class InstallerMain:
          self.step2(report=True)
  
      def choose_ipsw(self, supported_fw=None):
@@ -122,10 +122,12 @@ index 88dd2ab..47aad7c 100644
 +        minver, avail = omarchy_firmware.available_ipsws(
 +            IPSW_VERSIONS, CHIP_MIN_VER, self.sysinfo, self.device,
 +            supported_fw, self.expert, split_ver)
++        if self.engine_runtime:
++            omarchy_firmware.require_available(minver, avail, split_ver)
  
          minver.sort(key=lambda ipsw: split_ver(ipsw.version))
  
-@@ -812,18 +827,15 @@ class InstallerMain:
+@@ -812,18 +829,15 @@ class InstallerMain:
          else:
              target = resizable[0]
  
@@ -153,7 +155,7 @@ index 88dd2ab..47aad7c 100644
  
          min_perc = 100 * min_size / total
  
-@@ -922,6 +934,25 @@ class InstallerMain:
+@@ -922,6 +936,25 @@ class InstallerMain:
  
          return True
  
@@ -179,7 +181,7 @@ index 88dd2ab..47aad7c 100644
      def action_select_disk(self):
          choices = {"1": "Internal storage"}
  
-@@ -939,21 +970,22 @@ class InstallerMain:
+@@ -939,21 +972,22 @@ class InstallerMain:
          return True
  
      def main(self):
@@ -215,7 +217,7 @@ index 88dd2ab..47aad7c 100644
              p_message("By default, this installer will hide certain advanced options that")
              p_message("are only useful for Asahi Linux developers. You can enable expert mode")
              p_message("to show them. Do not enable this unless you know what you are doing.")
-@@ -970,7 +1002,19 @@ class InstallerMain:
+@@ -970,7 +1004,19 @@ class InstallerMain:
  
          self.chip_min_ver = CHIP_MIN_VER.get(self.sysinfo.chip_id, None)
          self.device = DEVICES.get(self.sysinfo.device_class, None)
@@ -236,7 +238,7 @@ index 88dd2ab..47aad7c 100644
              p_error("This device is not supported yet!")
              p_error("Please check out the Asahi Linux Blog for updates on device support:")
              print()
-@@ -1126,6 +1170,19 @@ class InstallerMain:
+@@ -1126,6 +1172,19 @@ class InstallerMain:
  
          if self.cur_os is None and self.sysinfo.boot_mode != "macOS":
              self.cur_os = default_os
@@ -256,7 +258,7 @@ index 88dd2ab..47aad7c 100644
          self.check_cur_os()
  
          actions = {}
-@@ -1226,7 +1283,11 @@ if __name__ == "__main__":
+@@ -1226,7 +1285,11 @@ if __name__ == "__main__":
          logging.exception("Process execution failed")
          p_warning("If you need to file a bug report, please attach the log file:")
          p_warning(f"  {os.getcwd()}/installer.log")

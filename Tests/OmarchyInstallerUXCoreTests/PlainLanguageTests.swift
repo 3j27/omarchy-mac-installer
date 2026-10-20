@@ -39,6 +39,26 @@
       XCTAssertFalse(failure.retryRecoveryAvailable)
     }
 
+    func testAMacOnOlderFirmwareIsToldWhichMacOSToInstall() throws {
+      let notice = EngineFailureNotice(
+        reason: EngineFailureReason(rawValue: 6) ?? .unclassified,
+        exitStatus: 1, diskUnchanged: true,
+        summary:
+          "omarchy_firmware.FirmwareRequirementError: system firmware is older than macOS 26.6.2")
+      let failure = PlainLanguage.failure(for: EngineXPCSubmissionError.engineFailed(notice))
+      XCTAssertEqual(failure.headline, "Update macOS to install Omarchy")
+      XCTAssertTrue(failure.plainDetail.contains("older than macOS 26.6.2"))
+      XCTAssertTrue(failure.plainDetail.contains("No disk changes were made."))
+      XCTAssertTrue(try XCTUnwrap(failure.remedy).hasPrefix("Update macOS to 26.6.2 or later"))
+      XCTAssertFalse(failure.replanAvailable)
+      let changed = PlainLanguage.failure(
+        for: EngineXPCSubmissionError.engineFailed(
+          EngineFailureNotice(
+            reason: notice.reason, exitStatus: 1, diskUnchanged: false, summary: notice.summary)))
+      XCTAssertEqual(changed.headline, failure.headline)
+      XCTAssertTrue(try XCTUnwrap(changed.remedy).hasPrefix("Save the error details"))
+    }
+
     func testSpaceCautionsFollowAllocationAndReserveBoundary() {
       let plan = PlanDisplay(
         diskTotalBytes: 245_000_000_000, omarchyBytes: 40_000_000_000,
