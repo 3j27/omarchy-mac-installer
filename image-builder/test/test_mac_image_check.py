@@ -633,10 +633,10 @@ class BootTreeTest(unittest.TestCase):
     def test_command_line_refusals(self):
         line = f"root=UUID={check.ROOT_UUID} rw rootflags=subvol=@ rootfstype=btrfs quiet"
         cases = {
-            "two lines": (f'KERNEL_CMDLINE[default]+="{line}"\nKERNEL_CMDLINE[default]+="splash"\n', "one KERNEL_CMDLINE"),
+            "two lines": (f'KERNEL_CMDLINE[default]+="{line}"\nKERNEL_CMDLINE[default]+="splash"\n', "one generated"),
             "a set and an extended line": (f'KERNEL_CMDLINE[default]="{line}"\nKERNEL_CMDLINE[default]+="splash"\n',
-                                           "one KERNEL_CMDLINE"),
-            "an unquoted line": (f'KERNEL_CMDLINE[default]+={line.split()[0]}\n', "one KERNEL_CMDLINE"),
+                                           "one generated"),
+            "an unquoted line": (f'KERNEL_CMDLINE[default]+={line.split()[0]}\n', "unreadable"),
             "the kernel's own key": (f'KERNEL_CMDLINE[default]+="{line}"\nKERNEL_CMDLINE[{check.KERNEL}]+="quiet"\n',
                                      f"replaces the {check.KERNEL}"),
             "an extended line without the root": ('KERNEL_CMDLINE[default]+="rw quiet splash"\n', "lacks root=UUID="),
@@ -646,6 +646,32 @@ class BootTreeTest(unittest.TestCase):
                 (self.root / "etc/default/limine").write_text(text)
                 with self.assertRaisesRegex(check.CheckError, pattern):
                     check.check_boot(self.root)
+
+    def test_command_line_with_drop_ins(self):
+        """check_boot reads the line limine-entry-tool composes, drop-ins included."""
+        line = f"root=UUID={check.ROOT_UUID} rw rootflags=subvol=@ rootfstype=btrfs quiet"
+        (self.root / "etc/default/limine").write_text(f'KERNEL_CMDLINE[default]+="{line}"\n')
+        drop_ins = self.root / "etc/limine-entry-tool.d"
+        drop_ins.mkdir(parents=True)
+        drop_in = drop_ins / "omarchy-defaults.conf"
+        drop_in.write_text('KERNEL_CMDLINE[default]+=" quiet splash"\nKERNEL_CMDLINE[default]+=" initramfs_async=0"\n')
+        check.check_boot(self.root)
+        evil = "root=UUID=00000000-0000-0000-0000-000000000000"
+        cases = {
+            "a second root": (f'KERNEL_CMDLINE[default]+=" {evil}"\n', "unsafe"),
+            "encryption": ('KERNEL_CMDLINE[default]+=" rd.luks.name=x=root"\n', "unsafe"),
+            "ro": ('KERNEL_CMDLINE[default]+=" ro"\n', "unsafe"),
+            "the kernel's own key": (f'KERNEL_CMDLINE[{check.KERNEL}]+="quiet"\n', f"replaces the {check.KERNEL}"),
+        }
+        for name, (text, pattern) in cases.items():
+            with self.subTest(name):
+                (drop_ins / "50-extra.conf").write_text(text)
+                with self.assertRaisesRegex(check.CheckError, pattern):
+                    check.check_boot(self.root)
+        with self.subTest("the defaults resetting it"):
+            (drop_ins / "50-extra.conf").write_text(f'KERNEL_CMDLINE[default]+=" {evil}"\n')
+            (self.root / "etc/default/limine").write_text(f'KERNEL_CMDLINE[default]="{line}"\n')
+            check.check_boot(self.root)
 
 
 class SyncDatabasesTest(unittest.TestCase):

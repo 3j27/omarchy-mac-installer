@@ -169,31 +169,52 @@ def compose_cmdline(settings: list[tuple[str, str, str]]) -> str | None:
     return cmdline
 
 
-def kernel_cmdline(root: Path, kernel: str, verified: str) -> str:
-    """VERIFIED, the UKI's command line, if limine-entry-tool composes exactly
-    it from the finalized defaults and drop-ins and it boots the fstab's root."""
+def composed_cmdline(root: Path, kernel: str) -> str:
+    """The line limine-entry-tool --get-cmdline composes for KERNEL from the
+    finalized defaults' one KERNEL_CMDLINE[default] and the drop-ins."""
     defaults = cmdline_settings(regular(root / "etc/default/limine").decode(), "/etc/default/limine")
     if any(key == kernel for key, _, _ in defaults):
         raise ContractError(f"/etc/default/limine replaces the {kernel} command line")
     if len([key for key, _, _ in defaults if key == "default"]) != 1:
         raise ContractError("expected one generated Limine kernel command line")
-    if verified != compose_cmdline(cmdline_sources(root, kernel) + defaults):
-        raise ContractError("UKI command line differs from finalized defaults and drop-ins")
+    return compose_cmdline(cmdline_sources(root, kernel) + defaults)
+
+
+def menu_cmdline(cmdline: str) -> str:
+    """CMDLINE as limine-entry-tool writes it into a menu entry's cmdline:
+    split on whitespace, each word's first occurrence, single spaces."""
+    return " ".join(dict.fromkeys(cmdline.split()))
+
+
+def safe_words(cmdline: str) -> list[str]:
+    """CMDLINE's words, if it boots one btrfs root's @ read-write, unencrypted.
+    Removing repeated words, as the menu's form does, keeps this true."""
     # shlex reads quotes and backslashes; the kernel does not. Refuse them on
     # the final line, whichever file supplied them, before splitting it.
-    if "'" in verified or "\\" in verified:
+    if "'" in cmdline or "\\" in cmdline:
         raise ContractError("the kernel command line quotes or escapes a word")
     try:
-        words = shlex.split(verified)
+        words = shlex.split(cmdline)
     except ValueError:
         raise ContractError("fresh image has an unreadable kernel command line") from None
     roots = [word for word in words if word.startswith("root=")]
     flags = [word for word in words if word.startswith("rootflags=")]
-    if (len(roots) != 1 or not re.fullmatch(r"root=UUID=[0-9a-fA-F-]{36}", roots[0])
+    # One of each: removing repeats could otherwise change which value wins.
+    fstypes = [word for word in words if word.startswith("rootfstype=")]
+    if (len(roots) != 1 or fstypes != ["rootfstype=btrfs"] or not re.fullmatch(r"root=UUID=[0-9a-fA-F-]{36}", roots[0])
             or len(flags) != 1 or "subvol=@" not in flags[0][10:].split(",")
-            or "rw" not in words or "ro" in words or "rootfstype=btrfs" not in words
+            or "rw" not in words or "ro" in words
             or any(word.startswith(("rd.luks.", "cryptdevice=", "cryptkey=")) for word in words)):
         raise ContractError("fresh image has an unsafe or encrypted kernel command line")
+    return words
+
+
+def kernel_cmdline(root: Path, kernel: str, verified: str) -> str:
+    """VERIFIED, the UKI's command line, if limine-entry-tool composes exactly
+    it from the finalized defaults and drop-ins and it boots the fstab's root."""
+    if verified != composed_cmdline(root, kernel):
+        raise ContractError("UKI command line differs from finalized defaults and drop-ins")
+    roots = [word for word in safe_words(verified) if word.startswith("root=")]
     rows = [line.split() for line in regular(root / "etc/fstab").decode().splitlines()
             if line.strip() and not line.lstrip().startswith("#")]
     root_rows = [row for row in rows if len(row) >= 4 and row[1] == "/"]
@@ -273,7 +294,9 @@ def validate_artifacts(root: Path, kernel: str) -> dict[str, bytes]:
     if path_match[1] and path_match[1].lower() != hashlib.blake2b(regular(uki_path)).hexdigest():
         raise ContractError("Limine menu UKI verification hash differs")
     overrides = re.findall(r"^\s*cmdline:\s*(.*)$", entry[1], re.M)
-    if overrides and overrides != [expected_cmdline]:
+    # limine-entry-tool writes the line without repeated words or extra spaces;
+    # with Secure Boot off, systemd-stub boots it instead of the UKI's.
+    if overrides and overrides != [menu_cmdline(expected_cmdline)]:
         raise ContractError("Limine menu overrides the verified UKI command line")
     if "machine-id=" in menu:
         raise ContractError("Limine menu carries the builder's machine identity")

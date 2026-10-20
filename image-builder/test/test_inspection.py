@@ -374,6 +374,9 @@ class InspectionTest(unittest.TestCase):
                                        {f"{etc}/10-l.conf": 'KERNEL_CMDLINE[default]+="rd.luks.name=x=root"\n'}, "unsafe"),
             "a drop-in's second root": (extend, f"{base} {evil}",
                                         {f"{etc}/10-r.conf": f'KERNEL_CMDLINE[default]+="{evil}"\n'}, "unsafe"),
+            "a drop-in's second rootfstype": (extend, f"{base} rootfstype=ext4 rootfstype=btrfs",
+                                              {f"{etc}/10-t.conf": 'KERNEL_CMDLINE[default]+="rootfstype=ext4 rootfstype=btrfs"\n'},
+                                              "unsafe"),
             "a drop-in's ro": (extend, f"{base} ro", {f"{etc}/10-r.conf": 'KERNEL_CMDLINE[default]+="ro"\n'}, "unsafe"),
             "a UKI missing a drop-in word": (extend, f"{base} b=2", two, "drop-ins"),
             "a UKI with an extra word": (extend, f"{base} b=2 a=1 c=3", two, "drop-ins"),
@@ -402,6 +405,40 @@ class InspectionTest(unittest.TestCase):
             self.setUp()
             with self.assertRaisesRegex(limine.ContractError, "overrides the verified"):
                 self.limine_cmdline(extend, f"{base} b=2 a=1", two, menu_cmdline=base)
+
+    def test_limine_menu_command_line_is_the_form_limine_entry_tool_writes(self):
+        """Omarchy's drop-in leads its values with a space and repeats words: the
+        UKI keeps the composed line as is (limine-entry-tool 1.40.0's output for
+        these files); --add-uki writes the menu's cmdline: without repeated words
+        or extra spaces."""
+        limine = inspection.limine
+        base = self.inspect()["uki"]["cmdline"]
+        drop_in = {"etc/limine-entry-tool.d/omarchy-defaults.conf":
+                   'TARGET_OS_NAME="Omarchy"\n\n'
+                   'KERNEL_CMDLINE[default]+=" quiet splash loglevel=0 systemd.show_status=false"\n\n'
+                   '# Unpack synchronously.\nKERNEL_CMDLINE[default]+=" initramfs_async=0"\n'}
+        defaults = f'KERNEL_CMDLINE[default]+="{base}"\n'
+        raw = f"{base}  initramfs_async=0  quiet splash loglevel=0 systemd.show_status=false"
+        cleaned = f"{base} initramfs_async=0 systemd.show_status=false"
+        for name, menu in (("the menu's form", cleaned), ("no menu override", None)):
+            with self.subTest(name):
+                self.setUp()
+                sections = self.limine_cmdline(defaults, raw, drop_in, menu_cmdline=menu)
+                self.assertEqual(sections[".cmdline"], raw.encode() + b" \n\0")
+                self.assertEqual(self.inspect()["checks"]["limine-uki"]["result"], "passed")
+        for name, menu in (("the UKI's raw line", raw), ("a word missing", cleaned.replace(" initramfs_async=0", "")),
+                           ("an extra word", cleaned + " nomodeset"), ("another order", f"initramfs_async=0 {base}")):
+            with self.subTest(name):
+                self.setUp()
+                with self.assertRaisesRegex(limine.ContractError, "overrides the verified"):
+                    self.limine_cmdline(defaults, raw, drop_in, menu_cmdline=menu)
+        with self.subTest("a repeated root, which the menu's form would hide"):
+            self.setUp()
+            root = next(word for word in base.split() if word.startswith("root="))
+            repeated = {"etc/limine-entry-tool.d/10-root.conf": f'KERNEL_CMDLINE[default]+=" {root}"\n'}
+            with self.assertRaisesRegex(limine.ContractError, "unsafe"):
+                self.limine_cmdline(defaults, f"{base}  {root}", repeated, menu_cmdline=base)
+        self.assertEqual(limine.menu_cmdline(raw), cleaned)
 
     def test_built_command_line_is_limine_entry_tools(self):
         limine = inspection.limine
