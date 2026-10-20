@@ -350,10 +350,16 @@ def check_boot(root: Path) -> None:
     # The Mac boots Limine only: no GRUB configuration, image or retarget.
     for name in ("boot/grub", "etc/default/update-grub"):
         require(not (root / name).exists(), f"/{name} exists on an image without GRUB")
-    # The UKI's command line is derived from these defaults.
-    cmdline = re.findall(r'^KERNEL_CMDLINE\[default\]="([^"]*)"$', (root / "etc/default/limine").read_text(), re.M)
-    require(len(cmdline) == 1, "/etc/default/limine does not set one KERNEL_CMDLINE[default]")
-    arguments = cmdline[0].split()
+    # The UKI's command line is derived from these defaults: set (=), or
+    # extended by limine-entry-tool drop-ins (+=). A kernel's own key would
+    # replace them.
+    defaults = (root / "etc/default/limine").read_text()
+    require(not re.search(rf'^[ \t]*KERNEL_CMDLINE\["?{re.escape(KERNEL)}"?\]', defaults, re.M),
+            f"/etc/default/limine replaces the {KERNEL} command line")
+    lines = re.findall(r'^[ \t]*KERNEL_CMDLINE\["?default"?\].*$', defaults, re.M)
+    cmdline = re.findall(r'^[ \t]*KERNEL_CMDLINE\[("?)default\1\][ \t]*\+?=[ \t]*"([^"\n]*)"[ \t]*$', defaults, re.M)
+    require(len(lines) == 1 and len(cmdline) == 1, "/etc/default/limine does not set one KERNEL_CMDLINE[default]")
+    arguments = cmdline[0][1].split()
     for argument in (f"root=UUID={ROOT_UUID}", "rootfstype=btrfs"):
         require(argument in arguments, f"the Limine command line lacks {argument}")
     require(any(a.startswith("rootflags=") and "subvol=@" in a.split("=", 1)[1].split(",") for a in arguments),

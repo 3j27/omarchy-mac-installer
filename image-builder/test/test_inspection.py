@@ -260,6 +260,158 @@ class InspectionTest(unittest.TestCase):
                 change()
                 self.assertFails("limine-uki", pattern)
 
+    def limine_cmdline(self, defaults, uki, drop_ins=None, menu_cmdline=None):
+        """Writes /etc/default/limine's command line lines DEFAULTS, the DROP_INS
+        ({path: text}) and a UKI embedding UKI, then validates the Limine artifacts."""
+        limine = inspection.limine
+        fixtures.write(self.root, "etc/default/limine", 'ESP_PATH="/boot/efi"\n' + defaults)
+        for rel, text in (drop_ins or {}).items():
+            fixtures.write(self.root, rel, text)
+        path = self.root / "boot/efi/EFI/Linux/omarchy_linux-aurora.efi"
+        sections = limine.pe_sections(path)
+        sections[".cmdline"] = uki.encode() + b" \n\0"
+        data = fixtures.pe_image(sections)
+        path.write_bytes(data)
+        menu = self.root / "boot/efi/limine.conf"
+        menu.write_text(menu.read_text().split("#")[0] + "#" + hashlib.blake2b(data).hexdigest() + "\n"
+                        + (f"    cmdline: {menu_cmdline}\n" if menu_cmdline is not None else ""))
+        return limine.validate_artifacts(self.root, "linux-aurora")
+
+    def test_limine_command_line_composition_is_limine_entry_tools(self):
+        """Each case's expected line is limine-entry-tool 1.40.0's --get-cmdline
+        output for the same files (limine-mkinitcpio-hook 1.40.0-2)."""
+        limine = inspection.limine
+        usr, etc, conf = "usr/share/limine-entry-tool.d", "etc/limine-entry-tool.d", "etc/limine-entry-tool.conf"
+
+        def line(operator, value):
+            return f'KERNEL_CMDLINE[default]{operator}"{value}"\n'
+
+        cases = {
+            "= only": ({}, line("=", "base"), "base"),
+            "+= only": ({}, line("+=", "base"), "base"),
+            "= discards drop-ins": ({f"{etc}/10-a.conf": line("+=", "a")}, line("=", "base"), "base"),
+            "one drop-in": ({f"{etc}/10-a.conf": line("+=", "dropin=1")}, line("+=", "base"), "base dropin=1"),
+            "two drop-ins, in reverse": ({f"{etc}/10-a.conf": line("+=", "a"), f"{etc}/20-b.conf": line("+=", "b")},
+                                         line("+=", "base"), "base b a"),
+            "/usr, then /etc": ({f"{usr}/10-u.conf": line("+=", "u"), f"{etc}/10-e.conf": line("+=", "e")},
+                                line("+=", "base"), "base e u"),
+            "= in /etc resets /usr": ({f"{usr}/10-u.conf": line("+=", "u"), f"{etc}/10-e.conf": line("=", "e")},
+                                      line("+=", "base"), "base e"),
+            "= in a later drop-in resets": ({f"{etc}/10-a.conf": line("+=", "a"), f"{etc}/20-b.conf": line("=", "b")},
+                                            line("+=", "base"), "base b"),
+            "the conf file, after /usr": ({conf: line("+=", "conf"), f"{usr}/10-u.conf": line("+=", "u")},
+                                          line("+=", "base"), "base conf u"),
+            "the conf file, before /etc": ({conf: line("+=", "conf"), f"{etc}/10-x.conf": line("+=", "x")},
+                                           line("+=", "base"), "base x conf"),
+            "two default lines": ({}, line("+=", "base") + line("+=", "more"), "more base"),
+            "spacing kept": ({f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default] += "a b"\n'}, line("+=", "base  x"),
+                             "base  x a b"),
+            "an empty drop-in value": ({f"{etc}/10-a.conf": line("+=", "")}, line("+=", "base"), "base "),
+        }
+        for name, (files, defaults, expected) in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for rel, text in files.items():
+                    fixtures.write(root, rel, text)
+                settings = limine.cmdline_sources(root, "linux-aurora") + limine.cmdline_settings(defaults, "defaults")
+                self.assertEqual(limine.compose_cmdline(settings), expected)
+
+    def test_limine_command_line_set_or_extended_by_drop_ins(self):
+        base = self.inspect()["uki"]["cmdline"]
+        etc, usr = "etc/limine-entry-tool.d", "usr/share/limine-entry-tool.d"
+        two = {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="a=1 x"\n',
+               f"{etc}/20-b.conf": '# b\nKERNEL_CMDLINE[default] += "b=2"\n'}
+        cases = {
+            "set": (f'KERNEL_CMDLINE[default]="{base}"\n', base, {}),
+            "set, drop-ins discarded": (f'KERNEL_CMDLINE[default]="{base}"\n', base, two),
+            "extended, no drop-ins": (f'KERNEL_CMDLINE[default]+="{base}"\n', base, {}),
+            "extended by one drop-in": (f'KERNEL_CMDLINE[default]+="{base}"\n', f"{base} dropin=1",
+                                        {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="dropin=1"\n'}),
+            "extended by two, in reverse": (f'KERNEL_CMDLINE[default]+="{base}"\n', f"{base} b=2 a=1 x", two),
+            "extended by /etc, /usr and the conf file": (
+                f'KERNEL_CMDLINE[default] += "{base}"\n', f"{base} e c u",
+                {f"{etc}/10-e.conf": 'KERNEL_CMDLINE[default]+="e"\n', f"{usr}/10-u.conf": 'KERNEL_CMDLINE[default]+="u"\n',
+                 "etc/limine-entry-tool.conf": 'KERNEL_CMDLINE[default]+="c"\n'}),
+            "a drop-in's = resetting": (f'KERNEL_CMDLINE[default]+="{base}"\n', f"{base} e",
+                                        {f"{usr}/10-u.conf": 'KERNEL_CMDLINE[default]+="u"\n',
+                                         f"{etc}/10-e.conf": 'KERNEL_CMDLINE[default]="e"\n'}),
+        }
+        for name, (defaults, uki, drop_ins) in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                sections = self.limine_cmdline(defaults, uki, drop_ins, menu_cmdline=uki)
+                self.assertEqual(sections[".cmdline"], uki.encode() + b" \n\0")
+                self.assertEqual(self.inspect()["checks"]["limine-uki"]["result"], "passed")
+
+    def test_limine_command_line_refusals(self):
+        limine = inspection.limine
+        base = self.inspect()["uki"]["cmdline"]
+        etc = "etc/limine-entry-tool.d"
+        extend = f'KERNEL_CMDLINE[default]+="{base}"\n'
+        two = {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="a=1"\n',
+               f"{etc}/20-b.conf": 'KERNEL_CMDLINE[default]+="b=2"\n'}
+        evil = f"root=UUID={'0' * 8}-0000-0000-0000-{'0' * 12}"
+        cases = {
+            "two default lines": (extend + extend, f"{base} {base}", {}, "one generated"),
+            "no default line": ("", "a=1", {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="a=1"\n'}, "one generated"),
+            "a kernel's own key": (extend + 'KERNEL_CMDLINE[linux-aurora]+="quiet"\n', base, {}, "replaces the linux-aurora"),
+            "a drop-in's kernel key": (extend, base, {f"{etc}/10-k.conf": 'KERNEL_CMDLINE["linux-aurora"]+="k"\n'},
+                                       "replaces the linux-aurora"),
+            "the conf file's kernel key": (extend, base, {"etc/limine-entry-tool.conf": 'KERNEL_CMDLINE[linux-aurora]="k"\n'},
+                                           "replaces the linux-aurora"),
+            "an unreadable drop-in": (extend, f"{base} a", {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="a" # c\n'},
+                                      "unreadable"),
+            "a quote inside a value": (extend, f'{base} a"b', {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="a"b"\n'},
+                                       "unreadable"),
+            "a drop-in's single quotes": (extend, f"{base} a=' {evil} '",
+                                          {f"{etc}/10-a.conf": f'KERNEL_CMDLINE[default]+="a=\' {evil} \'"\n'},
+                                          "quotes or escapes"),
+            "the defaults' single quotes": (f'KERNEL_CMDLINE[default]+="{base} a=\' {evil} \'"\n',
+                                            f"{base} a=' {evil} '", {}, "quotes or escapes"),
+            "a drop-in's backslash": (extend, f"{base} a=\\ b", {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="a=\\ b"\n'},
+                                      "quotes or escapes"),
+            "a drop-in's encryption": (extend, f"{base} rd.luks.name=x=root",
+                                       {f"{etc}/10-l.conf": 'KERNEL_CMDLINE[default]+="rd.luks.name=x=root"\n'}, "unsafe"),
+            "a drop-in's second root": (extend, f"{base} {evil}",
+                                        {f"{etc}/10-r.conf": f'KERNEL_CMDLINE[default]+="{evil}"\n'}, "unsafe"),
+            "a drop-in's ro": (extend, f"{base} ro", {f"{etc}/10-r.conf": 'KERNEL_CMDLINE[default]+="ro"\n'}, "unsafe"),
+            "a UKI missing a drop-in word": (extend, f"{base} b=2", two, "drop-ins"),
+            "a UKI with an extra word": (extend, f"{base} b=2 a=1 c=3", two, "drop-ins"),
+            "a UKI with the drop-ins in file order": (extend, f"{base} a=1 b=2", two, "drop-ins"),
+            "a UKI with drop-in words before the defaults": (extend, f"b=2 a=1 {base}", two, "drop-ins"),
+            "a UKI keeping words a drop-in's = reset": (
+                extend, f"{base} b=2 a=1",
+                {**two, f"{etc}/20-b.conf": 'KERNEL_CMDLINE[default]="b=2"\n'}, "drop-ins"),
+            "a UKI ignoring the conf file": (extend, base, {"etc/limine-entry-tool.conf": 'KERNEL_CMDLINE[default]+="c"\n'},
+                                             "drop-ins"),
+            "a UKI with words no drop-in adds": (extend, f"{base} c=3", {}, "finalized defaults"),
+            "a set line with drop-ins": (f'KERNEL_CMDLINE[default]="{base}"\n', f"{base} b=2 a=1", two, "finalized defaults"),
+        }
+        for name, (defaults, uki, drop_ins, pattern) in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                with self.assertRaisesRegex(limine.ContractError, pattern):
+                    self.limine_cmdline(defaults, uki, drop_ins)
+        with self.subTest("a drop-in that is a link"):
+            self.setUp()
+            (self.root / etc).mkdir(parents=True)
+            (self.root / etc / "10-a.conf").symlink_to("/dev/null")
+            with self.assertRaisesRegex(limine.ContractError, "not a regular file"):
+                self.limine_cmdline(extend, base)
+        with self.subTest("a menu override of the verified line"):
+            self.setUp()
+            with self.assertRaisesRegex(limine.ContractError, "overrides the verified"):
+                self.limine_cmdline(extend, f"{base} b=2 a=1", two, menu_cmdline=base)
+
+    def test_built_command_line_is_limine_entry_tools(self):
+        limine = inspection.limine
+        uki = self.root / "boot/efi/EFI/Linux/omarchy_linux-aurora.efi"
+        line = limine.pe_sections(uki)[".cmdline"][:-3].decode()
+        limine.check_built_cmdline(uki, line)
+        for expected in ("", line + " a=1", line.replace(" splash", ""), line + "\nother"):
+            with self.subTest(expected=expected), self.assertRaises(limine.ContractError):
+                limine.check_built_cmdline(uki, expected)
+
     def test_embedded_initramfs_without_the_boot_packages_hooks(self):
         limine = inspection.limine
         members = {name: b"x" for name in limine.INITRD_FILES if "omarchy-mac-encrypt" not in name}

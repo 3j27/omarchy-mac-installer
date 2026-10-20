@@ -621,6 +621,32 @@ class BootTreeTest(unittest.TestCase):
         with self.assertRaisesRegex(check.CheckError, "lacks root=UUID="):
             check.check_boot(self.root)
 
+    def test_command_line_set_or_extended(self):
+        line = (f"root=UUID={check.ROOT_UUID} rw rootflags=subvol=@,x-systemd.device-timeout=0 "
+                "zswap.enabled=0 rootfstype=btrfs quiet splash")
+        for setting in (f'KERNEL_CMDLINE[default]="{line}"', f'KERNEL_CMDLINE[default]+="{line}"',
+                        f'KERNEL_CMDLINE[default] += "{line}"', f'  KERNEL_CMDLINE["default"]+="{line}"'):
+            with self.subTest(setting=setting):
+                (self.root / "etc/default/limine").write_text(f'ESP_PATH="/boot/efi"\n{setting}\n')
+                check.check_boot(self.root)
+
+    def test_command_line_refusals(self):
+        line = f"root=UUID={check.ROOT_UUID} rw rootflags=subvol=@ rootfstype=btrfs quiet"
+        cases = {
+            "two lines": (f'KERNEL_CMDLINE[default]+="{line}"\nKERNEL_CMDLINE[default]+="splash"\n', "one KERNEL_CMDLINE"),
+            "a set and an extended line": (f'KERNEL_CMDLINE[default]="{line}"\nKERNEL_CMDLINE[default]+="splash"\n',
+                                           "one KERNEL_CMDLINE"),
+            "an unquoted line": (f'KERNEL_CMDLINE[default]+={line.split()[0]}\n', "one KERNEL_CMDLINE"),
+            "the kernel's own key": (f'KERNEL_CMDLINE[default]+="{line}"\nKERNEL_CMDLINE[{check.KERNEL}]+="quiet"\n',
+                                     f"replaces the {check.KERNEL}"),
+            "an extended line without the root": ('KERNEL_CMDLINE[default]+="rw quiet splash"\n', "lacks root=UUID="),
+        }
+        for name, (text, pattern) in cases.items():
+            with self.subTest(name):
+                (self.root / "etc/default/limine").write_text(text)
+                with self.assertRaisesRegex(check.CheckError, pattern):
+                    check.check_boot(self.root)
+
 
 class SyncDatabasesTest(unittest.TestCase):
     """First boot resolves packages offline from the sync databases the image keeps."""
