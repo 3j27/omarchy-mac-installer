@@ -23,6 +23,11 @@
     case planIntegrity = 4
     /// A resumed run could not reconcile its checkpointed APFS target.
     case preparedResumeMismatch = 5
+    /// This Mac's system firmware is older than every OS firmware the release
+    /// allows (`omarchy_firmware.require_available`): macOS must be updated.
+    case macOSUpdateRequired = 6
+
+    static let firmwareTooOldPrefix = "system firmware is older than macOS "
 
     /// Exact final-exception messages raised by admission or resume checks in
     /// `omarchy_execution.admit_execution`, `omarchy_runtime` and the Asahi
@@ -30,6 +35,12 @@
     static func classify(exception: String, message: String) -> EngineFailureReason {
       guard knownExceptionTypes.contains(exception) else {
         return .unclassified
+      }
+      // "no installation firmware fits this Mac" is a release mistake, not
+      // an unsupported model, so it stays unclassified with its summary.
+      if exception == "FirmwareRequirementError" {
+        return requiredMacOSVersion(inMessage: message) != nil
+          ? .macOSUpdateRequired : .unclassified
       }
       switch message {
       case "approved extent changed", "approved extent is too small",
@@ -53,8 +64,24 @@
 
     private static let knownExceptionTypes: Set<String> = [
       "ExecutionAdmissionError", "EngineRuntimeError", "AsahiAdapterError",
-      "ContractError",
+      "ContractError", "FirmwareRequirementError",
     ]
+
+    /// The macOS version a firmware-too-old message names, e.g. "26.6.2".
+    static func requiredMacOSVersion(inMessage message: String) -> String? {
+      guard message.hasPrefix(firmwareTooOldPrefix) else { return nil }
+      let version = String(message.dropFirst(firmwareTooOldPrefix.count))
+      guard version.wholeMatch(of: /[0-9]{1,2}(\.[0-9]{1,3}){0,2}/) != nil else { return nil }
+      return version
+    }
+
+    /// The version to update to, read from a notice's summary line
+    /// (`module.FirmwareRequirementError: system firmware is older than macOS 26.6.2`).
+    public static func requiredMacOSVersion(inSummary summary: String) -> String? {
+      guard let range = summary.range(of: ": " + firmwareTooOldPrefix) else { return nil }
+      return requiredMacOSVersion(
+        inMessage: String(summary[summary.index(range.lowerBound, offsetBy: 2)...]))
+    }
   }
 
   /// The part of an engine failure that may leave the privileged helper: a

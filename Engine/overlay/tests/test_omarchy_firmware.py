@@ -8,7 +8,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from omarchy_firmware import available_ipsws, default_ipsw, stub_size  # noqa: E402
+from omarchy_firmware import (  # noqa: E402
+    FirmwareRequirementError, available_ipsws, default_ipsw, require_available, stub_size)
 
 PATCH = Path(__file__).resolve().parents[2] / "patches/0001-omarchy-engine-runtime.patch"
 GB = 1000**3
@@ -105,6 +106,8 @@ class PatchedFirmwareTableTests(unittest.TestCase):
         main = main.split("diff --git")[0]
         self.assertIn("+        minver, avail = omarchy_firmware.available_ipsws(", main)
         self.assertIn("+                stub_size=omarchy_firmware.stub_size(", main)
+        self.assertIn("+        if self.engine_runtime:\n"
+                      "+            omarchy_firmware.require_available(minver, avail, split_ver)\n", main)
         self.assertNotIn("+                stub_size=(STUB_SIZE_MACOS26", main)
 
 
@@ -175,6 +178,59 @@ class DefaultFirmwareTests(unittest.TestCase):
                                         None, False, split_ver)
         self.assertEqual([i.version for i in avail], ["26.6.2", "14.8.3"])
         self.assertEqual(minver, avail)
+
+
+def require(sysinfo, device, supported_fw):
+    minver, avail = available_ipsws(IPSW_VERSIONS, CHIP_MIN_VER, sysinfo, device,
+                                    supported_fw, False, split_ver)
+    require_available(minver, avail, split_ver)
+
+
+class FirmwareRequirementTests(unittest.TestCase):
+    # The edge image of 2026-10-19 offers every Mac 13.5, 14.8.3 and 26.6.2.
+    EDGE = ["13.5", "14.8.3", "26.6.2"]
+
+    def test_a_neo_on_macos_26_6_must_update_to_26_6_2(self):
+        # Seen on a MacBook Neo on 25G72: upstream printed and exited 1.
+        sysinfo, device = mac("j700ap", 0x8140, sys_firmware="mBoot-18000.161.9",
+                              macos_ver="26.6", sfr_full_ver="25.7.72.0.0,0")
+        with self.assertRaises(FirmwareRequirementError) as raised:
+            require(sysinfo, device, self.EDGE)
+        self.assertEqual(str(raised.exception), "system firmware is older than macOS 26.6.2")
+
+    def test_the_neo_on_26_6_2_or_later_passes(self):
+        for firmware, macos in (("mBoot-18000.161.10", "26.6.2"), ("mBoot-20457.1.29", "26.7.1")):
+            sysinfo, device = mac("j700ap", 0x8140, sys_firmware=firmware, macos_ver=macos)
+            require(sysinfo, device, self.EDGE)
+
+    def test_an_air_offered_only_26_6_2_on_older_firmware_must_update(self):
+        sysinfo, device = mac("j613ap", 0x8122, sys_firmware="iBoot-11881.140.96",
+                              macos_ver="15.6", sfr_full_ver="24.7.71.0.0,0")
+        with self.assertRaises(FirmwareRequirementError) as raised:
+            require(sysinfo, device, ["26.6.2"])
+        self.assertEqual(str(raised.exception), "system firmware is older than macOS 26.6.2")
+
+    def test_an_expert_only_entry_is_no_reason_to_update(self):
+        expert = IPSW("26.6.2", "26.0", "mBoot-18000.161.10", "25.7.83.0.0,0", True,
+                      ["j700ap"], "26.6.2")
+        sysinfo, device = mac("j700ap", 0x8140, sys_firmware="mBoot-18000.161.9",
+                              macos_ver="26.6", sfr_full_ver="25.7.72.0.0,0")
+        minver, avail = available_ipsws([expert], CHIP_MIN_VER, sysinfo, device,
+                                        None, False, split_ver)
+        with self.assertRaises(FirmwareRequirementError) as raised:
+            require_available(minver, avail, split_ver)
+        self.assertEqual(str(raised.exception), "no installation firmware fits this Mac")
+
+    def test_no_allowed_firmware_for_this_mac_says_so(self):
+        sysinfo, device = mac("j700ap", 0x8140)
+        with self.assertRaises(FirmwareRequirementError) as raised:
+            require(sysinfo, device, ["13.5", "14.8.3"])
+        self.assertEqual(str(raised.exception), "no installation firmware fits this Mac")
+
+    def test_an_installable_mac_is_left_alone(self):
+        for device_class, chip in (("j313ap", 0x8103), ("j413ap", 0x8112), ("j613ap", 0x8122)):
+            sysinfo, device = mac(device_class, chip)
+            require(sysinfo, device, self.EDGE)
 
 
 if __name__ == "__main__":
