@@ -45,7 +45,6 @@ except release.Refusal:
 if OPENSSL is None and os.environ.get("CI"):
     raise SystemExit("CI must provide OpenSSL 3 for the catalog signing tests")
 
-IMAGE = "omarchy-mac-edge-2026.10.14-0123456789ab"
 NOW = "2026-10-14T00:00:00Z"
 SEQUENCE = int(datetime.datetime(2026, 10, 14, tzinfo=datetime.timezone.utc).timestamp())
 REVISION = "1" * 40
@@ -65,6 +64,10 @@ def artifact(tag: str, name: str, data: bytes) -> dict:
 
 PAYLOAD_PARTS = [b"payload-part-zero" * 50, b"payload-part-one" * 40]
 PAYLOAD = b"".join(PAYLOAD_PARTS)
+# The image name: lane, date, package set id and image id (the payload's sha256).
+IMAGE = f"omarchy-mac-edge-2026.10.14-0123456789ab-{sha(PAYLOAD)[:12]}"
+# An image named before image ids were added: its release and the catalog pinning it are live.
+LEGACY_IMAGE = "omarchy-mac-edge-2026.10.14-0123456789ab"
 ENGINE = b"engine-tarball" * 30
 METADATA = b'{"os_list": []}\n'
 ZIP = f"{IMAGE}.zip"
@@ -322,6 +325,35 @@ class CatalogReleaseTests(ReleaseTestCase):
         self.assert_refused(result, "rc and stable come from promotion")
         with self.assertRaisesRegex(release.Refusal, "image must be"):
             release.check_image_name("omarchy-mac-edge-latest", "edge")
+
+    def test_image_names_with_and_without_an_image_id(self) -> None:
+        self.assertEqual(release.check_image_name(IMAGE, "edge", sha(PAYLOAD)), IMAGE)
+        self.assertEqual(release.check_image_name(LEGACY_IMAGE, "edge", sha(PAYLOAD)), LEGACY_IMAGE)
+        with self.assertRaisesRegex(release.Refusal, "names image id"):
+            release.check_image_name(IMAGE, "edge", "a" * 64)
+        for name in (f"{IMAGE}-0123456789ab", f"{LEGACY_IMAGE}-0123456789AB", f"{LEGACY_IMAGE}-0123456789a",
+                     f"{LEGACY_IMAGE}-", "omarchy-mac-edge-2026.10.14", f" {IMAGE}", 7):
+            with self.subTest(name), self.assertRaisesRegex(release.Refusal, "image must be"):
+                release.check_image_name(name, "edge")
+        with self.assertRaisesRegex(release.Refusal, "not built for the rc channel"):
+            release.check_image_name(IMAGE, "rc")
+
+    def test_a_catalog_names_its_image_and_still_takes_an_older_name(self) -> None:
+        now = datetime.datetime(2026, 10, 14, tzinfo=datetime.timezone.utc)
+        metadata = artifact(IMAGE, "installer_data.json", METADATA)
+
+        def build(image: str, payload: dict) -> dict:
+            return release.build_catalog("edge", image, payload, engine_document(), metadata, evidence_document(),
+                                         installer_document(), now)
+
+        for image in (IMAGE, LEGACY_IMAGE):
+            with self.subTest(image):
+                catalog = build(image, payload_document())
+                self.assertEqual({model["evidenceRevision"] for model in catalog["models"]}, {image})
+        # Another build's payload (a builder fix on the same packages and day) is not this image.
+        other = artifact(IMAGE, ZIP, b"a rebuilt payload")
+        with self.assertRaisesRegex(release.Refusal, "names image id"):
+            build(IMAGE, other)
 
     # ── signing ──────────────────────────────────────────────────────────────
 

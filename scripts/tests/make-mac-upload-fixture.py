@@ -8,7 +8,11 @@ acceptance evidence record for it is written too.
 
 Usage:
   make-mac-upload-fixture.py --out DIR [--size BYTES] [--seed TEXT]
-                             [--evidence FILE] [--run-url URL]
+                             [--build TEXT] [--evidence FILE] [--run-url URL]
+
+The seed stands for the package set (the name's package set id), the build
+for everything else that makes the zip's bytes (the name's image id): the
+same seed and build give the same bytes and name.
 
 Prints `name=<image name>` and `sha256=<zip sha256>`.
 """
@@ -28,14 +32,14 @@ def filler(seed: str, size: int) -> bytes:
     return (block * (size // len(block) + 1))[:size]
 
 
-def make(out: Path, size: int, seed: str) -> tuple[str, str]:
+def make(out: Path, size: int, seed: str, build: str = "") -> tuple[str, str]:
     out.mkdir(parents=True, exist_ok=True)
     zip_name = f"omarchy-{DATE}-aarch64-apple-silicon-mac-edge-os-package.zip"
-    payload = filler(seed, size)
+    payload = filler(seed + build, size)
     sha256 = hashlib.sha256(payload).hexdigest()
     (out / zip_name).write_bytes(payload)
     (out / f"{zip_name}.sha256").write_text(f"{sha256}  {zip_name}\n")
-    name = f"omarchy-mac-edge-{DATE}-{hashlib.sha256(seed.encode()).hexdigest()[:12]}"
+    name = f"omarchy-mac-edge-{DATE}-{hashlib.sha256(seed.encode()).hexdigest()[:12]}-{sha256[:12]}"
     for record in RECORDS:
         (out / record).write_text(f"fixture {record} for {name}\n")
     return name, sha256
@@ -61,10 +65,11 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--size", type=int, default=3 * 1024 * 1024 + 12345)
     parser.add_argument("--seed", default="mac-upload fixture")
+    parser.add_argument("--build", default="")
     parser.add_argument("--evidence", type=Path)
     parser.add_argument("--run-url", default="https://example.invalid/fixture")
     args = parser.parse_args()
-    name, sha256 = make(args.out, args.size, args.seed)
+    name, sha256 = make(args.out, args.size, args.seed, args.build)
     if args.evidence:
         args.evidence.parent.mkdir(parents=True, exist_ok=True)
         args.evidence.write_text(json.dumps(evidence(sha256, args.run_url), indent=2) + "\n")

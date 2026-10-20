@@ -93,7 +93,12 @@ REVISION = re.compile(r"^[0-9a-f]{40}$")
 ASAHI_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 ENGINE_VERSION = re.compile(r"^v[0-9A-Za-z+._-]{1,127}$")
 INSTALLER_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-IMAGE_NAME = re.compile(r"^omarchy-mac-([a-z]+)-[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9a-f]{12}$")
+# An image name (image-builder/bin/mac-image-check name):
+# omarchy-mac-<channel>-<YYYY.MM.DD>-<package set id>-<image id>, the image id
+# being the first 12 hex digits of the payload's sha256. Images built before
+# the image id was added (their releases, and the catalogs that pin them, are
+# live) are named without it, and a catalog may still be prepared for one.
+IMAGE_NAME = re.compile(r"^omarchy-mac-([a-z]+)-[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9a-f]{12}(?:-([0-9a-f]{12}))?$")
 FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$")
 
 # PKCS#8 and SubjectPublicKeyInfo prefixes of an Ed25519 key (RFC 8410).
@@ -293,11 +298,17 @@ def check_installer(document: object, engine: dict | None = None) -> dict:
     return document
 
 
-def check_image_name(name: object, channel: str) -> str:
-    if not isinstance(name, str) or not IMAGE_NAME.match(name):
-        raise Refusal(f"image must be omarchy-mac-<channel>-<YYYY.MM.DD>-<12 hex package set id>: {name}")
-    if IMAGE_NAME.match(name).group(1) != channel:
+def check_image_name(name: object, channel: str, payload_sha256: str | None = None) -> str:
+    """NAME, an image built for CHANNEL. A name with an image id must name
+    PAYLOAD_SHA256 when given; an older name without one is accepted as is."""
+    match = IMAGE_NAME.fullmatch(name) if isinstance(name, str) else None
+    if match is None:
+        raise Refusal("image must be omarchy-mac-<channel>-<YYYY.MM.DD>-<12 hex package set id>-<12 hex image id>"
+                      f" (or, for an image built before image ids, without the image id): {name}")
+    if match.group(1) != channel:
         raise Refusal(f"image {name} was not built for the {channel} channel")
+    if match.group(2) is not None and payload_sha256 is not None and match.group(2) != payload_sha256[:12]:
+        raise Refusal(f"image {name} names image id {match.group(2)}, not the payload's sha256 {payload_sha256}")
     return name
 
 
@@ -394,6 +405,7 @@ def build_catalog(
     check_channel(channel)
     check_image_name(image, channel)
     payload = check_artifact(payload, "payload", allow_parts=True)
+    check_image_name(image, channel, payload["sha256"])
     metadata = check_artifact(metadata, "installer_data")
     engine = check_engine(engine)
     check_evidence(evidence, payload["sha256"])

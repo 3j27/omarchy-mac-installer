@@ -102,6 +102,38 @@ class UploadTests(unittest.TestCase):
             self.assertEqual(sums[name], hashlib.sha256((release / name).read_bytes()).hexdigest())
         self.assertFalse(destination.discarded)
 
+    def use_build(self, build: str) -> None:
+        """This test's artifact becomes a build of the same package set on the same day; BUILD stands for
+        whatever else made its bytes (a builder fix, or nothing for a reproduced build)."""
+        self.artifact = self.directory / f"artifact-{build or 'reproduced'}"
+        self.image, self.sha256 = fixture.make(self.artifact, 3 * PART + 77, "test", build)
+        self.evidence = self.write_evidence(fixture.evidence(self.sha256, RUN_URL), f"evidence-{build}.json")
+
+    def test_a_rebuild_on_the_same_packages_and_day_gets_its_own_release(self):
+        # Run 39328508742: a builder fix on the published release's package set and day.
+        first, first_zip = self.image, next(self.artifact.glob("*.zip")).name
+        self.run_publish(self.destination())
+        before = {path.name: path.read_bytes() for path in (self.published / first).iterdir()}
+        self.use_build("builder fix")
+        self.assertNotEqual(self.image, first)
+        self.assertEqual(self.image.rsplit("-", 1)[0], first.rsplit("-", 1)[0], "the same lane, date and package set id")
+        self.assertEqual(next(self.artifact.glob("*.zip")).name, first_zip, "the zip keeps its file name")
+        destination = self.destination()
+        self.run_publish(destination)
+        self.assertIn(upload.SUMS_NAME, destination.puts)
+        self.assertEqual({path.name: path.read_bytes() for path in (self.published / first).iterdir()}, before)
+        sums = (self.published / self.image / upload.SUMS_NAME).read_text()
+        self.assertIn(f"{self.sha256}  {first_zip}\n", sums)
+
+    def test_a_reproduced_build_maps_to_the_same_release_and_uploads_nothing(self):
+        first = self.image
+        self.run_publish(self.destination())
+        self.use_build("")
+        self.assertEqual(self.image, first)
+        again = self.destination()
+        report = self.run_publish(again)
+        self.assertEqual((again.puts, report["uploaded"]), ([], []))
+
     def test_a_payload_within_the_limit_is_uploaded_whole(self):
         destination = self.destination(part_bytes=None)
         self.run_publish(destination)
@@ -228,6 +260,9 @@ class UploadTests(unittest.TestCase):
     def test_an_image_that_does_not_match_the_expected_sha256_is_refused(self):
         self.sha256 = "0" * 64
         self.evidence = self.write_evidence(fixture.evidence(self.sha256, "https://example.invalid/run"))
+        self.assertRefused("names image id", self.run_publish, self.destination())
+        # A name that agrees with the expected sha256 still needs the zip to have it.
+        self.image = f"{self.image.rsplit('-', 1)[0]}-{self.sha256[:12]}"
         self.assertRefused("not the expected", self.run_publish, self.destination())
 
     def test_an_artifact_missing_a_record_is_refused(self):
@@ -274,6 +309,9 @@ class UploadTests(unittest.TestCase):
         upload.check_inputs(**good)
         for message, change in {
             "not an image name": {"image": "omarchy-mac-edge-latest"},
+            # A name from before image ids: a new upload must name its bytes.
+            "<package set id>-<image id>": {"image": self.image.rsplit("-", 1)[0]},
+            "names image id": {"sha256": "a" * 64},
             "64 lowercase hex": {"sha256": "abc"},
             "not a run id": {"run_ids": ["12; rm -rf /"]},
             "dry runs only": {"part_bytes": "1024"},

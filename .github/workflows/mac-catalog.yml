@@ -20,7 +20,7 @@ on:
   workflow_call:
     inputs:
       image:
-        description: Image name, omarchy-mac-<channel>-<YYYY.MM.DD>-<package set id>
+        description: Image name, omarchy-mac-<channel>-<YYYY.MM.DD>-<package set id>-<image id>
         type: string
         required: true
       payload:
@@ -64,7 +64,7 @@ on:
   workflow_dispatch:
     inputs:
       image:
-        description: Image name, omarchy-mac-<channel>-<YYYY.MM.DD>-<package set id>
+        description: Image name, omarchy-mac-<channel>-<YYYY.MM.DD>-<package set id>-<image id>
         type: string
         required: true
       payload:

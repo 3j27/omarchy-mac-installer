@@ -30,7 +30,7 @@ Only workflows of omacom/omarchy-mac-installer may call it (the `prepare` job ru
 
 All JSON inputs are strict: unknown keys are refused. Digests are 64 lowercase hex characters without a prefix. Every URL is https, without query, fragment or escapes, ends with its `fileName`, and lies under an immutable release location: `https://mac.omarchy.org/v1/releases/` or `.../v1/engine/`, or an asset of a release of omacom/omarchy-mac-installer whose tag does not start with `catalog-`.
 
-- `image`: `omarchy-mac-<channel>-<YYYY.MM.DD>-<12 hex package set id>`, the name `mac-image-check name` gives. It becomes every model's `evidenceRevision`.
+- `image`: `omarchy-mac-<channel>-<YYYY.MM.DD>-<12 hex package set id>-<12 hex image id>`, the name `mac-image-check name` gives, whose image id must be the first 12 hex digits of `payload`'s `sha256`. A name without the image id, the format of images built before it was added (their releases and the catalogs pinning them are live), is still accepted. It becomes every model's `evidenceRevision`.
 - `payload` (ticket 07's upload output for the image zip): `{"url", "fileName", "sizeBytes", "sha256", "parts"?}`. `parts` (2 to 16, for a host with a file size limit) is a list of `{"url", "fileName", "sizeBytes", "sha256"}` in order; their sizes sum to `sizeBytes` and their bytes join into `sha256`. The whole-file `url` is informational when parts are given.
 - `installer-data`: the image's `installer_data.json` as `{"url", "fileName", "sizeBytes", "sha256"}`.
 - `engine`: `{"version", "url", "fileName", "sizeBytes", "sha256", "downstreamRevision"}`, optionally `asahiInstallerTag`, `asahiInstallerRevision` and `asahiInstallerDataRevision`, which default to `Engine/source-lock.json`.

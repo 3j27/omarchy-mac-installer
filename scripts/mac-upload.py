@@ -69,7 +69,12 @@ GITHUB_PART_BYTES = 1992294400
 MAXIMUM_PART_COUNT = 16
 READ_BLOCK_BYTES = 8 * 1024 * 1024
 LISTING_ATTEMPTS = 6
-IMAGE_NAME = re.compile(r"^omarchy-mac-(edge|rc|stable)-\d{4}\.\d{2}\.\d{2}-[0-9a-f]{12}$")
+# The image name (image-builder/bin/mac-image-check name), which is also its
+# release's tag: lane, date, package set id and image id, the first 12 hex
+# digits of the zip's sha256. The image id makes each build's release its own:
+# a rebuild on the same packages and day never lands in a published release,
+# and the same bytes always go to the same one.
+IMAGE_NAME = re.compile(r"^omarchy-mac-(edge|rc|stable)-\d{4}\.\d{2}\.\d{2}-[0-9a-f]{12}-([0-9a-f]{12})$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[1-9][0-9]{0,19}$")
@@ -118,8 +123,11 @@ class HashSink:
 
 
 def check_inputs(image: str, sha256: str, dry_run: bool, run_ids: list[str], part_bytes: str) -> None:
-    require(IMAGE_NAME.fullmatch(image) is not None, f"{image!r} is not an image name (omarchy-mac-<lane>-<YYYY.MM.DD>-<set id>)")
+    name = IMAGE_NAME.fullmatch(image)
+    require(name is not None,
+            f"{image!r} is not an image name (omarchy-mac-<lane>-<YYYY.MM.DD>-<package set id>-<image id>)")
     require(SHA256_HEX.fullmatch(sha256) is not None, "the expected image sha256 must be 64 lowercase hex digits")
+    require(name.group(2) == sha256[:12], f"{image} names image id {name.group(2)}, not the zip's sha256 {sha256}")
     for run_id in run_ids:
         require(run_id == "" or RUN_ID.fullmatch(run_id) is not None, f"{run_id!r} is not a run id")
     if part_bytes:

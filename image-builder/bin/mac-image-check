@@ -22,9 +22,11 @@ descriptor  a build directory whose IMAGE names the lane, platform, builder
             sha256 and the inputs digest, matching the bytes and records
             beside it.
 name        a public build directory (descriptor, from a channel set): prints
-            the image's name, omarchy-mac-<lane>-<YYYY.MM.DD>-<package set id>,
-            the date its inputs were resolved (the payload's date) and the
-            first 12 hex digits of IMAGE's package_set_sha256.
+            the image's name,
+            omarchy-mac-<lane>-<YYYY.MM.DD>-<package set id>-<image id>, the
+            date its inputs were resolved (the payload's date), the first 12
+            hex digits of IMAGE's package_set_sha256 and the first 12 hex
+            digits of the payload zip's sha256.
 
 A channel build (its inputs record names channel_set=, builder/channel_set.py)
 names its channel set, signer and manifest and the channel database's sha256
@@ -908,12 +910,19 @@ def check_descriptor(lane: str, directory: Path) -> None:
     require(recorded == digests, "IMAGE does not name each payload member's sha256")
 
 
-# A public image's name: its lane, the date its inputs were resolved, and its
-# package set id, the first 12 hex digits of package_set_sha256 (every installed
-# package's name, version and archive sha256), so a rebuild of the same package
-# set on the same day has the same name and any changed package changes it.
+# A public image's name, which is also its release's tag: its lane, the date
+# its inputs were resolved, its package set id, the first 12 hex digits of
+# package_set_sha256 (every installed package's name, version and archive
+# sha256), and its image id, the first 12 hex digits of the payload zip's
+# sha256. The image id makes the name one build's: a builder or image fix on
+# the same packages and day (or any rebuild, since the image records when it
+# was built) gets a new release instead of colliding with a published one,
+# while the same bytes always map to the same name, so a re-upload of one
+# build stays a no-op. scripts/mac-upload.py and scripts/catalog_release.py
+# hold the name to the zip's sha256.
 PACKAGE_SET_ID_LENGTH = 12
-IMAGE_NAME = re.compile(r"^omarchy-mac-(edge|rc|stable)-\d{4}\.\d{2}\.\d{2}-[0-9a-f]{12}$")
+IMAGE_ID_LENGTH = 12
+IMAGE_NAME = re.compile(r"^omarchy-mac-(edge|rc|stable)-\d{4}\.\d{2}\.\d{2}-[0-9a-f]{12}-[0-9a-f]{12}$")
 
 
 def image_name(lane: str, directory: Path) -> str:
@@ -923,8 +932,10 @@ def image_name(lane: str, directory: Path) -> str:
     require(check_recorded_profile(lane, fields, "IMAGE") == "release", "a lab image is not named")
     digest = once(fields, "package_set_sha256", "IMAGE")
     require(re.fullmatch(r"[0-9a-f]{64}", digest) is not None, "IMAGE's package_set_sha256 is malformed")
-    date = re.match(r"^omarchy-(\d{4}\.\d{2}\.\d{2})-", payload_in(directory, lane).name).group(1)
-    name = f"omarchy-mac-{lane}-{date}-{digest[:PACKAGE_SET_ID_LENGTH]}"
+    payload = payload_in(directory, lane)
+    date = re.match(r"^omarchy-(\d{4}\.\d{2}\.\d{2})-", payload.name).group(1)
+    image_id = file_sha256(payload)[:IMAGE_ID_LENGTH]
+    name = f"omarchy-mac-{lane}-{date}-{digest[:PACKAGE_SET_ID_LENGTH]}-{image_id}"
     require(IMAGE_NAME.fullmatch(name) is not None, f"{name} is not an image name")
     return name
 

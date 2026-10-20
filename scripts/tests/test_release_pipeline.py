@@ -31,6 +31,8 @@ IMAGE = WORKFLOWS / "mac-image.yml"
 RECOVERY_APP = WORKFLOWS / "recovery-app.yml"
 CONFIG = ROOT / ".github" / "mac-release-pipeline.json"
 SHA = "a" * 64
+# The image name for SHA: lane, date, package set id and image id.
+IMAGE_NAME = f"omarchy-mac-edge-2026.10.14-0123456789ab-{SHA[:12]}"
 RUN_URL = "https://github.com/omacom/omarchy-mac-installer/actions/runs/1"
 
 
@@ -450,7 +452,7 @@ class AcceptanceJobs(unittest.TestCase):
 
 class Guard(unittest.TestCase):
     def guard(self, event: str = "workflow_dispatch", ref: str = "refs/heads/main", runner: str = DEFAULT_RUNNER,
-              scenarios: str = "fresh-install", image: str = "omarchy-mac-edge-2026.10.14-0123456789ab",
+              scenarios: str = "fresh-install", image: str = IMAGE_NAME,
               sha: str = SHA, run_id: str = "") -> tuple[int, str]:
         directory = Path(tempfile.mkdtemp(prefix="omarchy-acceptance-guard-"))
         self.addCleanup(shutil.rmtree, directory)
@@ -488,7 +490,8 @@ class Guard(unittest.TestCase):
     def test_malformed_inputs_never_reach_the_runner(self):
         for change in ({"runner": "not json"}, {"runner": "[]"}, {"runner": '["a b"]'}, {"runner": '{"group": "x"}'},
                        {"runner": '["self-hosted", 1]'}, {"scenarios": "fresh-install;id"}, {"scenarios": ""},
-                       {"scenarios": "--keep"}, {"image": "../etc"}, {"sha": "b" * 63}, {"run_id": "12x"}):
+                       {"scenarios": "--keep"}, {"image": "../etc"}, {"sha": "b" * 63}, {"run_id": "12x"},
+                       {"image": IMAGE_NAME.rsplit("-", 1)[0]}, {"sha": "b" * 64}):
             with self.subTest(change):
                 status, output = self.guard(**change)
                 self.assertNotEqual(status, 0)
@@ -506,7 +509,7 @@ class Gate(unittest.TestCase):
     def gate(self) -> tuple[int, str]:
         output = self.directory / "output"
         output.write_text("")
-        env = {"PATH": os.environ["PATH"], "IMAGE": "omarchy-mac-edge-2026.10.14-0123456789ab", "IMAGE_SHA256": SHA,
+        env = {"PATH": os.environ["PATH"], "IMAGE": IMAGE_NAME, "IMAGE_SHA256": SHA,
                "RECORD": str(self.record), "GITHUB_OUTPUT": str(output),
                "GITHUB_STEP_SUMMARY": str(self.directory / "summary")}
         result = subprocess.run(["bash", "--noprofile", "--norc", "-c", step_script(ACCEPTANCE, "Stop unless the image passed")],
@@ -540,7 +543,7 @@ class Record(unittest.TestCase):
               runner: str = "runs-on [\"omarchy-m2-lab\"], runner lab, host omarchy-m2") -> tuple[int, dict]:
         args = [sys.executable, "-I", str(SCRIPTS / "mac-acceptance-record.py"), "--sha256", SHA, "--scenarios", scenarios,
                 "--harness-status", status, "--harness-commit", HARNESS_COMMIT, "--runner", runner, "--run-url", RUN_URL,
-                "--image", "omarchy-mac-edge-2026.10.14-0123456789ab", "--reason", reason,
+                "--image", IMAGE_NAME, "--reason", reason,
                 "--out", str(self.directory / "out" / "acceptance-evidence.json")]
         if run_txt is not None:
             (self.directory / "run.txt").write_text(run_txt)
