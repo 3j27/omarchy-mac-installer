@@ -19,13 +19,6 @@ final class InstallerModel {
   var authorizationUsesSourceOwner = false { didSet { changed() } }
   var progress = 0.0 { didSet { changed() } }
   var currentOperation = "Preparing installation" { didSet { changed() } }
-  var machoBootMode = false {
-    didSet {
-      if !machoBootMode { nestedVirtualization = false }
-      changed()
-    }
-  }
-  var nestedVirtualization = false { didSet { changed() } }
   var operations: [String] = [] { didSet { changed() } }
   var failure: String? { didSet { changed() } }
   var environmentIssue: EnrollmentGateIssue? { didSet { changed() } }
@@ -239,9 +232,7 @@ final class InstallerModel {
   }
 
   private var installationTask: Task<Void, Never>?
-  var bootSelection: BootSelection {
-    BootSelection(machoEnabled: machoBootMode, nestedVirtualization: nestedVirtualization)
-  }
+  var bootSelection: BootSelection { BootSelection() }
 
   var steps: [String] {
     recoveryInterface

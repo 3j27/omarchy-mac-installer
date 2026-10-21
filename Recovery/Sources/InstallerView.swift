@@ -21,8 +21,6 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private var accountConfirmationField: NSSecureTextField?
   private var accountButton: NSButton?
   private var skipButton: NSButton?
-  private var advancedMachO: NSButton?
-  private var advancedNested: NSButton?
   private var issueShowing = false
   private var issueRepair = false
   private var authorizationRepair = false
@@ -348,11 +346,6 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     right.alignment = .centerY
     right.spacing = 12
     right.translatesAutoresizingMaskIntoConstraints = false
-    if model.stage == .welcome && !model.recoveryInterface {
-      let advanced = RecoveryTextButton(
-        title: "Advanced Options", target: self, action: #selector(advancedPressed))
-      right.addArrangedSubview(advanced)
-    }
     if model.stage != .welcome || !log.text.isEmpty {
       let details = RecoveryTextButton(
         title: "Show details", target: self, action: #selector(detailsPressed))
@@ -462,8 +455,6 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     panel.orderOut(nil)
     activePanel = nil
     authorizationField = nil
-    advancedMachO = nil
-    advancedNested = nil
     detailsViewer = nil
     refresh()
   }
@@ -538,45 +529,6 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   @objc private func cancelPanelPressed() {
     model.password.removeAll(keepingCapacity: false)
     closePanel()
-  }
-
-  @objc private func advancedPressed() {
-    let body = NSStackView()
-    body.orientation = .vertical
-    body.alignment = .leading
-    body.spacing = 14
-    let macho = NSButton(
-      checkboxWithTitle: "Enable Mach-O Boot Mode",
-      target: self, action: #selector(machoChanged))
-    macho.state = model.machoBootMode ? .on : .off
-    macho.isEnabled = RecoveryActions.supportsMachO
-    body.addArrangedSubview(macho)
-    let nested = NSButton(
-      checkboxWithTitle: "Enable Nested Virtualization",
-      target: self, action: #selector(nestedChanged))
-    nested.state = model.nestedVirtualization ? .on : .off
-    nested.isEnabled = RecoveryActions.supportsMachO && model.machoBootMode
-    body.addArrangedSubview(nested)
-    advancedMachO = macho
-    advancedNested = nested
-    let done = RecoveryPrimaryButton(
-      title: "Done", target: self, action: #selector(donePanelPressed))
-    done.keyEquivalent = "\r"
-    let panel = RecoverySheet(
-      title: "Advanced Options",
-      message: "Nested virtualization can reduce normal OS performance by up to 20%.",
-      width: 460, height: 280, body: body, bodyHeight: 80, buttons: [done])
-    present(panel)
-  }
-
-  @objc private func machoChanged() {
-    model.machoBootMode = advancedMachO?.state == .on
-    advancedNested?.isEnabled = RecoveryActions.supportsMachO && model.machoBootMode
-    advancedNested?.state = model.nestedVirtualization ? .on : .off
-  }
-
-  @objc private func nestedChanged() {
-    model.nestedVirtualization = advancedNested?.state == .on
   }
 
   @objc private func detailsPressed() {
