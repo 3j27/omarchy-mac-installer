@@ -353,7 +353,18 @@ final class InstallerModel {
       guard !restartingCompletedSetup else { return }
       restartingCompletedSetup = true
       DispatchQueue.global(qos: .userInitiated).async {
-        do { try RecoveryActions.restartCompletedSetup() } catch {
+        do {
+          guard try RecoveryActions.targetIsDefaultBoot() else {
+            InstallerLog.shared.append(
+              "This installation is not the startup disk. Opening Startup Disk.")
+            DispatchQueue.main.async {
+              self.restartingCompletedSetup = false
+              self.openStartupDisk()
+            }
+            return
+          }
+          try RecoveryActions.restartCompletedSetup()
+        } catch {
           InstallerLog.shared.append("Restart failed: " + error.localizedDescription)
           DispatchQueue.main.async {
             self.restartingCompletedSetup = false
@@ -370,6 +381,10 @@ final class InstallerModel {
       )
       return
     }
+    openStartupDisk()
+  }
+
+  private func openStartupDisk() {
     guard RecoveryActions.inRecovery else {
       environmentIssue = .notRecovery
       return
