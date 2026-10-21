@@ -351,6 +351,32 @@
       XCTAssertEqual(environment.approveCount, 0)
     }
 
+    func testThePlanSaysWhatHoldsInstall() async {
+      let environment = MockInstallerEnvironment()
+      environment.payloadPrefetchRequired = true
+      let gate = OperationGate()
+      environment.prefetchGate = gate
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      XCTAssertNil(session.planInstallHold)
+      await session.continueToPlan()
+      await gate.waitUntilEntered()
+      session.continueToPlanReview()
+
+      XCTAssertEqual(session.planInstallHold, PlainLanguage.installHoldAcknowledgement)
+      session.setSizeEditing(true)
+      XCTAssertEqual(session.planInstallHold, PlainLanguage.replanning)
+      session.setSizeEditing(false)
+      session.setAcknowledged(true)
+      XCTAssertEqual(session.planInstallHold, PlainLanguage.installHoldDownload)
+
+      await gate.release()
+      await waitUntil { session.prefetchState == .verified }
+      XCTAssertNil(session.planInstallHold)
+      session.approve()
+      XCTAssertNil(session.planInstallHold)
+    }
+
     func testReplanKeepsTheRunningDownload() async throws {
       let environment = MockInstallerEnvironment()
       environment.payloadPrefetchRequired = true

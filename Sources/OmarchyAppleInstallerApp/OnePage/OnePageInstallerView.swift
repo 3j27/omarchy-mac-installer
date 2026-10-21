@@ -291,21 +291,25 @@ struct OnePageInstallerView: View {
         .omarchyPrimaryButton()
         .keyboardShortcut(.defaultAction)
 
-    case .planReview(_, let acknowledged):
-      Button(PlainLanguage.planInstall) {
-        // Approve the exact plan and go straight to the password. If the
-        // helper is not ready the page stays here and says so.
-        session.approve()
-        if session.canStartInstallation {
-          session.presentInstallCredentials()
+    case .planReview:
+      VStack(spacing: 10) {
+        Button(PlainLanguage.planInstall) {
+          // Approve the exact plan and go straight to the password. If the
+          // helper is not ready the page stays here and says so.
+          session.approve()
+          if session.canStartInstallation {
+            session.presentInstallCredentials()
+          }
+        }
+        .omarchyPrimaryButton()
+        .disabled(session.planInstallHold != nil)
+        .keyboardShortcut(.defaultAction)
+        if let hold = session.planInstallHold {
+          Text(hold)
+            .font(OmarchyTheme.detail)
+            .foregroundStyle(OmarchyTheme.secondaryText)
         }
       }
-      .omarchyPrimaryButton()
-      .disabled(
-        !acknowledged || session.isBusy || session.isEditingSize
-          || session.prefetchState != .verified
-      )
-      .keyboardShortcut(.defaultAction)
 
     case .awaitingInstall:
       Button("Change size") { session.editPlan() }
