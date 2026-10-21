@@ -9,12 +9,19 @@ final class LogTextView: NSScrollView {
     super.init(frame: .zero)
     hasVerticalScroller = true
     autohidesScrollers = true
+    drawsBackground = true
+    backgroundColor = OmarchyTheme.window
+    wantsLayer = true
+    layer?.cornerRadius = OmarchyTheme.buttonRadius
+    layer?.borderColor = OmarchyTheme.separator.cgColor
+    layer?.borderWidth = 1
     editor.isEditable = false
     editor.isSelectable = true
     editor.isRichText = false
     editor.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
     editor.textColor = .textColor
     editor.drawsBackground = false
+    editor.textContainerInset = NSSize(width: 12, height: 12)
     editor.isVerticallyResizable = true
     editor.isHorizontallyResizable = false
     editor.autoresizingMask = [.width]

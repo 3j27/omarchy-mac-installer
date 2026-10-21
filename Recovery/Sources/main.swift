@@ -446,7 +446,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NSApp.applicationIconImage = DestinationVolume.icon
     LaunchTrace.mark("window.creatingContent")
     let controller = InstallerView(model: model)
-    window.contentView = controller.view
+    window.contentViewController = controller
     self.controller = controller
     window.setFrame(NSRect(x: 0, y: 0, width: 780, height: 660), display: false)
     LaunchTrace.mark("window.contentCreated")
