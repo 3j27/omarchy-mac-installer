@@ -2,6 +2,7 @@
   import CryptoKit
   import Foundation
   import RecoveryAccountCore
+  import Security
 
   public struct RecoveryAccountReply: Codable, Equatable, Sendable {
     public let ticket: String?
@@ -132,15 +133,45 @@
       try RecoveryFileTransaction.flushDirectory(state)
     }
 
-    static func updateRecoveryApp(for target: RecoveryAccountTarget) throws {
-      // The helper's own copy first: an app run from its disk image installs
-      // one with the helper, while the package leaves the app in /Applications.
+    /// Where to take the Recovery app from, best first: the template inside
+    /// the installer that asked for the handoff, wherever it runs from, then
+    /// the copy an ad hoc helper install keeps. Never another installer's
+    /// copy, such as an older one left in /Applications.
+    static func recoveryTemplateCandidates(clientBundle: URL?) -> [URL] {
+      let name = InstallerProductIdentity.recoveryAppBundleName
+      return [
+        clientBundle?.appendingPathComponent(
+          "Contents/Resources/RecoveryTemplate/" + name, isDirectory: true),
+        URL(
+          fileURLWithPath: InstallerProductIdentity.installedRecoveryTemplateDirectory + "/" + name,
+          isDirectory: true),
+      ].compactMap { $0 }
+    }
+
+    /// The bundle of the running process `pid`. The XPC connection has already
+    /// held that process to the client requirement, and the template found in
+    /// it is verified against the template requirement before any use, so a
+    /// reused PID can only name another correctly signed installer.
+    static func clientBundle(pid: pid_t) -> URL? {
+      var code: SecCode?
+      guard
+        SecCodeCopyGuestWithAttributes(
+          nil, [kSecGuestAttributePid: pid] as CFDictionary, [], &code) == errSecSuccess,
+        let code
+      else { return nil }
+      var staticCode: SecStaticCode?
+      guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else {
+        return nil
+      }
+      var path: CFURL?
+      guard SecCodeCopyPath(staticCode, [], &path) == errSecSuccess, let path else { return nil }
+      return path as URL
+    }
+
+    static func updateRecoveryApp(for target: RecoveryAccountTarget, clientBundle: URL?) throws {
       let fm = FileManager.default
-      let found = [
-        InstallerProductIdentity.installedRecoveryTemplateDirectory + "/"
-          + InstallerProductIdentity.recoveryAppBundleName,
-        "/Applications/\(InstallerProductIdentity.appName).app/Contents/Resources/RecoveryTemplate/\(InstallerProductIdentity.recoveryAppBundleName)",
-      ].map { URL(fileURLWithPath: $0) }.first { fm.fileExists(atPath: $0.path) }
+      let found = recoveryTemplateCandidates(clientBundle: clientBundle)
+        .first { fm.fileExists(atPath: $0.path) }
       guard let source = found else {
         throw AccountSetupFailure(
           "This installer is missing its native Recovery app. Reinstall the updated installer package."

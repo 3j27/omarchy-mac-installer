@@ -188,9 +188,12 @@
       self.selfUninstaller = selfUninstaller
     }
 
-    public func recoveryAccount(action: String, ticket: String, username: String, password: Data)
-      async throws -> RecoveryAccountReply
-    {
+    /// - Parameter clientBundle: the bundle of the installer asking, whose own
+    ///   Recovery template a handoff installs on the stub.
+    public func recoveryAccount(
+      action: String, ticket: String, username: String, password: Data,
+      clientBundle: URL? = nil
+    ) async throws -> RecoveryAccountReply {
       guard !isRetiring else { throw ClosedEngineHelperError.retiring }
       guard ["inspect", "handoff"].contains(action) else {
         throw ClosedEngineHelperError.invalidOperation
@@ -223,7 +226,8 @@
       }
       let record: RecoveryAccountRecord? = try await Task.detached {
         try RecoveryAccountHandoff.requireStartupSelection(for: observed.target)
-        try RecoveryAccountHandoff.updateRecoveryApp(for: observed.target)
+        try RecoveryAccountHandoff.updateRecoveryApp(
+          for: observed.target, clientBundle: clientBundle)
         return try RecoveryAccountInstaller.inspect(observed.target)
 
       }.value
@@ -587,11 +591,17 @@
       action: String, ticket: String, username: String, password: Data,
       reply: @escaping @Sendable (Data?, NSError?) -> Void
     ) {
+      // NSXPCConnection.current() is only valid synchronously inside the
+      // exported method, so the caller is resolved before the Task.
+      let clientBundle = NSXPCConnection.current().flatMap {
+        RecoveryAccountHandoff.clientBundle(pid: $0.processIdentifier)
+      }
       let server = server
       Task {
         do {
           let result = try await server.recoveryAccount(
-            action: action, ticket: ticket, username: username, password: password)
+            action: action, ticket: ticket, username: username, password: password,
+            clientBundle: clientBundle)
           reply(try JSONEncoder().encode(result), nil)
         } catch {
           let message =
