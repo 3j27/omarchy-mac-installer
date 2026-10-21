@@ -2,6 +2,7 @@
   import CryptoKit
   import Foundation
   import RecoveryAccountCore
+  import Security
 
   public struct RecoveryAccountReply: Codable, Equatable, Sendable {
     public let ticket: String?
@@ -132,18 +133,54 @@
       try RecoveryFileTransaction.flushDirectory(state)
     }
 
-    static func updateRecoveryApp(for target: RecoveryAccountTarget) throws {
-      // The helper's own copy first: an app run from its disk image installs
-      // one with the helper, while the package leaves the app in /Applications.
+    /// Where to take the Recovery app from, best first: the template inside
+    /// the installer that asked for the handoff, wherever it runs from, then
+    /// the copy an ad hoc helper install keeps. Never another installer's
+    /// copy, such as an older one left in /Applications.
+    static func recoveryTemplateCandidates(clientBundle: URL?) -> [URL] {
+      let name = InstallerProductIdentity.recoveryAppBundleName
+      return [
+        clientBundle?.appendingPathComponent(
+          "Contents/Resources/RecoveryTemplate/" + name, isDirectory: true),
+        URL(
+          fileURLWithPath: InstallerProductIdentity.installedRecoveryTemplateDirectory + "/" + name,
+          isDirectory: true),
+      ].compactMap { $0 }
+    }
+
+    /// The bundle of the running process `pid`, only while that process
+    /// satisfies `requirement`, the helper's client requirement. The connection
+    /// checked whoever connected; this checks whoever owns the PID now, so a
+    /// reused PID can only name another correctly signed installer.
+    static func clientBundle(pid: pid_t, requirement: String) -> URL? {
+      var code: SecCode?
+      guard
+        SecCodeCopyGuestWithAttributes(
+          nil, [kSecGuestAttributePid: pid] as CFDictionary, [], &code) == errSecSuccess,
+        let code
+      else { return nil }
+      var compiled: SecRequirement?
+      guard SecRequirementCreateWithString(requirement as CFString, [], &compiled) == errSecSuccess,
+        let compiled, SecCodeCheckValidity(code, [], compiled) == errSecSuccess
+      else { return nil }
+      var staticCode: SecStaticCode?
+      guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else {
+        return nil
+      }
+      var path: CFURL?
+      guard SecCodeCopyPath(staticCode, [], &path) == errSecSuccess, let path else { return nil }
+      return path as URL
+    }
+
+    static func updateRecoveryApp(for target: RecoveryAccountTarget, clientBundle: URL?) throws {
       let fm = FileManager.default
-      let found = [
-        InstallerProductIdentity.installedRecoveryTemplateDirectory + "/"
-          + InstallerProductIdentity.recoveryAppBundleName,
-        "/Applications/\(InstallerProductIdentity.appName).app/Contents/Resources/RecoveryTemplate/\(InstallerProductIdentity.recoveryAppBundleName)",
-      ].map { URL(fileURLWithPath: $0) }.first { fm.fileExists(atPath: $0.path) }
+      let found = recoveryTemplateCandidates(clientBundle: clientBundle)
+        .first { fm.fileExists(atPath: $0.path) }
       guard let source = found else {
         throw AccountSetupFailure(
-          "This installer is missing its native Recovery app. Reinstall the updated installer package."
+          clientBundle == nil
+            ? "Couldn’t confirm which installer asked to update Recovery. Quit the installer, open it again, and retry."
+            : "This installer is missing its native Recovery app. Download the installer again."
         )
       }
       guard
@@ -153,8 +190,20 @@
         throw AccountSetupFailure(
           "The helper has no verified Recovery-template identity. Reinstall this build’s helper.")
       }
-      _ = try AccountNativeCommand.checked(
+      let verification = try AccountNativeCommand.run(
         "/usr/bin/codesign", ["--verify", "--deep", "--strict", "-R=" + requirement, source.path])
+      guard verification.status == 0 else {
+        // An ad hoc helper pins one build's template by cdhash.
+        let pinned =
+          ProcessInfo.processInfo.environment[
+            RecoveryTemplateIdentity.requirementEnvironmentVariable]
+          != nil
+        throw AccountSetupFailure(
+          pinned
+            ? "This installer’s Recovery app doesn’t match the helper installed with it. Reinstall the helper from this build, then retry."
+            : "This installer’s Recovery app failed its signature check. Download the installer again."
+        )
+      }
       guard
         let templateInfo = try PropertyListSerialization.propertyList(
           from: Data(contentsOf: source.appendingPathComponent("Contents/Info.plist")), format: nil)
