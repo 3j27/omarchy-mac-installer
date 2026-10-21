@@ -823,8 +823,15 @@ def _iboot_system_container(dutil):
     return "/dev/r" + partition["DeviceIdentifier"]
 
 
+# The rebuilt root key is device-private. Keep collecting it off until the
+# firmware archive writer and the installed system keep it root-only 0600.
+COLLECT_NEO_ROOT_KEY = False
+
+
 def _collect_neo_touch_id(installer, pkg, collect=omarchy_mesa.collect,
-                          sensor_present=omarchy_mesa.has_builtin_sensor, *, required=False):
+                          sensor_present=omarchy_mesa.has_builtin_sensor,
+                          factory_root_key=omarchy_mesa.factory_root_key, *, required=False,
+                          collect_root_key=None):
     """Collect optional calibration; requiring it needs an explicit template opt-in."""
     if getattr(getattr(installer, "sysinfo", None), "device_class", "") != "j700ap":
         return
@@ -832,7 +839,14 @@ def _collect_neo_touch_id(installer, pkg, collect=omarchy_mesa.collect,
         if not sensor_present():
             logging.info("MacBook Neo has no built-in Touch ID sensor; skipping calibration")
             return
-        files = collect(_iboot_system_container(installer.dutil))
+        root_key = None
+        if COLLECT_NEO_ROOT_KEY if collect_root_key is None else collect_root_key:
+            try:
+                root_key = factory_root_key()
+            except (OSError, omarchy_mesa.MesaError) as error:
+                logging.warning("MacBook Neo Touch ID root key unavailable: %s", error)
+        device = _iboot_system_container(installer.dutil)
+        files = collect(device) if root_key is None else collect(device, root_key_record=root_key)
         if not files.get(omarchy_mesa.FIRMWARE_NAME):
             raise omarchy_mesa.MesaError("sensor is present but calibration is missing")
     except (OSError, KeyError, IndexError, subprocess.CalledProcessError, omarchy_mesa.MesaError) as error:

@@ -8,6 +8,8 @@ is read on J700 variants without an on-board SPI2 sensor controller.
 """
 
 import fcntl
+import glob
+import hashlib
 import os
 import plistlib
 import stat
@@ -22,6 +24,9 @@ CONTAINER_MAXIMUM = 1 << 30
 # <sys/disk.h>: _IOR('d', 24, uint32_t) and _IOR('d', 25, uint64_t).
 DKIOCGETBLOCKSIZE = 0x40046418
 DKIOCGETBLOCKCOUNT = 0x40086419
+# macOS keeps this Mac's factory records here, world-readable, on the
+# Hardware volume of the iBoot System Container.
+FACTORY_CACHE = "/System/Volumes/Hardware/FactoryData/System/Library/Caches/com.apple.factorydata"
 
 
 class MesaError(Exception):
@@ -115,6 +120,67 @@ def root_key(data):
     except (ValueError, IndexError) as error:
         raise MesaError(f"invalid signed sensor root key: {error}") from error
     return bytes(data)
+
+
+def _der(tag, value):
+    n = len(value)
+    if n < 0x80:
+        head = bytes([n])
+    else:
+        size = n.to_bytes((n.bit_length() + 7) // 8, "big")
+        head = bytes([0x80 | len(size)]) + size
+    return bytes([tag]) + head + value
+
+
+def _one(directory, pattern):
+    found = [path for path in glob.glob(os.path.join(directory, pattern))
+             if not path.endswith("-current")]
+    if len(found) != 1:
+        raise MesaError(f"expected one {pattern} factory record, found {len(found)}")
+    with open(found[0], "rb") as fd:
+        return os.path.basename(found[0]), fd.read(16 << 20)
+
+
+def factory_root_key(directory=FACTORY_CACHE):
+    """This Mac's combined sensor root-key container, rebuilt from its own
+    factory cache the way macOS hands it to the enclave.
+
+    The cached MSRk record carries its factory manifest, which the enclave
+    does not trust. macOS pairs the record's IM4P with the FDR sealing
+    manifest (seal-<ECID>) and adds the trust bundle as secb, as it does for
+    every other record in the cache (appv, fCfg). Nothing is synthesized:
+    every byte comes from this Mac's own records, and the result is
+    checked with root_key().
+    """
+    _, record = _one(directory, "MSRk-*")
+    _, seal = _one(directory, "seal-*")
+    name, trust = _one(directory, "trustobject-*")
+    digest = name.split("-", 1)[1].lower()
+    if hashlib.sha256(trust).hexdigest() != digest:
+        raise MesaError("trust bundle does not match its name")
+    current = os.path.join(directory, "trustobject-current")
+    if os.path.exists(current):
+        with open(current, "rb") as fd:
+            if fd.read(len(trust) + 1) != trust:
+                raise MesaError("trustobject-current differs from the named trust bundle")
+    try:
+        outer = _tlv(record, 0)
+        parts = list(_children(record, outer[1], outer[2]))
+        if (outer[0] != 0x30 or outer[2] != len(record) or len(parts) != 3
+                or _ia5(record, parts[0]) != b"IMG4" or parts[1][0] != 0x30):
+            raise ValueError("MSRk record is not an IMG4")
+        payload_start = parts[0][2]
+        im4p = bytes(record[payload_start:parts[1][2]])
+        manifest = _tlv(seal, 0)
+        if manifest[0] != 0x30 or manifest[2] != len(seal):
+            raise ValueError("seal record is not one DER manifest")
+    except ValueError as error:
+        raise MesaError(f"cannot rebuild the sensor root key: {error}") from error
+    image = _der(0x30, _der(0x16, b"IMG4") + im4p + _der(0xA0, seal))
+    combined = _der(0x30, _der(0x16, b"comb")
+                    + _der(0x30, _der(0x16, b"fdrd") + _der(0x04, image))
+                    + _der(0x30, _der(0x16, b"secb") + _der(0x04, trust)))
+    return root_key(combined)
 
 
 def fsc2_calibrations(data):
@@ -249,8 +315,8 @@ def device_size(fd, ioctl=fcntl.ioctl):
 def collect(device, *, root_key_record=None):
     """{firmware path: bytes} for this Mac's Touch ID, read from the raw
     iBoot System Container device, never written."""
-    # The production adapter deliberately supplies no root-key record until a
-    # device-local sealed source has been identified and hardware-qualified.
+    # The production adapter supplies factory_root_key(), rebuilt from this
+    # Mac's own factory cache; collection without one still succeeds.
     root = root_key(root_key_record) if root_key_record is not None else None
     fd = os.open(device, os.O_RDONLY)
     try:

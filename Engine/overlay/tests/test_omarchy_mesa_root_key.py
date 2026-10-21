@@ -6,7 +6,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from omarchy_mesa import MesaError, ROOT_KEY_NAME, collect, root_key
+import hashlib
+
+from omarchy_mesa import MesaError, ROOT_KEY_NAME, collect, factory_root_key, root_key
 from test_omarchy_mesa import der, ia5, img4
 
 
@@ -58,6 +60,45 @@ class RootKeyEnvelopeTests(unittest.TestCase):
             self.assertEqual(collect(path, root_key_record=data)[ROOT_KEY_NAME], data)
             with self.assertRaises(MesaError):
                 collect(path, root_key_record=root_image())
+
+
+class FactoryRootKeyTests(unittest.TestCase):
+    payload = der(0x30, ia5("IM4P") + ia5("MSRk") + ia5("1.0") + der(4, b"synthetic key payload"))
+    factory = der(0xA0, der(0x30, ia5("IM4M") + der(2, b"\0") + der(4, b"factory manifest")))
+    seal = der(0x30, ia5("IM4M") + der(2, b"\0") + der(4, b"sealing manifest"))
+    trust = b"synthetic trust bundle"
+
+    def cache(self, directory, current=None):
+        root = Path(directory)
+        (root / "MSRk-0000").write_bytes(der(0x30, ia5("IMG4") + self.payload + self.factory))
+        (root / "seal-0000").write_bytes(self.seal)
+        name = "trustobject-" + hashlib.sha256(self.trust).hexdigest().upper()
+        (root / name).write_bytes(self.trust)
+        (root / "trustobject-current").write_bytes(self.trust if current is None else current)
+        return root
+
+    def test_record_is_resealed_with_the_sealing_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            expected = combined_root(der(0x30, ia5("IMG4") + self.payload + der(0xA0, self.seal)),
+                                     security=self.trust)
+            self.assertEqual(factory_root_key(self.cache(directory)), expected)
+
+    def test_mismatched_or_missing_records_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.cache(directory, current=b"another bundle")
+            with self.assertRaises(MesaError):
+                factory_root_key(root)
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.cache(directory)
+            (root / "seal-0000").unlink()
+            with self.assertRaises(MesaError):
+                factory_root_key(root)
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.cache(directory)
+            for path in root.glob("trustobject-[0-9A-F]*"):
+                path.write_bytes(b"tampered")
+            with self.assertRaises(MesaError):
+                factory_root_key(root)
 
 
 if __name__ == "__main__":
