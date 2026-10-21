@@ -141,7 +141,7 @@
     }
   },
   "downstream_overlay": {
-    "version": "v0.9.2-omarchy.20261019.90a38259d2cb",
+    "version": "v0.9.2-omarchy.20261021.ed89c44fd91c",
     "capability": "candidate_bound_full_os_stage_one_authenticated_recovery",
     "minimum_app_version": "2.3.0",
     "engine_modes": [
@@ -151,7 +151,7 @@
     ],
     "patch": {
       "path": "patches/0001-omarchy-engine-runtime.patch",
-      "sha256": "e8da4150615d5c0756f0338f6a6183674fd94da718ef59b02c06d0483603f6e0"
+      "sha256": "28c3dbceebaeb2d023d972f816184609c2ffb6065502e1f91839ac69e9e4a94a"
     },
     "files": [
       {
@@ -172,7 +172,7 @@
       {
         "path": "overlay/src/omarchy_asahi.py",
         "destination": "src/omarchy_asahi.py",
-        "sha256": "64a5119ca20aba2314e50bb8dd6607d0853d8e43d1930b958ca0d48ed5a88eba"
+        "sha256": "c46431b9de1672f552b39d483c59adc479a33773c6539e0dfad8e1be48e1d9b2"
       },
       {
         "path": "overlay/src/omarchy_contract.py",
@@ -207,7 +207,7 @@
       {
         "path": "overlay/tests/test_omarchy_asahi.py",
         "destination": "tests/test_omarchy_asahi.py",
-        "sha256": "eff97f1bf0b6086bf01cce1a6db2d66596bb051d75177fa78beb47df7b7b3387"
+        "sha256": "8fd88c236562d7694488b6726748ab2004b559f974e9c30e9b8c49683a64fba4"
       },
       {
         "path": "overlay/tests/test_omarchy_contract.py",
@@ -257,12 +257,22 @@
       {
         "path": "overlay/src/omarchy_mt7932.py",
         "destination": "src/omarchy_mt7932.py",
-        "sha256": "bd3abd4142e3b7c5fcdac23f67aa4cc8422321e74ff0d3f87222a2ddf2aa1861"
+        "sha256": "02551b86ad7182e0a0dadb8f291063a6324773a30a8eedc0d6b26bdb6ba95743"
       },
       {
         "path": "overlay/tests/test_omarchy_mt7932.py",
         "destination": "tests/test_omarchy_mt7932.py",
-        "sha256": "b9668eb4a6407f35cfdeb9addd061190720208d5ee1cbb4f969cb6499aa6a822"
+        "sha256": "93733e39106f2366932811dc9dcc55baec180277131cd46acc38f391bee1dad5"
+      },
+      {
+        "path": "overlay/src/omarchy_mt7932_policy.py",
+        "destination": "src/omarchy_mt7932_policy.py",
+        "sha256": "3ca7c2c7ac407a322c009937e0497c5ac386130edce1cf8e8a0e2c05621a42e5"
+      },
+      {
+        "path": "overlay/tests/test_omarchy_mt7932_policy.py",
+        "destination": "tests/test_omarchy_mt7932_policy.py",
+        "sha256": "5a878cefbd7c1019ff5eff4fa455a7eaa31f39f16899000cd5b494cdc87aa86a"
       },
       {
         "path": "overlay/src/omarchy_mesa.py",
@@ -277,12 +287,12 @@
       {
         "path": "overlay/src/omarchy_firmware.py",
         "destination": "src/omarchy_firmware.py",
-        "sha256": "0dcc91d2722747c90ce008cdd9326a03866fb995734987d07cc4ee7a734fd366"
+        "sha256": "f49c7a60f7301c206a231df9f446e85b14715e243d0d61e7d9d5bc9c7cbfbc40"
       },
       {
         "path": "overlay/tests/test_omarchy_firmware.py",
         "destination": "tests/test_omarchy_firmware.py",
-        "sha256": "517a16dd79e124181411e929c1bddc5cced4d3702a9767d457bad80dac4e6abc"
+        "sha256": "3655ba86b7282c2ce3a5305b78dba2510e535e5ae5d669a473301003040c34f1"
       },
       {
         "path": "overlay/src/omarchy_als.py",
@@ -457,9 +467,9 @@
     }
   ],
   "validation_artifact": {
-    "filename": "installer-v0.9.2-omarchy.20261019.90a38259d2cb.tar.gz",
-    "size_bytes": 17884842,
-    "sha256": "1f4240d2b7c84c39a2e004822c5c735ad0986b56685457c5ae504f08a643a493",
+    "filename": "installer-v0.9.2-omarchy.20261021.ed89c44fd91c.tar.gz",
+    "size_bytes": 17900179,
+    "sha256": "3e094b0267c4cfa4e433f6fb55420bc1313f6df35f2d037d1bd84adb8fc8fa4e",
     "reproducibility_scope": "two-identical-python-overlay-repacks-authenticated-base",
     "signature": "absent",
     "metadata_sha256": "2e6181ce6b6e17c11039e04bfadade8d10ae0e11889885ad8c9960b68f179a5d"
@@ -486,7 +496,7 @@
           "upstream_base_sha256": "c8d4d2a80f3a88a9ba4d6d4024c0001062e35d15d72ae530681a0612e6525984",
           "upstream_sha256": "894fb8cd2ffc672bb96a14969ee9de2879d250c8c5990fee122ccf66d9b50024",
           "base_sha256": "95760ed02d44b5457acb81559a4e2d892ffbb7f0f2b7417c0b2eb02937945ae7",
-          "sha256": "17d0e11464af7996f45f83f0f535a0cc4e8d8c877a05775d3e1834aa38f16ad8"
+          "sha256": "84da2978421cc551411bc4acd15e4fcd208ea21c4f2f01510bfed5ce49e809dc"
         }
       ]
     },

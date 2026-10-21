@@ -278,18 +278,7 @@
     }
 
     static func requirement(environment: [String: String]) -> String? {
-      if let pinned = environment["OMARCHY_RECOVERY_TEMPLATE_REQUIREMENT"] {
-        return pinned.range(
-          of: "\\Acdhash H\"[0-9a-f]{40}(?:[0-9a-f]{24})?\"\\z", options: .regularExpression) != nil
-          ? pinned : nil
-      }
-      guard let client = environment[InstallerProductIdentity.clientRequirementEnvironmentVariable],
-        let team = RestoreImageHelper.teamIdentifier(inClientRequirement: client)
-      else { return nil }
-      return "anchor apple generic and identifier \"org.aurorasilicon.omarchy.recovery.recovery\""
-        + " and certificate 1[field.1.2.840.113635.100.6.2.6]"
-        + " and certificate leaf[field.1.2.840.113635.100.6.1.13]"
-        + " and certificate leaf[subject.OU] = \"\(team)\""
+      RecoveryTemplateIdentity.requirement(environment: environment)
     }
 
     private static func requireSafe(_ url: URL, directory: Bool, owner: uid_t?) throws {
