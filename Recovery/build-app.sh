@@ -20,6 +20,13 @@ fi
 ./test-all.sh "$OUT/checks"
 cp .build/release/OmarchyRecovery "$APP/Contents/MacOS/OmarchyRecovery"
 [[ "$("$APP/Contents/MacOS/OmarchyRecovery" --build-mode)" == "$MODE" ]]
+# The small Recovery OS may omit frameworks present in a full macOS install.
+# SHA-256 uses CommonCrypto from libSystem; refuse a CryptoKit dependency.
+dependencies=$(xcrun otool -L "$APP/Contents/MacOS/OmarchyRecovery")
+if [[ $dependencies == *'/CryptoKit.framework/'* || $dependencies == *'/CryptoTokenKit.framework/'* ]]; then
+  echo 'Recovery executable links a framework unavailable in older Recovery OS' >&2
+  exit 1
+fi
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
