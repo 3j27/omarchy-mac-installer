@@ -148,16 +148,20 @@
       ].compactMap { $0 }
     }
 
-    /// The bundle of the running process `pid`. The XPC connection has already
-    /// held that process to the client requirement, and the template found in
-    /// it is verified against the template requirement before any use, so a
+    /// The bundle of the running process `pid`, only while that process
+    /// satisfies `requirement`, the helper's client requirement. The connection
+    /// checked whoever connected; this checks whoever owns the PID now, so a
     /// reused PID can only name another correctly signed installer.
-    static func clientBundle(pid: pid_t) -> URL? {
+    static func clientBundle(pid: pid_t, requirement: String) -> URL? {
       var code: SecCode?
       guard
         SecCodeCopyGuestWithAttributes(
           nil, [kSecGuestAttributePid: pid] as CFDictionary, [], &code) == errSecSuccess,
         let code
+      else { return nil }
+      var compiled: SecRequirement?
+      guard SecRequirementCreateWithString(requirement as CFString, [], &compiled) == errSecSuccess,
+        let compiled, SecCodeCheckValidity(code, [], compiled) == errSecSuccess
       else { return nil }
       var staticCode: SecStaticCode?
       guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else {
@@ -174,7 +178,9 @@
         .first { fm.fileExists(atPath: $0.path) }
       guard let source = found else {
         throw AccountSetupFailure(
-          "This installer is missing its native Recovery app. Reinstall the updated installer package."
+          clientBundle == nil
+            ? "Couldn’t confirm which installer asked to update Recovery. Quit the installer, open it again, and retry."
+            : "This installer is missing its native Recovery app. Download the installer again."
         )
       }
       guard
@@ -184,8 +190,20 @@
         throw AccountSetupFailure(
           "The helper has no verified Recovery-template identity. Reinstall this build’s helper.")
       }
-      _ = try AccountNativeCommand.checked(
+      let verification = try AccountNativeCommand.run(
         "/usr/bin/codesign", ["--verify", "--deep", "--strict", "-R=" + requirement, source.path])
+      guard verification.status == 0 else {
+        // An ad hoc helper pins one build's template by cdhash.
+        let pinned =
+          ProcessInfo.processInfo.environment[
+            RecoveryTemplateIdentity.requirementEnvironmentVariable]
+          != nil
+        throw AccountSetupFailure(
+          pinned
+            ? "This installer’s Recovery app doesn’t match the helper installed with it. Reinstall the helper from this build, then retry."
+            : "This installer’s Recovery app failed its signature check. Download the installer again."
+        )
+      }
       guard
         let templateInfo = try PropertyListSerialization.propertyList(
           from: Data(contentsOf: source.appendingPathComponent("Contents/Info.plist")), format: nil)

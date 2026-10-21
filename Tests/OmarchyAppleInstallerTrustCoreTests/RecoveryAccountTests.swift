@@ -170,10 +170,13 @@
         [helperCopy])
     }
 
-    func testClientBundleResolvesARunningProcess() throws {
-      let bundle = try XCTUnwrap(RecoveryAccountHandoff.clientBundle(pid: getpid()))
+    func testClientBundleResolvesOnlyAProcessMeetingTheRequirement() throws {
+      let bundle = try XCTUnwrap(
+        RecoveryAccountHandoff.clientBundle(pid: getpid(), requirement: "always"))
       XCTAssertTrue(FileManager.default.fileExists(atPath: bundle.path))
-      XCTAssertNil(RecoveryAccountHandoff.clientBundle(pid: -1))
+      // Whoever owns the PID now must still satisfy the client requirement.
+      XCTAssertNil(RecoveryAccountHandoff.clientBundle(pid: getpid(), requirement: "never"))
+      XCTAssertNil(RecoveryAccountHandoff.clientBundle(pid: -1, requirement: "always"))
     }
 
     func testCompletedInstallationRequiresLivePartitionIdentities() throws {

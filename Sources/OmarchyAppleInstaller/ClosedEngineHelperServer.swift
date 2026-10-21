@@ -552,9 +552,12 @@
     private let version: String
     private let retirement: PackageInstalledAppRetirement
     private let mayRetirePackageApps: Bool
+    private let clientRequirement: String?
 
     /// - Parameter version: the helper's build version, or empty when it
     ///   carries none.
+    /// - Parameter clientRequirement: the requirement a caller must still
+    ///   meet for its bundle to supply the Recovery template at a handoff.
     /// - Parameter mayRetirePackageApps: only a helper SMJobBless installed,
     ///   running from PrivilegedHelperTools, removes the package's app. An
     ///   ad hoc build's helper runs from inside that app and accepts any
@@ -562,9 +565,11 @@
     public init(
       server: ClosedEngineHelperServer, version: String = "",
       retirement: PackageInstalledAppRetirement = PackageInstalledAppRetirement(),
-      mayRetirePackageApps: Bool = ClosedEngineXPCServiceEndpoint.runsFromPrivilegedHelperTools()
+      mayRetirePackageApps: Bool = ClosedEngineXPCServiceEndpoint.runsFromPrivilegedHelperTools(),
+      clientRequirement: String? = nil
     ) {
       self.server = server
+      self.clientRequirement = clientRequirement
       self.version = version
       self.retirement = retirement
       self.mayRetirePackageApps = mayRetirePackageApps
@@ -593,8 +598,10 @@
     ) {
       // NSXPCConnection.current() is only valid synchronously inside the
       // exported method, so the caller is resolved before the Task.
-      let clientBundle = NSXPCConnection.current().flatMap {
-        RecoveryAccountHandoff.clientBundle(pid: $0.processIdentifier)
+      let clientBundle = clientRequirement.flatMap { requirement in
+        NSXPCConnection.current().flatMap {
+          RecoveryAccountHandoff.clientBundle(pid: $0.processIdentifier, requirement: requirement)
+        }
       }
       let server = server
       Task {
@@ -952,7 +959,9 @@
         throw ClosedEngineHelperError.invalidClientRequirement
       }
       self.clientCodeSigningRequirement = clientCodeSigningRequirement
-      endpoint = ClosedEngineXPCServiceEndpoint(server: server, version: helperVersion)
+      endpoint = ClosedEngineXPCServiceEndpoint(
+        server: server, version: helperVersion,
+        clientRequirement: clientCodeSigningRequirement)
     }
 
     public func listener(
