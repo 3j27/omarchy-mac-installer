@@ -16,6 +16,7 @@
     /// only for packages that never came from an app (the lab canary); an
     /// install then has no decoder and is refused.
     public let restoreImageURL: URL?
+    public let recoveryTemplateURL: URL?
     public let bindingDigest: String
     public let planDigest: String
     public let deviceIdentifier: String
@@ -31,6 +32,7 @@
       payloadURL: URL,
       repairManifestURL: URL? = nil,
       restoreImageURL: URL? = nil,
+      recoveryTemplateURL: URL? = nil,
       bindingDigest: String,
       planDigest: String,
       deviceIdentifier: String,
@@ -45,6 +47,7 @@
       self.payloadURL = payloadURL
       self.repairManifestURL = repairManifestURL
       self.restoreImageURL = restoreImageURL
+      self.recoveryTemplateURL = recoveryTemplateURL
       self.bindingDigest = bindingDigest
       self.planDigest = planDigest
       self.deviceIdentifier = deviceIdentifier
@@ -67,7 +70,15 @@
   public struct EngineHandoffPackageImporter: Sendable {
     private static let maximumControlFileBytes = 65_536
 
-    public init() {}
+    private let readArtifactChunk: @Sendable (String, FileHandle, Int) throws -> Data?
+
+    public init() {
+      readArtifactChunk = { _, handle, limit in try handle.read(upToCount: limit) }
+    }
+
+    init(readArtifactChunk: @escaping @Sendable (String, FileHandle, Int) throws -> Data?) {
+      self.readArtifactChunk = readArtifactChunk
+    }
 
     public func prepare(
       from packageDirectory: FileHandle,
@@ -173,6 +184,13 @@
         throw EngineHandoffImportError.unsafeFile("restore-image")
       }
 
+      let recoveryTemplateURL = manifest.recoveryTemplate.map {
+        package.appendingPathComponent($0.fileName)
+      }
+      if let artifact = manifest.recoveryTemplate, let recoveryTemplateURL {
+        try copyArtifact(
+          artifact, role: "recovery-template", from: sourceDescriptor, to: recoveryTemplateURL)
+      }
       keepPackage = true
       return ImportedEngineHandoffPackage(
         packageURL: package,
@@ -184,6 +202,7 @@
         payloadURL: payloadURL,
         repairManifestURL: repairManifestURL,
         restoreImageURL: restoreImageURL,
+        recoveryTemplateURL: recoveryTemplateURL,
         bindingDigest: identity.bindingDigest,
         planDigest: request.planDigest,
         deviceIdentifier: request.deviceIdentifier,
@@ -218,7 +237,7 @@
       let descriptor = openat(
         directoryDescriptor,
         name,
-        O_RDONLY | O_CLOEXEC | O_NOFOLLOW
+        O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
       )
       guard descriptor >= 0 else {
         throw EngineHandoffImportError.unsafeFile(name)
@@ -255,7 +274,7 @@
       let source = openat(
         directoryDescriptor,
         artifact.fileName,
-        O_RDONLY | O_CLOEXEC | O_NOFOLLOW
+        O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
       )
       guard source >= 0 else {
         throw EngineHandoffImportError.unsafeFile(role)
@@ -299,17 +318,17 @@
       )
       var hasher = SHA256()
       var size: UInt64 = 0
-      while let chunk = try sourceHandle.read(upToCount: 1_048_576),
+      while let chunk = try readArtifactChunk(role, sourceHandle, 1_048_576),
         !chunk.isEmpty
       {
-        try targetHandle.write(contentsOf: chunk)
-        hasher.update(data: chunk)
         let (updatedSize, overflow) = size.addingReportingOverflow(
           UInt64(chunk.count)
         )
-        guard !overflow else {
+        guard !overflow, updatedSize <= artifact.sizeBytes else {
           throw EngineHandoffImportError.sizeMismatch(role)
         }
+        try targetHandle.write(contentsOf: chunk)
+        hasher.update(data: chunk)
         size = updatedSize
       }
       try targetHandle.synchronize()
@@ -345,6 +364,7 @@
           "format", "binding_digest", "request_file", "identity_file",
           "engine", "metadata", "payload", "restore_image",
         ]
+        if rawObject["recovery_template"] != nil { manifestKeys.insert("recovery_template") }
         if rawObject["repair_manifest"] != nil {
           manifestKeys.insert("repair_manifest")
         }
@@ -353,7 +373,9 @@
           keys: manifestKeys,
           error: .invalidManifest
         )
-        for key in ["engine", "metadata", "payload", "repair_manifest", "restore_image"]
+        for key in [
+          "engine", "metadata", "payload", "repair_manifest", "restore_image", "recovery_template",
+        ]
         where object[key] != nil {
           guard let artifact = object[key] as? [String: Any],
             Set(artifact.keys) == ["file_name", "digest", "size_bytes"]
@@ -372,6 +394,7 @@
             manifest.payload.fileName,
             manifest.restoreImage.fileName,
           ] + (manifest.repairManifest.map { [$0.fileName] } ?? [])
+          + (manifest.recoveryTemplate.map { [$0.fileName] } ?? [])
         guard manifest.format == 1,
           manifest.requestFile == "request.json",
           manifest.identityFile == "identity.json",
@@ -380,10 +403,14 @@
             with: ["manifest.json", "request.json", "identity.json"]
           ),
           ([manifest.engine, manifest.metadata, manifest.payload, manifest.restoreImage]
-            + (manifest.repairManifest.map { [$0] } ?? []))
+            + (manifest.repairManifest.map { [$0] } ?? [])
+            + (manifest.recoveryTemplate.map { [$0] } ?? []))
             .allSatisfy(validArtifact),
           manifest.restoreImage.fileName == RestoreImageHelper.fileName,
-          manifest.restoreImage.sizeBytes <= RestoreImageHelper.maximumBytes
+          manifest.restoreImage.sizeBytes <= RestoreImageHelper.maximumBytes,
+          manifest.recoveryTemplate == nil
+            || (manifest.recoveryTemplate?.fileName == NativeRecoveryTemplate.archiveFileName
+              && manifest.recoveryTemplate!.sizeBytes <= NativeRecoveryTemplate.maximumArchiveBytes)
         else {
           throw EngineHandoffImportError.invalidManifest
         }
@@ -588,6 +615,7 @@
     let payload: ImportedArtifactRecord
     let repairManifest: ImportedArtifactRecord?
     let restoreImage: ImportedArtifactRecord
+    let recoveryTemplate: ImportedArtifactRecord?
 
     enum CodingKeys: String, CodingKey {
       case format
@@ -599,6 +627,7 @@
       case payload
       case repairManifest = "repair_manifest"
       case restoreImage = "restore_image"
+      case recoveryTemplate = "recovery_template"
     }
   }
 
