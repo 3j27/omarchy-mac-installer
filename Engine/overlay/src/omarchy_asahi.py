@@ -1206,6 +1206,10 @@ class AsahiStage1Adapter:
         raw_partition_writer=None,
         image_flush=flush_device,
         full_readback=False,
+        recovery_app=None,
+        recovery_manifest=None,
+        recovery_requirement=None,
+        authorized_owner=None,
     ):
         self.installer = installer
         self.metadata_path = metadata_path
@@ -1217,6 +1221,11 @@ class AsahiStage1Adapter:
         self.image_writer = raw_partition_writer or open_target
         self.image_flush = image_flush
         self.full_readback = full_readback
+        self.recovery_app = recovery_app
+        self.recovery_manifest = recovery_manifest
+        self.recovery_requirement = recovery_requirement
+        self.authorized_owner = authorized_owner
+        self.source_bootstrap = None
         self.template = None
         self.osins = None
         self.os_firmware = None
@@ -1236,8 +1245,33 @@ class AsahiStage1Adapter:
             raise AsahiAdapterError(
                 "metadata must contain exactly one Omarchy full-OS target"
             )
+        template = templates[0]
+        use_helper_recovery = (template.get("recovery_gui") is None
+                               and self.recovery_app is not None)
+        if use_helper_recovery:
+            helper_recovery = (self.recovery_app, self.recovery_manifest,
+                               self.recovery_requirement)
+            if not all(isinstance(value, str) and value for value in helper_recovery):
+                raise AsahiAdapterError("incomplete helper Recovery template contract")
+            try:
+                omarchy_recovery.validate_source(
+                    self.recovery_app, self.recovery_manifest,
+                    requirement=self.recovery_requirement,
+                )
+                self.source_bootstrap = omarchy_recovery.source_bootstrap(
+                    self.installer.dutil, self.installer.cur_os, self.authorized_owner,
+                )
+            except (omarchy_recovery.RecoveryError, subprocess.CalledProcessError) as error:
+                raise AsahiAdapterError("native Recovery preflight failed") from error
+        elif any(value is not None for value in
+                 (self.recovery_app, self.recovery_manifest, self.recovery_requirement)):
+            # A partial helper contract is never an acceptable fallback.
+            if not all(isinstance(value, str) and value for value in
+                       (self.recovery_app, self.recovery_manifest, self.recovery_requirement)):
+                raise AsahiAdapterError("incomplete helper Recovery template contract")
         self.installer.data = metadata
-        self.template = templates[0]
+        self.template = template
+        self.use_helper_recovery = use_helper_recovery
         board = getattr(self.installer.sysinfo, "device_class", "")
         allowed = self.template.get("allowed_device_classes")
         excluded = self.template.get("excluded_device_classes", [])
@@ -1472,6 +1506,11 @@ class AsahiStage1Adapter:
                 self.installer.ins, self.osins.efi_part.uuid,
                 self.installer.dutil.mount(self.osins.efi_part.name),
                 source_os=self.installer.cur_os,
+                app_source=self.recovery_app if self.use_helper_recovery else None,
+                manifest_path=self.recovery_manifest if self.use_helper_recovery else None,
+                requirement=self.recovery_requirement if self.use_helper_recovery else None,
+                authorized_owner=self.authorized_owner if self.use_helper_recovery else None,
+                expected_bootstrap=self.source_bootstrap if self.use_helper_recovery else None,
             )
         for target in self.osins.idata_targets:
             self.installer.ins.collect_installer_data(target)
@@ -2062,8 +2101,8 @@ class AsahiStage1Adapter:
         recovery_mode = self.template.get("recovery_gui")
         if recovery_mode not in (None, "omarchy-native-v1"):
             raise AsahiAdapterError("unknown Recovery GUI contract")
-        self.native_recovery_gui = recovery_mode is not None
-        if self.native_recovery_gui:
+        self.native_recovery_gui = self.use_helper_recovery or recovery_mode is not None
+        if not self.use_helper_recovery and self.native_recovery_gui:
             try:
                 omarchy_recovery.validate_payload(self.osins.pkg)
             except omarchy_recovery.RecoveryError as error:
