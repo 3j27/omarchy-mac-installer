@@ -25,7 +25,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private var issueShowing = false
   private var issueRepair = false
   private var authorizationRepair = false
-  private var activePanel: RecoverySheet?
+  private let sheets = SheetPresenter()
   private var authorizationField: NSSecureTextField?
   private var detailsViewer: LogTextView?
 
@@ -34,6 +34,11 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     super.init(nibName: nil, bundle: nil)
     model.onChange = { [weak self] in self?.refresh() }
     log.onChange = { [weak self] in self?.refresh() }
+    sheets.onDismiss = { [weak self] in
+      self?.authorizationField = nil
+      self?.detailsViewer = nil
+      self?.refresh()
+    }
   }
 
   required init?(coder: NSCoder) { fatalError("Use the programmatic initializer") }
@@ -127,10 +132,10 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     detailsViewer?.update(
       text: log.text.isEmpty ? model.operations.joined(separator: "\n") : log.text)
     if (model.environmentIssue != nil || model.failure != nil) && !issueShowing
-      && activePanel == nil
+      && sheets.active == nil
     {
       presentIssue()
-    } else if let notice = model.previewNotice, activePanel == nil {
+    } else if let notice = model.previewNotice, sheets.active == nil {
       let done = RecoveryPrimaryButton(
         title: "Done", target: self, action: #selector(donePanelPressed))
       done.keyEquivalent = "\r"
@@ -444,26 +449,12 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   @objc private func restartPressed() { model.finishSetup() }
 
   @discardableResult private func present(_ panel: RecoverySheet, focus: NSView? = nil) -> Bool {
-    guard let window = view.window, activePanel == nil else { return false }
-    activePanel = panel
-    window.beginSheet(panel) { [weak self, weak panel] _ in
-      guard let self, self.activePanel === panel else { return }
-      self.activePanel = nil
-      self.refresh()
-    }
+    guard sheets.present(panel, on: view.window) else { return false }
     if let focus { panel.makeFirstResponder(focus) }
     return true
   }
 
-  private func closePanel() {
-    guard let panel = activePanel else { return }
-    view.window?.endSheet(panel)
-    panel.orderOut(nil)
-    activePanel = nil
-    authorizationField = nil
-    detailsViewer = nil
-    refresh()
-  }
+  private func closePanel() { sheets.close() }
 
   private func showAuthorization(repair: Bool) {
     guard view.window != nil else {
