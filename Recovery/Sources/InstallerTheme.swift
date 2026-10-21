@@ -28,6 +28,13 @@ enum OmarchyTheme {
     .monospacedSystemFont(ofSize: size, weight: weight)
   }
 
+  static func darkCGColor(_ color: NSColor) -> CGColor {
+    guard let appearance = NSAppearance(named: .darkAqua) else { return color.cgColor }
+    var resolved = color.cgColor
+    appearance.performAsCurrentDrawingAppearance { resolved = color.cgColor }
+    return resolved
+  }
+
   private static func dynamic(light: Int, dark: Int) -> NSColor {
     NSColor(name: nil) { appearance in
       let value = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light

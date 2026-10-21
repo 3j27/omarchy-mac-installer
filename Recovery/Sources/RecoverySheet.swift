@@ -21,7 +21,7 @@ final class RecoverySheet: NSPanel {
 
     let root = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
     root.wantsLayer = true
-    root.layer?.backgroundColor = OmarchyTheme.card.cgColor
+    root.layer?.backgroundColor = OmarchyTheme.darkCGColor(OmarchyTheme.card)
     root.layer?.cornerRadius = OmarchyTheme.cardRadius
     contentView = root
 

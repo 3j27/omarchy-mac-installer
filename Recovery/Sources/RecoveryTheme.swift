@@ -16,7 +16,7 @@ final class RecoveryPrimaryButton: NSButton {
     font = OmarchyTheme.button
     contentTintColor = OmarchyTheme.accentText
     wantsLayer = true
-    layer?.backgroundColor = OmarchyTheme.accent.cgColor
+    layer?.backgroundColor = OmarchyTheme.darkCGColor(OmarchyTheme.accent)
     layer?.cornerRadius = OmarchyTheme.buttonRadius
     isBordered = false
     translatesAutoresizingMaskIntoConstraints = false
@@ -41,7 +41,8 @@ final class RecoverySecondaryButton: NSButton {
     contentTintColor = OmarchyTheme.secondaryText
     isBordered = false
     wantsLayer = true
-    layer?.borderColor = OmarchyTheme.separator.cgColor
+    layer?.backgroundColor = OmarchyTheme.darkCGColor(OmarchyTheme.card)
+    layer?.borderColor = OmarchyTheme.darkCGColor(OmarchyTheme.separator)
     layer?.borderWidth = 1
     layer?.cornerRadius = OmarchyTheme.buttonRadius
     translatesAutoresizingMaskIntoConstraints = false

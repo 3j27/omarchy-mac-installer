@@ -47,7 +47,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   override func loadView() {
     let root = NSView(frame: NSRect(x: 0, y: 0, width: 780, height: 660))
     root.wantsLayer = true
-    root.layer?.backgroundColor = OmarchyTheme.window.cgColor
+    root.layer?.backgroundColor = OmarchyTheme.darkCGColor(OmarchyTheme.window)
     root.appearance = NSAppearance(named: .darkAqua)
     view = root
 
@@ -313,6 +313,16 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
         target: self, action: #selector(startPressed))
       center.addArrangedSubview(start)
       primaryButton = start
+      if model.recoveryInterface {
+        let debug = RecoverySecondaryButton(
+          title: "Enable Debug", target: self, action: #selector(debugPressed))
+        let proxy = RecoverySecondaryButton(
+          title: "Enable Proxy", target: self, action: #selector(proxyPressed))
+        center.addArrangedSubview(debug)
+        center.addArrangedSubview(proxy)
+        debugButton = debug
+        proxyButton = proxy
+      }
     case .installing: break
     case .account:
       let account = RecoveryPrimaryButton(
@@ -338,16 +348,6 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     right.alignment = .centerY
     right.spacing = 12
     right.translatesAutoresizingMaskIntoConstraints = false
-    if model.stage == .welcome && model.recoveryInterface {
-      let debug = RecoveryTextButton(
-        title: "Enable Debug", target: self, action: #selector(debugPressed))
-      let proxy = RecoveryTextButton(
-        title: "Enable Proxy", target: self, action: #selector(proxyPressed))
-      right.addArrangedSubview(debug)
-      right.addArrangedSubview(proxy)
-      debugButton = debug
-      proxyButton = proxy
-    }
     if model.stage == .welcome && !model.recoveryInterface {
       let advanced = RecoveryTextButton(
         title: "Advanced Options", target: self, action: #selector(advancedPressed))

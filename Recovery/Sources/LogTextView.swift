@@ -13,7 +13,7 @@ final class LogTextView: NSScrollView {
     backgroundColor = OmarchyTheme.window
     wantsLayer = true
     layer?.cornerRadius = OmarchyTheme.buttonRadius
-    layer?.borderColor = OmarchyTheme.separator.cgColor
+    layer?.borderColor = OmarchyTheme.darkCGColor(OmarchyTheme.separator)
     layer?.borderWidth = 1
     editor.isEditable = false
     editor.isSelectable = true
