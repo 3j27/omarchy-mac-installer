@@ -188,9 +188,12 @@
       self.selfUninstaller = selfUninstaller
     }
 
-    public func recoveryAccount(action: String, ticket: String, username: String, password: Data)
-      async throws -> RecoveryAccountReply
-    {
+    /// - Parameter clientBundle: the bundle of the installer asking, whose own
+    ///   Recovery template a handoff installs on the stub.
+    public func recoveryAccount(
+      action: String, ticket: String, username: String, password: Data,
+      clientBundle: URL? = nil
+    ) async throws -> RecoveryAccountReply {
       guard !isRetiring else { throw ClosedEngineHelperError.retiring }
       guard ["inspect", "handoff"].contains(action) else {
         throw ClosedEngineHelperError.invalidOperation
@@ -223,7 +226,8 @@
       }
       let record: RecoveryAccountRecord? = try await Task.detached {
         try RecoveryAccountHandoff.requireStartupSelection(for: observed.target)
-        try RecoveryAccountHandoff.updateRecoveryApp(for: observed.target)
+        try RecoveryAccountHandoff.updateRecoveryApp(
+          for: observed.target, clientBundle: clientBundle)
         return try RecoveryAccountInstaller.inspect(observed.target)
 
       }.value
@@ -548,9 +552,12 @@
     private let version: String
     private let retirement: PackageInstalledAppRetirement
     private let mayRetirePackageApps: Bool
+    private let clientRequirement: String?
 
     /// - Parameter version: the helper's build version, or empty when it
     ///   carries none.
+    /// - Parameter clientRequirement: the requirement a caller must still
+    ///   meet for its bundle to supply the Recovery template at a handoff.
     /// - Parameter mayRetirePackageApps: only a helper SMJobBless installed,
     ///   running from PrivilegedHelperTools, removes the package's app. An
     ///   ad hoc build's helper runs from inside that app and accepts any
@@ -558,9 +565,11 @@
     public init(
       server: ClosedEngineHelperServer, version: String = "",
       retirement: PackageInstalledAppRetirement = PackageInstalledAppRetirement(),
-      mayRetirePackageApps: Bool = ClosedEngineXPCServiceEndpoint.runsFromPrivilegedHelperTools()
+      mayRetirePackageApps: Bool = ClosedEngineXPCServiceEndpoint.runsFromPrivilegedHelperTools(),
+      clientRequirement: String? = nil
     ) {
       self.server = server
+      self.clientRequirement = clientRequirement
       self.version = version
       self.retirement = retirement
       self.mayRetirePackageApps = mayRetirePackageApps
@@ -587,11 +596,19 @@
       action: String, ticket: String, username: String, password: Data,
       reply: @escaping @Sendable (Data?, NSError?) -> Void
     ) {
+      // NSXPCConnection.current() is only valid synchronously inside the
+      // exported method, so the caller is resolved before the Task.
+      let clientBundle = clientRequirement.flatMap { requirement in
+        NSXPCConnection.current().flatMap {
+          RecoveryAccountHandoff.clientBundle(pid: $0.processIdentifier, requirement: requirement)
+        }
+      }
       let server = server
       Task {
         do {
           let result = try await server.recoveryAccount(
-            action: action, ticket: ticket, username: username, password: password)
+            action: action, ticket: ticket, username: username, password: password,
+            clientBundle: clientBundle)
           reply(try JSONEncoder().encode(result), nil)
         } catch {
           let message =
@@ -942,7 +959,9 @@
         throw ClosedEngineHelperError.invalidClientRequirement
       }
       self.clientCodeSigningRequirement = clientCodeSigningRequirement
-      endpoint = ClosedEngineXPCServiceEndpoint(server: server, version: helperVersion)
+      endpoint = ClosedEngineXPCServiceEndpoint(
+        server: server, version: helperVersion,
+        clientRequirement: clientCodeSigningRequirement)
     }
 
     public func listener(
