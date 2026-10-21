@@ -109,7 +109,8 @@
           XCTAssertEqual(snapshot.recoveryTemplate, expected)
           let record = try XCTUnwrap(manifest["recovery_template"] as? [String: Any])
           XCTAssertEqual(record["file_name"] as? String, NativeRecoveryTemplate.archiveFileName)
-          XCTAssertEqual(record["digest"] as? String, SHA256Digest.prefixedHex(SHA256.hash(data: expected)))
+          XCTAssertEqual(
+            record["digest"] as? String, SHA256Digest.prefixedHex(SHA256.hash(data: expected)))
         }
       }
     }
@@ -131,7 +132,8 @@
       try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
         .write(to: app.appendingPathComponent("Contents/Info.plist"))
       try Data("synthetic executable".utf8).write(to: executable)
-      try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700], ofItemAtPath: executable.path)
       return app
     }
 
@@ -422,8 +424,11 @@
       )
 
       let engine = Data("engine-a".utf8)
-      let metadata = imageNativeRecovery
-        ? Data(#"{"os_list":[{"omarchy_target":"apple-silicon-full-os","recovery_gui":"omarchy-native-v1"}]}"#.utf8)
+      let metadata =
+        imageNativeRecovery
+        ? Data(
+          #"{"os_list":[{"omarchy_target":"apple-silicon-full-os","recovery_gui":"omarchy-native-v1"}]}"#
+            .utf8)
         : Data(#"{"os_list":[{"omarchy_target":"apple-silicon-full-os"}]}"#.utf8)
       let payload = Data("payload".utf8)
       let restoreImageBytes = Data("signed decoder".utf8)
