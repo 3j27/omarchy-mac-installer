@@ -39,6 +39,7 @@ final class InstallerModel {
   var creatingAccount = false { didSet { changed() } }
   var restartingWithoutAccount = false { didSet { changed() } }
   var accountNeedsAuthorization = false { didSet { changed() } }
+  var previewNotice: (title: String, message: String)? { didSet { changed() } }
   private var checkingAccount = false
   private var awaitingStartupDiskReturn = false
 
@@ -98,6 +99,8 @@ final class InstallerModel {
     creatingAccount = true
     if RecoveryActions.isPreview {
       creatingAccount = false
+      accountAlreadyStarted = true
+      accountNeedsAuthorization = true
       stage = .complete
       return
     }
@@ -131,11 +134,10 @@ final class InstallerModel {
     accountPassword = ""
     accountConfirmation = ""
     if RecoveryActions.isPreview {
-      let alert = NSAlert()
-      alert.messageText = "Restart simulated"
-      alert.informativeText =
+      previewNotice = (
+        "Restart simulated",
         "Recovery account setup is deferred. This preview does not restart your Mac."
-      alert.runModal()
+      )
       return
     }
     restartingWithoutAccount = true
@@ -350,13 +352,24 @@ final class InstallerModel {
     }
   }
 
-  func openStartupDisk() {
+  func finishSetup() {
+    if !accountNeedsAuthorization {
+      if RecoveryActions.isPreview {
+        previewNotice = ("Restart simulated", "This preview does not restart your Mac.")
+        return
+      }
+      DispatchQueue.global(qos: .userInitiated).async {
+        do { try RecoveryActions.restartCompletedSetup() } catch {
+          DispatchQueue.main.async { self.failure = error.localizedDescription }
+        }
+      }
+      return
+    }
     if RecoveryActions.isPreview {
-      let alert = NSAlert()
-      alert.messageText = "Choose your startup disk"
-      alert.informativeText =
+      previewNotice = (
+        "Choose your startup disk",
         "In Recovery, this opens Startup Disk. Select \(DestinationVolume.name), click Restart, and authorize your recovery account when asked."
-      alert.runModal()
+      )
       return
     }
     guard RecoveryActions.inRecovery else {

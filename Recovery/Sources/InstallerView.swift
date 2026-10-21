@@ -134,6 +134,14 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       && activePanel == nil
     {
       presentIssue()
+    } else if let notice = model.previewNotice, activePanel == nil {
+      let done = RecoveryPrimaryButton(
+        title: "Done", target: self, action: #selector(donePanelPressed))
+      done.keyEquivalent = "\r"
+      present(
+        RecoverySheet(
+          title: notice.title, message: notice.message,
+          width: 430, height: 210, body: NSView(), bodyHeight: 0, buttons: [done]))
     }
   }
 
@@ -276,14 +284,18 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     icon.heightAnchor.constraint(equalToConstant: 96).isActive = true
     stack.addArrangedSubview(icon)
     stack.setCustomSpacing(25, after: icon)
-    stack.addArrangedSubview(
-      label(
-        "Select “" + DestinationVolume.name + "”, click “Restart…”, then “Authorize Users…”.",
-        size: 12))
-    stack.addArrangedSubview(
-      label(
-        "Enter the credentials for your macOS account and the recovery account you just created.",
-        size: 12))
+    if model.accountNeedsAuthorization {
+      stack.addArrangedSubview(
+        label(
+          "Select “" + DestinationVolume.name + "”, click “Restart…”, then “Authorize Users…”.",
+          size: 12))
+      stack.addArrangedSubview(
+        label(
+          "Enter the credentials for your macOS account and the recovery account you just created.",
+          size: 12))
+    } else {
+      stack.addArrangedSubview(label("Restart to start using Omarchy.", size: 12))
+    }
     place(stack)
   }
 
@@ -429,7 +441,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     accountConfirmationField?.stringValue = ""
   }
   @objc private func skipPressed() { model.skipRecoveryAccountAndRestart() }
-  @objc private func restartPressed() { model.openStartupDisk() }
+  @objc private func restartPressed() { model.finishSetup() }
 
   private func present(_ panel: RecoverySheet, focus: NSView? = nil) {
     guard let window = view.window, activePanel == nil else { return }
@@ -598,7 +610,10 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     }
   }
 
-  @objc private func donePanelPressed() { closePanel() }
+  @objc private func donePanelPressed() {
+    model.previewNotice = nil
+    closePanel()
+  }
 
   private func presentIssue() {
     issueShowing = true
