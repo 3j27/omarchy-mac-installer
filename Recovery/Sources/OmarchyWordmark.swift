@@ -59,12 +59,14 @@ final class OmarchyWordmark: NSView {
     for (row, line) in Self.grid.enumerated() {
       colors[row].setFill()
       for (column, character) in line.enumerated() where character == "#" {
-        NSBezierPath(rect: NSRect(
-          x: originX + CGFloat(column) * cell,
-          y: originY + CGFloat(row) * cell,
-          width: cell + 0.4,
-          height: cell + 0.4
-        )).fill()
+        NSBezierPath(
+          rect: NSRect(
+            x: originX + CGFloat(column) * cell,
+            y: originY + CGFloat(row) * cell,
+            width: cell + 0.4,
+            height: cell + 0.4
+          )
+        ).fill()
       }
     }
   }

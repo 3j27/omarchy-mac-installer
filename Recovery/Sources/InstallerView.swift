@@ -143,7 +143,10 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
 
   private func buildStage() {
     content.subviews.forEach { $0.removeFromSuperview() }
-    footer.arrangedSubviews.forEach { footer.removeArrangedSubview($0); $0.removeFromSuperview() }
+    footer.arrangedSubviews.forEach {
+      footer.removeArrangedSubview($0)
+      $0.removeFromSuperview()
+    }
     primaryButton = nil
     debugButton = nil
     proxyButton = nil
@@ -166,15 +169,17 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
 
   private func buildWelcome() {
     let stack = vertical(spacing: 9)
-    stack.addArrangedSubview(label(
-      model.recoveryInterface
-        ? "Restore the startup software for your Mac."
-        : "Finish setting up Omarchy on your Mac.", size: 15))
-    stack.addArrangedSubview(label(
-      model.recoveryInterface
-        ? "Use the saved recovery files to repair your\nstartup software."
-        : "The final step installs the startup software for your\nselected Omarchy volume.",
-      size: 13))
+    stack.addArrangedSubview(
+      label(
+        model.recoveryInterface
+          ? "Restore the startup software for your Mac."
+          : "Finish setting up Omarchy on your Mac.", size: 15))
+    stack.addArrangedSubview(
+      label(
+        model.recoveryInterface
+          ? "Use the saved recovery files to repair your\nstartup software."
+          : "The final step installs the startup software for your\nselected Omarchy volume.",
+        size: 13))
     let icon = NSImageView(image: DestinationVolume.icon)
     icon.imageScaling = .scaleProportionallyUpOrDown
     icon.translatesAutoresizingMaskIntoConstraints = false
@@ -188,9 +193,10 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
 
   private func buildInstalling() {
     let stack = vertical(spacing: 15)
-    stack.addArrangedSubview(label(
-      (model.recoveryInterface ? "Restoring " : "Setting up ") + DestinationVolume.name,
-      size: 14))
+    stack.addArrangedSubview(
+      label(
+        (model.recoveryInterface ? "Restoring " : "Setting up ") + DestinationVolume.name,
+        size: 14))
     let progress = NSProgressIndicator()
     progress.isIndeterminate = false
     progress.minValue = 0
@@ -210,7 +216,8 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private func buildAccount() {
     let stack = vertical(spacing: 11)
     stack.alignment = .leading
-    let message = model.accountAlreadyStarted
+    let message =
+      model.accountAlreadyStarted
       ? "Verify your recovery account’s password to resume authorization.\n\nYour Linux login is separate."
       : "Create a separate recovery account for your Linux volume. Next, authorize it as a volume owner to manage Linux boot settings independently of your macOS account.\n\nYour Linux login is separate."
     let explanation = label(message, size: 12, alignment: .left)
@@ -219,7 +226,8 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     explanation.widthAnchor.constraint(equalToConstant: 380).isActive = true
     stack.addArrangedSubview(explanation)
 
-    let username = NSTextField(string: model.accountUsername)
+    let username = NSTextField()
+    username.stringValue = model.accountUsername
     username.placeholderString = "omarchy-owner"
     username.delegate = self
     username.identifier = NSUserInterfaceItemIdentifier("accountUsername")
@@ -249,22 +257,25 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
 
   private func buildComplete() {
     let stack = vertical(spacing: 13)
-    stack.addArrangedSubview(label(
-      model.accountNeedsAuthorization
-        ? DestinationVolume.name + " is ready for authorization."
-        : DestinationVolume.name + " is ready to start.", size: 15))
+    stack.addArrangedSubview(
+      label(
+        model.accountNeedsAuthorization
+          ? DestinationVolume.name + " is ready for authorization."
+          : DestinationVolume.name + " is ready to start.", size: 15))
     let icon = NSImageView(image: DestinationVolume.icon)
     icon.imageScaling = .scaleProportionallyUpOrDown
     icon.translatesAutoresizingMaskIntoConstraints = false
     icon.widthAnchor.constraint(equalToConstant: 96).isActive = true
     icon.heightAnchor.constraint(equalToConstant: 96).isActive = true
     stack.addArrangedSubview(icon)
-    stack.addArrangedSubview(label(
-      "Select “" + DestinationVolume.name + "”, click “Restart…”, then “Authorize Users…”.",
-      size: 12))
-    stack.addArrangedSubview(label(
-      "Enter the credentials for your macOS account and the recovery account you just created.",
-      size: 12))
+    stack.addArrangedSubview(
+      label(
+        "Select “" + DestinationVolume.name + "”, click “Restart…”, then “Authorize Users…”.",
+        size: 12))
+    stack.addArrangedSubview(
+      label(
+        "Enter the credentials for your macOS account and the recovery account you just created.",
+        size: 12))
     place(stack)
   }
 
@@ -301,8 +312,9 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       leading.addArrangedSubview(skip)
       skipButton = skip
     case .complete:
-      leading.addArrangedSubview(RecoveryPrimaryButton(
-        title: "Restart", target: self, action: #selector(restartPressed)))
+      leading.addArrangedSubview(
+        RecoveryPrimaryButton(
+          title: "Restart", target: self, action: #selector(restartPressed)))
     }
     footer.addArrangedSubview(leading)
     let spacer = NSView()
@@ -310,7 +322,8 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
     footer.addArrangedSubview(spacer)
     if model.stage == .welcome && !model.recoveryInterface {
-      let advanced = NSButton(title: "Advanced Options", target: self, action: #selector(advancedPressed))
+      let advanced = NSButton(
+        title: "Advanced Options", target: self, action: #selector(advancedPressed))
       advanced.isBordered = false
       advanced.font = OmarchyTheme.control
       footer.addArrangedSubview(advanced)
@@ -397,7 +410,8 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     authorizationRepair = repair
     let alert = NSAlert()
     alert.messageText = repair ? "Authorize startup disk" : "Authorize installation"
-    alert.informativeText = "Enter password for "
+    alert.informativeText =
+      "Enter password for "
       + (RecoveryActions.inRecovery
         ? (model.authorizationOwner?.username ?? "the volume owner") : NSUserName())
       + (repair ? "" : "\n\nUse the installation owner’s password to set up Omarchy.")
@@ -434,13 +448,15 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       "Nested virtualization can reduce normal OS performance by up to 20%."
     let stack = vertical(spacing: 12)
     stack.alignment = .leading
-    let macho = NSButton(checkboxWithTitle: "Enable Mach-O Boot Mode",
-                         target: self, action: #selector(machoChanged))
+    let macho = NSButton(
+      checkboxWithTitle: "Enable Mach-O Boot Mode",
+      target: self, action: #selector(machoChanged))
     macho.state = model.machoBootMode ? .on : .off
     macho.isEnabled = RecoveryActions.supportsMachO
     stack.addArrangedSubview(macho)
-    let nested = NSButton(checkboxWithTitle: "Enable Nested Virtualization",
-                          target: self, action: #selector(nestedChanged))
+    let nested = NSButton(
+      checkboxWithTitle: "Enable Nested Virtualization",
+      target: self, action: #selector(nestedChanged))
     nested.state = model.nestedVirtualization ? .on : .off
     nested.isEnabled = RecoveryActions.supportsMachO && model.machoBootMode
     stack.addArrangedSubview(nested)
@@ -471,8 +487,9 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     alert.messageText = "Installation details"
     alert.informativeText =
       "Boot security is reduced only for this Omarchy installation. Your macOS security settings are unchanged."
-    let viewer = LogTextView(text: log.text.isEmpty
-      ? model.operations.joined(separator: "\n") : log.text)
+    let viewer = LogTextView(
+      text: log.text.isEmpty
+        ? model.operations.joined(separator: "\n") : log.text)
     viewer.frame = NSRect(x: 0, y: 0, width: 474, height: 200)
     alert.accessoryView = viewer
     alert.addButton(withTitle: "Copy Log")

@@ -40,7 +40,8 @@ final class LogTextView: NSScrollView {
     } else {
       let count = editor.string.utf16.count
       let start = min(selection.location, count)
-      editor.setSelectedRange(NSRange(location: start, length: min(selection.length, count - start)))
+      editor.setSelectedRange(
+        NSRange(location: start, length: min(selection.length, count - start)))
     }
   }
 }
