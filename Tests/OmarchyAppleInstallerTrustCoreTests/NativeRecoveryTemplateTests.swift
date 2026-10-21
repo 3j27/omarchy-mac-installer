@@ -10,14 +10,19 @@
       try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
       defer { try? FileManager.default.removeItem(at: root) }
       let metadata = root.appendingPathComponent("installer-data.json")
-      try Data(#"{"os_list":[{"omarchy_target":"apple-silicon-full-os","recovery_gui":"omarchy-native-v1"}]}"#.utf8)
-        .write(to: metadata)
+      try Data(
+        #"{"os_list":[{"omarchy_target":"apple-silicon-full-os","recovery_gui":"omarchy-native-v1"}]}"#
+          .utf8
+      )
+      .write(to: metadata)
       XCTAssertFalse(try NativeRecoveryTemplate.imageNeedsTemplate(metadataURL: metadata))
       try Data(#"{"os_list":[{"omarchy_target":"apple-silicon-full-os"}]}"#.utf8)
         .write(to: metadata)
       XCTAssertTrue(try NativeRecoveryTemplate.imageNeedsTemplate(metadataURL: metadata))
-      try Data(#"{"os_list":[{"omarchy_target":"apple-silicon-full-os","recovery_gui":"unknown"}]}"#.utf8)
-        .write(to: metadata)
+      try Data(
+        #"{"os_list":[{"omarchy_target":"apple-silicon-full-os","recovery_gui":"unknown"}]}"#.utf8
+      )
+      .write(to: metadata)
       XCTAssertThrowsError(try NativeRecoveryTemplate.imageNeedsTemplate(metadataURL: metadata))
     }
 

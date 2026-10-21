@@ -776,7 +776,8 @@
       for url in [manifestURL, requestURL, identityURL, payloadURL] {
         try writePrivate(Data("fixture".utf8), to: url)
       }
-      let metadata = imageNativeRecovery
+      let metadata =
+        imageNativeRecovery
         ? #"{"os_list":[{"omarchy_target":"apple-silicon-full-os","recovery_gui":"omarchy-native-v1"}]}"#
         : #"{"os_list":[{"omarchy_target":"apple-silicon-full-os"}]}"#
       try writePrivate(Data(metadata.utf8), to: metadataURL)
