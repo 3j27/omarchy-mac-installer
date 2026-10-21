@@ -28,6 +28,8 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private let sheets = SheetPresenter()
   private var authorizationField: NSSecureTextField?
   private var detailsViewer: LogTextView?
+  private var copyButton: NSButton?
+  private var copyingLog = false
 
   init(model: InstallerModel) {
     self.model = model
@@ -37,6 +39,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     sheets.onDismiss = { [weak self] in
       self?.authorizationField = nil
       self?.detailsViewer = nil
+      self?.copyButton = nil
       self?.refresh()
     }
   }
@@ -116,7 +119,9 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     detailsButton?.isHidden = model.stage == .welcome && log.text.isEmpty
     debugButton?.title = model.debugEnabled ? "Disable Debug" : "Enable Debug"
     proxyButton?.title = model.proxyEnabled ? "Disable Proxy" : "Enable Proxy"
-    accountButton?.title = model.accountAlreadyStarted ? "CONTINUE" : "CREATE ACCOUNT"
+    accountButton?.title =
+      model.creatingAccount
+      ? "PREPARING…" : model.accountAlreadyStarted ? "CONTINUE" : "CREATE ACCOUNT"
     accountButton?.isEnabled = model.canCreateAccount
     skipButton?.title = model.restartingWithoutAccount ? "Restarting…" : "Skip, Restart Now"
     skipButton?.isEnabled = !model.creatingAccount && !model.restartingWithoutAccount
@@ -129,6 +134,15 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     }
     accountPasswordField?.isEnabled = !model.creatingAccount && !model.restartingWithoutAccount
     accountConfirmationField?.isEnabled = !model.creatingAccount && !model.restartingWithoutAccount
+    // The model drops typed passwords on Skip and failures; keep the native fields in step.
+    for (field, value) in [
+      (accountPasswordField, model.accountPassword),
+      (accountConfirmationField, model.accountConfirmation),
+    ] where value.isEmpty && field?.stringValue.isEmpty == false {
+      field?.stringValue = ""
+    }
+    copyButton?.title = copyingLog ? "Copying…" : "Copy Log"
+    copyButton?.isEnabled = !copyingLog
     detailsViewer?.update(
       text: log.text.isEmpty ? model.operations.joined(separator: "\n") : log.text)
     if (model.environmentIssue != nil || model.failure != nil) && !issueShowing
@@ -531,6 +545,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   }
 
   @objc private func cancelPanelPressed() {
+    authorizationField?.stringValue = ""
     model.password.removeAll(keepingCapacity: false)
     closePanel()
   }
@@ -543,23 +558,30 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     detailsViewer = viewer
     let copy = RecoverySecondaryButton(
       title: "Copy Log", target: self, action: #selector(copyLogPressed))
+    copyButton = copy
     let done = RecoveryPrimaryButton(
       title: "Done", target: self, action: #selector(donePanelPressed))
     done.keyEquivalent = "\r"
     let panel = RecoverySheet(
       title: "Installation details",
-      message: log.truncated
-        ? "Showing recent output. Copy Log includes this attempt’s full log."
-        : "Command output from this installation.",
+      message:
+        "Boot security is reduced only for this Omarchy installation. Your macOS security settings are unchanged."
+        + (log.truncated
+          ? " Showing recent output. Copy Log includes this attempt’s full log." : ""),
       width: 550, body: viewer, bodyHeight: 290, buttons: [copy, done])
     present(panel)
   }
 
   @objc private func copyLogPressed() {
+    guard !copyingLog else { return }
+    copyingLog = true
+    refresh()
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       guard let self else { return }
       let result = Result { try self.log.fullText() }
       DispatchQueue.main.async {
+        self.copyingLog = false
+        self.refresh()
         switch result {
         case .success(let text):
           NSPasteboard.general.clearContents()

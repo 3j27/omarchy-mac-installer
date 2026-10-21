@@ -33,13 +33,6 @@ enum RecoveryActions {
   static var allowsCustomBootArguments: Bool {
     (try? configuration.get().allowCustomBootArguments) == true
   }
-  static var supportsMachO: Bool {
-    #if OMARCHY_STEP2_PREVIEW
-      return true
-    #else
-      return false
-    #endif
-  }
   static var inRecovery: Bool {
     #if OMARCHY_STEP2_RECOVERY
       return FileManager.default.fileExists(atPath: "/System/Installation/CDIS")
