@@ -21,10 +21,28 @@ fi
 cp .build/release/OmarchyRecovery "$APP/Contents/MacOS/OmarchyRecovery"
 [[ "$("$APP/Contents/MacOS/OmarchyRecovery" --build-mode)" == "$MODE" ]]
 # The small Recovery OS may omit frameworks present in a full macOS install.
-# SHA-256 uses CommonCrypto from libSystem; refuse a CryptoKit dependency.
+# Recovery stubs can omit UI and hashing frameworks present in full macOS.
 dependencies=$(xcrun otool -L "$APP/Contents/MacOS/OmarchyRecovery")
-if [[ $dependencies == *'/CryptoKit.framework/'* || $dependencies == *'/CryptoTokenKit.framework/'* ]]; then
+if [[ $dependencies == *'/SwiftUI.framework/'* ||
+      $dependencies == *'/Combine.framework/'* ||
+      $dependencies == *'/CryptoKit.framework/'* ||
+      $dependencies == *'/CryptoTokenKit.framework/'* ]]; then
   echo 'Recovery executable links a framework unavailable in older Recovery OS' >&2
+  exit 1
+fi
+# The macOS 13.5 stub loads only these Swift libraries. It has no AppKit
+# overlay, so calls such as NSSound.beep() stop Recovery from launching.
+while read -r lib; do
+  case $lib in
+    libswiftCore.dylib | libswiftDarwin.dylib | libswiftDispatch.dylib | libswiftObjectiveC.dylib | libswift_Concurrency.dylib) ;;
+    *)
+      echo "Recovery executable requires $lib, which older Recovery OS lacks" >&2
+      exit 1
+      ;;
+  esac
+done < <(printf '%s\n' "$dependencies" | grep '/usr/lib/swift/' | grep -v ', weak)' | sed -E 's#.*/usr/lib/swift/([^ ]+).*#\1#')
+if grep -REn '^[[:space:]]*import[[:space:]]+(SwiftUI|Combine|CryptoKit|CryptoTokenKit)' Sources; then
+  echo 'Recovery sources import a framework unavailable in older Recovery OS' >&2
   exit 1
 fi
 cat > "$APP/Contents/Info.plist" <<PLIST

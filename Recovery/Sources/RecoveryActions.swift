@@ -33,13 +33,6 @@ enum RecoveryActions {
   static var allowsCustomBootArguments: Bool {
     (try? configuration.get().allowCustomBootArguments) == true
   }
-  static var supportsMachO: Bool {
-    #if OMARCHY_STEP2_PREVIEW
-      return true
-    #else
-      return false
-    #endif
-  }
   static var inRecovery: Bool {
     #if OMARCHY_STEP2_RECOVERY
       return FileManager.default.fileExists(atPath: "/System/Installation/CDIS")
@@ -646,6 +639,27 @@ enum RecoveryActions {
 
   static func accountCreationRequired() throws -> Bool {
     try installed()["recoveryAccountRequired"] as? Bool == true
+  }
+
+  static func restartCompletedSetup() throws {
+    try recoveryOnly()
+    let record = try installed()
+    try RecoveryDirectRestart.perform(
+      receipt: record,
+      hasPendingInstallation: FileManager.default.fileExists(atPath: pendingInstallation.path),
+      verifyBundle: {
+        let config = try configuration.get()
+        let expected = try asset("raw/boot.bin", manifest: manifest())
+        let target = try esp().appendingPathComponent(config.stage2Path)
+        try check(
+          try Data(contentsOf: target) == expected,
+          "The installed startup bundle changed. Restore it before restarting.")
+      },
+      isTargetDefault: targetIsDefaultBoot,
+      restart: {
+        InstallerLog.shared.append("Setup complete. Restarting now.")
+        _ = try run("/sbin/shutdown", ["-r", "now"])
+      })
   }
 
   static func skipRecoveryAccountAndRestart() throws {

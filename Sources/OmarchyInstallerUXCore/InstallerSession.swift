@@ -187,6 +187,17 @@
         && prefetchState == .verified
     }
 
+    /// Why the plan's Install button can't be pressed yet, or `nil` when it
+    /// can. The button is disabled exactly when this is set, so the page
+    /// always says what is holding it.
+    public var planInstallHold: String? {
+      guard case .planReview(_, let acknowledged) = phase else { return nil }
+      if isBusy || isEditingSize { return PlainLanguage.replanning }
+      if !acknowledged { return PlainLanguage.installHoldAcknowledgement }
+      if prefetchState != .verified { return PlainLanguage.installHoldDownload }
+      return nil
+    }
+
     /// Preserved verbatim from `canRetryRecoveryAuthorization`.
     public var canRetryRecoveryAuthorization: Bool {
       recoveryRetryAvailable

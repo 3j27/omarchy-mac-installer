@@ -221,6 +221,58 @@
       XCTAssertFalse(FileManager.default.fileExists(atPath: journalDirectory(fixture.root).path))
     }
 
+    func testMissingRecoveryTemplateIsRefusedBeforeEngineExtraction() async throws {
+      let fixture = try makeFixture()
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let executor = rootExecutor(prepareRecoveryTemplate: { _ in
+        throw NativeRecoveryTemplateError.unavailable
+      })
+      await assertThrowsErrorAsync(
+        try await executor.execute(
+          fixture.package, authorization: try machineOwnerAuthorization()
+        )
+      ) { XCTAssertEqual($0 as? PinnedAsahiEngineExecutionError, .recoveryTemplateRejected) }
+      XCTAssertTrue(try executionEntries(in: fixture.root).isEmpty)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: journalDirectory(fixture.root).path))
+    }
+
+    func testImageRecoveryDoesNotPrepareInstallerTemplate() async throws {
+      let fixture = try makeFixture(imageNativeRecovery: true)
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let executor = rootExecutor(prepareRecoveryTemplate: { _ in
+        throw NativeRecoveryTemplateError.unavailable
+      })
+      let result = try await executor.execute(
+        fixture.package, authorization: try machineOwnerAuthorization())
+      XCTAssertEqual(result, fixture.transcript)
+    }
+
+    func testOlderAppWithoutTemplateKeepsLegacyImageFallback() async throws {
+      let fixture = try makeFixture(includeRecoveryTemplate: false)
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let executor = rootExecutor(prepareRecoveryTemplate: { _ in
+        throw NativeRecoveryTemplateError.unavailable
+      })
+      let result = try await executor.execute(
+        fixture.package, authorization: try machineOwnerAuthorization())
+      XCTAssertEqual(result, fixture.transcript)
+    }
+
+    func testOlderEngineCannotIgnoreTheNativeRecoveryContract() async throws {
+      let fixture = try makeFixture(includeRecoveryCapability: false)
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      await assertThrowsErrorAsync(
+        try await rootExecutor().execute(
+          fixture.package, authorization: try machineOwnerAuthorization()
+        )
+      ) { XCTAssertEqual($0 as? PinnedAsahiEngineExecutionError, .recoveryTemplateUnsupported) }
+      XCTAssertTrue(try executionEntries(in: fixture.root).isEmpty)
+      XCTAssertTrue(
+        try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).allSatisfy {
+          !$0.hasPrefix("fixture-recovery-")
+        })
+    }
+
     func testRecoveryRetryUsesDedicatedEngineMode() async throws {
       let fixture = try makeFixture(
         expectedInstallMode: "retry-recovery-authorization"
@@ -545,13 +597,29 @@
     private func rootExecutor(
       extractionOptions: [String] = [],
       restoreImageRequirement: String? = restoreImageRequirement,
-      verifyRestoreImage: @escaping @Sendable (URL, String) throws -> Void = { _, _ in }
+      verifyRestoreImage: @escaping @Sendable (URL, String) throws -> Void = { _, _ in },
+      prepareRecoveryTemplate:
+        @escaping @Sendable (ImportedEngineHandoffPackage) throws -> PreparedNativeRecoveryTemplate =
+        { package in
+          let parent = package.packageURL.deletingLastPathComponent()
+          let directory = parent.appendingPathComponent("fixture-recovery-\(UUID().uuidString)")
+          try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700])
+          let app = directory.appendingPathComponent("Recovery.app")
+          let manifest = directory.appendingPathComponent("inventory.json")
+          try Data("fixture app".utf8).write(to: app)
+          try Data("{}".utf8).write(to: manifest)
+          return PreparedNativeRecoveryTemplate(
+            directory: directory, app: app, manifest: manifest, requirement: "fixture requirement")
+        }
     ) -> PinnedAsahiEngineExecutor {
       PinnedAsahiEngineExecutor(
         effectiveUserID: { 0 },
         extractionOptions: extractionOptions,
         restoreImageRequirement: restoreImageRequirement,
-        verifyRestoreImage: verifyRestoreImage
+        verifyRestoreImage: verifyRestoreImage,
+        prepareRecoveryTemplate: prepareRecoveryTemplate
       )
     }
 
@@ -564,7 +632,10 @@
       checkpointEvidence: [String: Data] = [:],
       repairManifest: Data? = nil,
       standardError: Data? = nil,
-      includeRestoreImage: Bool = true
+      includeRestoreImage: Bool = true,
+      includeRecoveryCapability: Bool = true,
+      includeRecoveryTemplate: Bool = true,
+      imageNativeRecovery: Bool = false
     ) throws -> PinnedExecutorFixture {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(
         "omarchy-pinned-executor-\(UUID().uuidString.lowercased())",
@@ -589,6 +660,10 @@
         attributes: [.posixPermissions: 0o700]
       )
 
+      if includeRecoveryCapability {
+        try Data(#"{"schema":1,"nativeRecoveryInput":"helper-template-v1"}"#.utf8).write(
+          to: bundleSource.appendingPathComponent("engine-capabilities.json"))
+      }
       let main = bundleSource.appendingPathComponent("main.py")
       try writePrivate(Data("# synthetic engine\n".utf8), to: main)
       var checkpointCommands = [String]()
@@ -619,6 +694,7 @@
       let python = bundleSource.appendingPathComponent(
         "Frameworks/Python.framework/Versions/3.13/bin/python3.13"
       )
+      let expectedRecoveryTemplate = includeRecoveryTemplate && !imageNativeRecovery ? "1" : "0"
       try FileManager.default.createDirectory(
         at: python.deletingLastPathComponent(),
         withIntermediateDirectories: true,
@@ -641,6 +717,15 @@
             [ "$OMARCHY_INSTALLER_NAME" = "\(InstallerProductIdentity.appName)" ] || exit 83
             [ "$DISTRO_DOCS" = "https://omarchy.org/manual/" ] || exit 69
             [ "$OMARCHY_MACHINE_OWNER" = "mina" ] || exit 67
+            if [ "\(expectedRecoveryTemplate)" = 1 ]; then
+              [ -r "$OMARCHY_RECOVERY_APP" ] || exit 86
+              [ -r "$OMARCHY_RECOVERY_MANIFEST" ] || exit 87
+              [ "$OMARCHY_RECOVERY_REQUIREMENT" = 'fixture requirement' ] || exit 88
+            else
+              [ -z "${OMARCHY_RECOVERY_APP:-}" ] || exit 86
+              [ -z "${OMARCHY_RECOVERY_MANIFEST:-}" ] || exit 87
+              [ -z "${OMARCHY_RECOVERY_REQUIREMENT:-}" ] || exit 88
+            fi
             IFS= read -r owner_password || exit 66
             [ "$owner_password" = "owner-password" ] || exit 65
             [ "$OMARCHY_ENGINE_PLAN_DIGEST" = "\(String(repeating: "a", count: 64))" ] || exit 71
@@ -695,14 +780,23 @@
       let repairManifestURL = repairManifest.map { _ in
         packageURL.appendingPathComponent("repair.json")
       }
-      for url in [manifestURL, requestURL, identityURL, metadataURL, payloadURL] {
+      for url in [manifestURL, requestURL, identityURL, payloadURL] {
         try writePrivate(Data("fixture".utf8), to: url)
       }
+      let metadata =
+        imageNativeRecovery
+        ? #"{"os_list":[{"omarchy_target":"apple-silicon-full-os","recovery_gui":"omarchy-native-v1"}]}"#
+        : #"{"os_list":[{"omarchy_target":"apple-silicon-full-os"}]}"#
+      try writePrivate(Data(metadata.utf8), to: metadataURL)
       if let repairManifest, let repairManifestURL {
         try writePrivate(repairManifest, to: repairManifestURL)
       }
       let restoreImageURL = packageURL.appendingPathComponent(RestoreImageHelper.fileName)
       try writePrivate(Data("decoder".utf8), to: restoreImageURL)
+      let recoveryTemplateURL = packageURL.appendingPathComponent("native-recovery.json")
+      if includeRecoveryTemplate {
+        try writePrivate(Data("template".utf8), to: recoveryTemplateURL)
+      }
 
       return PinnedExecutorFixture(
         root: root,
@@ -716,6 +810,7 @@
           payloadURL: payloadURL,
           repairManifestURL: repairManifestURL,
           restoreImageURL: includeRestoreImage ? restoreImageURL : nil,
+          recoveryTemplateURL: includeRecoveryTemplate ? recoveryTemplateURL : nil,
           bindingDigest: "sha256:" + String(repeating: "b", count: 64),
           planDigest: String(repeating: "a", count: 64),
           deviceIdentifier: "apple,j314s",
