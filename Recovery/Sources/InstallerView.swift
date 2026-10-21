@@ -446,6 +446,17 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   }
 
   func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+    // Tab and Shift-Tab step through the account fields in order.
+    let fields = [accountUsernameField, accountPasswordField, accountConfirmationField]
+      .compactMap { $0 }.filter(\.isEnabled)
+    if selector == #selector(NSResponder.insertTab(_:))
+      || selector == #selector(NSResponder.insertBacktab(_:)),
+      let index = fields.firstIndex(where: { $0 === control })
+    {
+      let step = selector == #selector(NSResponder.insertTab(_:)) ? 1 : fields.count - 1
+      view.window?.makeFirstResponder(fields[(index + step) % fields.count])
+      return true
+    }
     guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
     if control === accountUsernameField {
       view.window?.makeFirstResponder(accountPasswordField)

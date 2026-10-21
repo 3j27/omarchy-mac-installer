@@ -468,6 +468,8 @@ final class InstallerWindow: NSWindow {
     for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
       standardWindowButton(button)?.isHidden = true
     }
+    // Views are built in code, so let AppKit derive Tab order from layout.
+    autorecalculatesKeyViewLoop = true
     isMovableByWindowBackground = true
     // Full-size content occupies the titlebar too. Preserve the original outer
     // dimensions instead of adding AppKit's titlebar height to the layout.
