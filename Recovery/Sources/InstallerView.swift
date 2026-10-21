@@ -7,6 +7,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private let log = InstallerLog.shared
   private let titleLabel = NSTextField(labelWithString: "")
   private var titleWidthConstraint: NSLayoutConstraint?
+  private var titleTopConstraint: NSLayoutConstraint?
   private let content = NSView()
   private let footer = NSView()
   private var renderedStage: Stage?
@@ -67,12 +68,14 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
 
     let titleWidth = titleLabel.widthAnchor.constraint(equalToConstant: 600)
     titleWidthConstraint = titleWidth
+    let titleTop = titleLabel.topAnchor.constraint(equalTo: wordmark.bottomAnchor, constant: 28)
+    titleTopConstraint = titleTop
     NSLayoutConstraint.activate([
       wordmark.topAnchor.constraint(equalTo: root.topAnchor, constant: 62),
       wordmark.centerXAnchor.constraint(equalTo: root.centerXAnchor),
       wordmark.widthAnchor.constraint(equalToConstant: 400),
       wordmark.heightAnchor.constraint(equalToConstant: 94),
-      titleLabel.topAnchor.constraint(equalTo: wordmark.bottomAnchor, constant: 28),
+      titleTop,
       titleLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
       titleWidth,
       content.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 24),
@@ -100,6 +103,8 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     titleLabel.stringValue = stageTitle
     titleLabel.alignment = model.stage == .account ? .left : .center
     titleWidthConstraint?.constant = model.stage == .account ? 380 : 600
+    titleTopConstraint?.constant =
+      model.stage == .installing ? 110 : model.stage == .complete ? 48 : 28
     progressIndicator?.doubleValue = model.progress * 100
     operationLabel?.stringValue = model.currentOperation + "…"
     primaryButton?.isEnabled = !model.checkingEnvironment && !model.restartingCompletedSetup
@@ -191,7 +196,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     icon.translatesAutoresizingMaskIntoConstraints = false
     icon.widthAnchor.constraint(equalToConstant: 96).isActive = true
     icon.heightAnchor.constraint(equalToConstant: 96).isActive = true
-    stack.setCustomSpacing(30, after: stack.arrangedSubviews[1])
+    stack.setCustomSpacing(54, after: stack.arrangedSubviews[1])
     stack.addArrangedSubview(icon)
     stack.addArrangedSubview(label(DestinationVolume.name, size: 14))
     place(stack)
@@ -268,14 +273,14 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
         model.accountNeedsAuthorization
           ? DestinationVolume.name + " is ready for authorization."
           : DestinationVolume.name + " is ready to start.", size: 15))
-    stack.setCustomSpacing(25, after: stack.arrangedSubviews[0])
+    stack.setCustomSpacing(40, after: stack.arrangedSubviews[0])
     let icon = NSImageView(image: DestinationVolume.icon)
     icon.imageScaling = .scaleProportionallyUpOrDown
     icon.translatesAutoresizingMaskIntoConstraints = false
     icon.widthAnchor.constraint(equalToConstant: 96).isActive = true
     icon.heightAnchor.constraint(equalToConstant: 96).isActive = true
     stack.addArrangedSubview(icon)
-    stack.setCustomSpacing(25, after: icon)
+    stack.setCustomSpacing(40, after: icon)
     if model.accountNeedsAuthorization {
       stack.addArrangedSubview(
         label(
@@ -288,7 +293,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     } else {
       stack.addArrangedSubview(label("Restart to start using Omarchy.", size: 12))
     }
-    place(stack)
+    place(stack, top: 16)
   }
 
   private func buildFooter() {
