@@ -313,14 +313,6 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
         target: self, action: #selector(startPressed))
       center.addArrangedSubview(start)
       primaryButton = start
-      if model.recoveryInterface {
-        let debug = NSButton(title: "", target: self, action: #selector(debugPressed))
-        let proxy = NSButton(title: "", target: self, action: #selector(proxyPressed))
-        center.addArrangedSubview(debug)
-        center.addArrangedSubview(proxy)
-        debugButton = debug
-        proxyButton = proxy
-      }
     case .installing: break
     case .account:
       let account = RecoveryPrimaryButton(
@@ -346,6 +338,16 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     right.alignment = .centerY
     right.spacing = 12
     right.translatesAutoresizingMaskIntoConstraints = false
+    if model.stage == .welcome && model.recoveryInterface {
+      let debug = RecoveryTextButton(
+        title: "Enable Debug", target: self, action: #selector(debugPressed))
+      let proxy = RecoveryTextButton(
+        title: "Enable Proxy", target: self, action: #selector(proxyPressed))
+      right.addArrangedSubview(debug)
+      right.addArrangedSubview(proxy)
+      debugButton = debug
+      proxyButton = proxy
+    }
     if model.stage == .welcome && !model.recoveryInterface {
       let advanced = RecoveryTextButton(
         title: "Advanced Options", target: self, action: #selector(advancedPressed))
