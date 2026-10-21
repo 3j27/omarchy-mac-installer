@@ -311,14 +311,18 @@ private struct OmarchyButtonBody: View {
         RoundedRectangle(cornerRadius: OmarchyTheme.buttonRadius)
           .strokeBorder(colors.border, lineWidth: 1)
       )
-      .opacity(isEnabled ? 1 : 0.4)
       .contentShape(Rectangle())
       .onHover { isHovered = $0 }
   }
 
   private var colors: (foreground: Color, background: Color, border: Color) {
-    let pressed = isEnabled && configuration.isPressed
-    let hovered = isEnabled && isHovered
+    // Disabled buttons are outlined rather than faded, so the label stays
+    // readable while the button plainly isn't available yet.
+    guard isEnabled else {
+      return (OmarchyTheme.secondaryText, OmarchyTheme.card, OmarchyTheme.separator)
+    }
+    let pressed = configuration.isPressed
+    let hovered = isHovered
     switch kind {
     case .primary:
       let fill =
