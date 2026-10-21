@@ -2,6 +2,8 @@
 
 The Omarchy-branded native Recovery interface lives alongside the main installer. It has two explicit build modes, targeting macOS 13 independently of the main installer's macOS 15 requirement.
 
+Older Recovery stubs can omit frameworks available in full macOS despite the same deployment version. Recovery computes its SHA-256 checks with CommonCrypto in libSystem, and the app build refuses direct CryptoKit or CryptoTokenKit linkage. The deployment target and link check still need a boot test in the affected M1/M2 Recovery stub before claiming that launch is qualified.
+
 ## Preview
 
 On macOS with Xcode and XcodeBuildMCP installed:
