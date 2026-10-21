@@ -533,7 +533,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   @objc private func authorizePanelPressed() {
     let credential = authorizationField?.stringValue ?? ""
     guard !credential.isEmpty else {
-      NSSound.beep()
+      authorizationField?.window?.makeFirstResponder(authorizationField)
       return
     }
     authorizationField?.stringValue = ""
