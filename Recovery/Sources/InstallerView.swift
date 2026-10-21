@@ -459,7 +459,11 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     accountPasswordField?.stringValue = ""
     accountConfirmationField?.stringValue = ""
   }
-  @objc private func skipPressed() { model.skipRecoveryAccountAndRestart() }
+  @objc private func skipPressed() {
+    model.skipRecoveryAccountAndRestart()
+    accountPasswordField?.stringValue = ""
+    accountConfirmationField?.stringValue = ""
+  }
   @objc private func restartPressed() { model.finishSetup() }
 
   @discardableResult private func present(_ panel: RecoverySheet, focus: NSView? = nil) -> Bool {
