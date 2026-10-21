@@ -66,7 +66,7 @@
     }
 
     func testRecoveryContainerIsImportedWithItsDigestAndRejectsUnsafeSource() throws {
-      for mode in ["valid", "changed", "symlink", "fifo", "renamed", "oversize"] {
+      for mode in ["valid", "changed", "symlink", "fifo", "renamed", "oversize", "partial"] {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let bytes = Data("bounded recovery container".utf8)
@@ -81,6 +81,11 @@
           "size_bytes": mode == "oversize"
             ? Int(NativeRecoveryTemplate.maximumArchiveBytes + 1) : bytes.count,
         ]
+        if mode == "partial" {
+          var record = try XCTUnwrap(manifest["recovery_template"] as? [String: Any])
+          record.removeValue(forKey: "digest")
+          manifest["recovery_template"] = record
+        }
         try JSONSerialization.data(withJSONObject: manifest).write(
           to: manifestURL, options: .atomic)
         switch mode {

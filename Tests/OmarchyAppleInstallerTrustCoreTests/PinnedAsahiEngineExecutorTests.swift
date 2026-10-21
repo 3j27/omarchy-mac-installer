@@ -694,6 +694,7 @@
       let python = bundleSource.appendingPathComponent(
         "Frameworks/Python.framework/Versions/3.13/bin/python3.13"
       )
+      let expectedRecoveryTemplate = includeRecoveryTemplate && !imageNativeRecovery ? "1" : "0"
       try FileManager.default.createDirectory(
         at: python.deletingLastPathComponent(),
         withIntermediateDirectories: true,
@@ -716,9 +717,15 @@
             [ "$OMARCHY_INSTALLER_NAME" = "\(InstallerProductIdentity.appName)" ] || exit 83
             [ "$DISTRO_DOCS" = "https://omarchy.org/manual/" ] || exit 69
             [ "$OMARCHY_MACHINE_OWNER" = "mina" ] || exit 67
-            [ -r "$OMARCHY_RECOVERY_APP" ] || exit 86
-            [ -r "$OMARCHY_RECOVERY_MANIFEST" ] || exit 87
-            [ "$OMARCHY_RECOVERY_REQUIREMENT" = 'fixture requirement' ] || exit 88
+            if [ "\(expectedRecoveryTemplate)" = 1 ]; then
+              [ -r "$OMARCHY_RECOVERY_APP" ] || exit 86
+              [ -r "$OMARCHY_RECOVERY_MANIFEST" ] || exit 87
+              [ "$OMARCHY_RECOVERY_REQUIREMENT" = 'fixture requirement' ] || exit 88
+            else
+              [ -z "${OMARCHY_RECOVERY_APP:-}" ] || exit 86
+              [ -z "${OMARCHY_RECOVERY_MANIFEST:-}" ] || exit 87
+              [ -z "${OMARCHY_RECOVERY_REQUIREMENT:-}" ] || exit 88
+            fi
             IFS= read -r owner_password || exit 66
             [ "$owner_password" = "owner-password" ] || exit 65
             [ "$OMARCHY_ENGINE_PLAN_DIGEST" = "\(String(repeating: "a", count: 64))" ] || exit 71

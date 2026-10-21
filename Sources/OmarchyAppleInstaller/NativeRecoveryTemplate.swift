@@ -48,10 +48,12 @@
     static let maximumArchiveBytes: UInt64 = 64 << 20
 
     static func imageNeedsTemplate(metadataURL: URL) throws -> Bool {
+      var status = stat()
       guard metadataURL.isFileURL,
-        let size = try? metadataURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-        size > 0, size <= 1 << 20,
-        let bytes = try? Data(contentsOf: metadataURL), bytes.count == size,
+        lstat(metadataURL.path, &status) == 0,
+        (status.st_mode & S_IFMT) == S_IFREG,
+        status.st_size > 0, status.st_size <= 1 << 20,
+        let bytes = try? Data(contentsOf: metadataURL), bytes.count == Int(status.st_size),
         let metadata = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
         let entries = metadata["os_list"] as? [[String: Any]]
       else { throw NativeRecoveryTemplateError.unsafeTemplate }
@@ -62,11 +64,6 @@
         throw NativeRecoveryTemplateError.unsafeTemplate
       }
       return false
-    }
-
-    static func bundledURL() -> URL {
-      Bundle.main.bundleURL.appendingPathComponent(
-        "Contents/Resources/RecoveryTemplate/" + InstallerProductIdentity.recoveryAppBundleName)
     }
 
     // This flat, bounded data container has no links, executable extraction
@@ -96,17 +93,10 @@
       guard let archive = package.recoveryTemplateURL,
         let requirement = requirement(environment: ProcessInfo.processInfo.environment)
       else { throw NativeRecoveryTemplateError.unavailable }
-      let prepared = try prepare(
+      return try prepare(
         archive: archive, in: package.packageURL.deletingLastPathComponent(),
         owner: 0, requirement: requirement
       ) { app in try verify(app, requirement: requirement) }
-      do {
-        try publish(prepared)
-        return prepared
-      } catch {
-        prepared.remove()
-        throw error
-      }
     }
 
     static func prepare(
@@ -166,6 +156,9 @@
         }
         let recorded = try inventory(result.app, owner: owner)
         try verify(result.app)
+        guard try inventory(result.app, owner: owner) == recorded else {
+          throw NativeRecoveryTemplateError.unsafeTemplate
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         try encoder.encode(recorded).write(to: result.manifest, options: .withoutOverwriting)
@@ -181,102 +174,6 @@
     static func verify(_ app: URL, requirement: String) throws {
       _ = try AccountNativeCommand.checked(
         "/usr/bin/codesign", ["--verify", "--deep", "--strict", "-R=" + requirement, app.path])
-    }
-
-    private static func publish(_ prepared: PreparedNativeRecoveryTemplate) throws {
-      try publish(
-        prepared,
-        to: URL(fileURLWithPath: InstallerProductIdentity.installedRecoveryTemplateDirectory),
-        owner: 0,
-        verify: { try verify($0, requirement: prepared.requirement) })
-    }
-
-    static func publish(
-      _ prepared: PreparedNativeRecoveryTemplate, to destination: URL, owner: uid_t,
-      verify: (URL) throws -> Void,
-      flushTree: (URL) throws -> Void = RecoveryFileTransaction.flushTree,
-      flushDirectory: (URL) throws -> Void = RecoveryFileTransaction.flushDirectory
-    ) throws {
-      let parent = destination.deletingLastPathComponent()
-      let createsParent = !FileManager.default.fileExists(atPath: parent.path)
-      if createsParent {
-        try requireSafe(parent.deletingLastPathComponent(), directory: true, owner: owner)
-        if mkdir(parent.path, 0o755) != 0 && errno != EEXIST {
-          throw NativeRecoveryTemplateError.unsafeTemplate
-        }
-      }
-      try requireSafe(parent, directory: true, owner: owner)
-      if createsParent { try flushDirectory(parent.deletingLastPathComponent()) }
-      let staged = parent.appendingPathComponent(".native-recovery-\(UUID().uuidString)")
-      try FileManager.default.createDirectory(
-        at: staged, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-      var retireStaged = true
-      defer { if retireStaged { try? FileManager.default.removeItem(at: staged) } }
-      let app = staged.appendingPathComponent(InstallerProductIdentity.recoveryAppBundleName)
-      try FileManager.default.copyItem(at: prepared.app, to: app)
-      _ = try inventory(app, owner: owner)
-      try verify(app)
-      try flushTree(staged)
-      if FileManager.default.fileExists(atPath: destination.path) {
-        try requireSafe(destination, directory: true, owner: owner)
-        guard
-          renameatx_np(AT_FDCWD, staged.path, AT_FDCWD, destination.path, UInt32(RENAME_SWAP)) == 0
-        else {
-          throw NativeRecoveryTemplateError.unsafeTemplate
-        }
-        // The exchanged old tree is rollback evidence until the new directory
-        // entry is durable. A flush failure must never delete it.
-        retireStaged = false
-        try flushDirectory(parent)
-        retireStaged = true
-      } else {
-        try FileManager.default.moveItem(at: staged, to: destination)
-        retireStaged = false
-        do {
-          try flushDirectory(parent)
-        } catch {
-          // The first publication has no previous tree. Move the candidate
-          // back before reporting a durability failure.
-          try FileManager.default.moveItem(at: destination, to: staged)
-          retireStaged = true
-          try flushDirectory(parent)
-          throw error
-        }
-      }
-    }
-
-    static func prepare(
-      source: URL, in parent: URL, owner: uid_t, requirement: String,
-      verify: (URL) throws -> Void
-    ) throws -> PreparedNativeRecoveryTemplate {
-      try requireSafe(parent, directory: true, owner: owner)
-      let original = try inventory(source, owner: owner)
-      try verify(source)
-      let directory = parent.appendingPathComponent(
-        "native-recovery-\(UUID().uuidString.lowercased())")
-      try FileManager.default.createDirectory(
-        at: directory, withIntermediateDirectories: false,
-        attributes: [.posixPermissions: 0o700])
-      let prepared = PreparedNativeRecoveryTemplate(
-        directory: directory,
-        app: directory.appendingPathComponent(InstallerProductIdentity.recoveryAppBundleName),
-        manifest: directory.appendingPathComponent("omarchy-recovery-app.json"),
-        requirement: requirement)
-      do {
-        try FileManager.default.copyItem(at: source, to: prepared.app)
-        let copied = try inventory(prepared.app, owner: owner)
-        guard copied == original else { throw NativeRecoveryTemplateError.unsafeTemplate }
-        try verify(prepared.app)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        try encoder.encode(copied).write(to: prepared.manifest, options: .atomic)
-        try FileManager.default.setAttributes(
-          [.posixPermissions: 0o600], ofItemAtPath: prepared.manifest.path)
-        return prepared
-      } catch {
-        prepared.remove()
-        throw error
-      }
     }
 
     static func requirement(environment: [String: String]) -> String? {

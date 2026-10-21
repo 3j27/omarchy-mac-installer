@@ -49,15 +49,25 @@
       return (root, app)
     }
 
+    private func prepareArchive(
+      source: URL, in root: URL, owner: uid_t, requirement: String,
+      verify: (URL) throws -> Void
+    ) throws -> PreparedNativeRecoveryTemplate {
+      let archive = root.appendingPathComponent(NativeRecoveryTemplate.archiveFileName)
+      try NativeRecoveryTemplate.archiveData(from: source).write(to: archive)
+      return try NativeRecoveryTemplate.prepare(
+        archive: archive, in: root, owner: owner, requirement: requirement, verify: verify)
+    }
+
     func testSnapshotBindsCompleteInventoryAndDoesNotChangeSource() throws {
       let (root, app) = try fixture()
       defer { try? FileManager.default.removeItem(at: root) }
       var verified = [URL]()
-      let prepared = try NativeRecoveryTemplate.prepare(
+      let prepared = try prepareArchive(
         source: app, in: root, owner: geteuid(), requirement: "expected identity"
       ) { verified.append($0) }
       defer { prepared.remove() }
-      XCTAssertEqual(verified, [app, prepared.app])
+      XCTAssertEqual(verified, [prepared.app])
       let manifest = try XCTUnwrap(
         JSONSerialization.jsonObject(
           with: Data(contentsOf: prepared.manifest)) as? [String: Any])
@@ -98,31 +108,35 @@
         default: break
         }
         XCTAssertThrowsError(
-          try NativeRecoveryTemplate.prepare(
+          try prepareArchive(
             source: app, in: root, owner: variation == "owner" ? geteuid() + 1 : geteuid(),
             requirement: "identity", verify: { _ in }))
-        XCTAssertEqual(
-          try FileManager.default.contentsOfDirectory(atPath: root.path), ["Source.app"])
+        XCTAssertFalse(
+          try FileManager.default.contentsOfDirectory(atPath: root.path).contains {
+            $0.hasPrefix("native-recovery-")
+          })
       }
     }
 
-    func testSignatureFailureAndMutationDuringSnapshotLeaveNoJobCopy() throws {
+    func testSignatureFailureAndMutationDuringReconstructionLeaveNoJobCopy() throws {
       for mutate in [false, true] {
         let (root, app) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         XCTAssertThrowsError(
-          try NativeRecoveryTemplate.prepare(
+          try prepareArchive(
             source: app, in: root, owner: geteuid(), requirement: "identity"
-          ) { _ in
+          ) { recovered in
             if mutate {
               try Data("changed".utf8).write(
-                to: app.appendingPathComponent("Contents/MacOS/OmarchyRecovery"))
+                to: recovered.appendingPathComponent("Contents/MacOS/OmarchyRecovery"))
             } else {
               throw NativeRecoveryTemplateError.invalidIdentity
             }
           })
-        XCTAssertEqual(
-          try FileManager.default.contentsOfDirectory(atPath: root.path), ["Source.app"])
+        XCTAssertFalse(
+          try FileManager.default.contentsOfDirectory(atPath: root.path).contains {
+            $0.hasPrefix("native-recovery-")
+          })
       }
     }
 
@@ -224,83 +238,6 @@
         try NativeRecoveryTemplate.prepare(
           archive: archive, in: root, owner: geteuid(), requirement: wrong
         ) { try NativeRecoveryTemplate.verify($0, requirement: wrong) })
-    }
-
-    func testFirstPublicationCreatesItsMissingValidatedParent() throws {
-      let (root, app) = try fixture()
-      defer { try? FileManager.default.removeItem(at: root) }
-      let prepared = try NativeRecoveryTemplate.prepare(
-        source: app, in: root, owner: geteuid(), requirement: "identity", verify: { _ in })
-      defer { prepared.remove() }
-      let destination = root.appendingPathComponent("Helpers/RecoveryTemplate")
-      var flushed = [URL]()
-      try NativeRecoveryTemplate.publish(
-        prepared, to: destination, owner: geteuid(), verify: { _ in },
-        flushDirectory: { flushed.append($0) })
-      XCTAssertEqual(
-        flushed.map(\.path), [root.path, destination.deletingLastPathComponent().path])
-      XCTAssertTrue(
-        FileManager.default.fileExists(
-          atPath:
-            destination.appendingPathComponent(InstallerProductIdentity.recoveryAppBundleName).path)
-      )
-    }
-
-    func testFirstPublicationRollsBackWhenDirectoryFlushFails() throws {
-      let (root, app) = try fixture()
-      defer { try? FileManager.default.removeItem(at: root) }
-      let prepared = try NativeRecoveryTemplate.prepare(
-        source: app, in: root, owner: geteuid(), requirement: "identity", verify: { _ in })
-      defer { prepared.remove() }
-      let destination = root.appendingPathComponent("RecoveryTemplate")
-      var flushes = 0
-      XCTAssertThrowsError(
-        try NativeRecoveryTemplate.publish(
-          prepared, to: destination, owner: geteuid(), verify: { _ in },
-          flushDirectory: { _ in
-            flushes += 1
-            if flushes == 1 { throw NativeRecoveryTemplateError.unsafeTemplate }
-          }))
-      XCTAssertEqual(flushes, 2)
-      XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
-      XCTAssertFalse(
-        try FileManager.default.contentsOfDirectory(atPath: root.path).contains {
-          $0.hasPrefix(".native-recovery-")
-        })
-    }
-
-    func testPublicationRetainsOldTreeUntilTheNewEntryIsDurable() throws {
-      let (root, app) = try fixture()
-      defer { try? FileManager.default.removeItem(at: root) }
-      let prepared = try NativeRecoveryTemplate.prepare(
-        source: app, in: root, owner: geteuid(), requirement: "identity", verify: { _ in })
-      defer { prepared.remove() }
-      let destination = root.appendingPathComponent("retained")
-      try FileManager.default.createDirectory(
-        at: destination, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-      try Data("previous".utf8).write(to: destination.appendingPathComponent("previous.txt"))
-      var flushed = false
-      XCTAssertThrowsError(
-        try NativeRecoveryTemplate.publish(
-          prepared, to: destination, owner: geteuid(), verify: { _ in },
-          flushTree: { _ in flushed = true },
-          flushDirectory: { _ in
-            XCTAssertTrue(flushed)
-            throw NativeRecoveryTemplateError.unsafeTemplate
-          }))
-      XCTAssertTrue(
-        FileManager.default.fileExists(
-          atPath: destination.appendingPathComponent(InstallerProductIdentity.recoveryAppBundleName)
-            .path))
-      let previous = try FileManager.default.contentsOfDirectory(
-        at: root, includingPropertiesForKeys: nil
-      ).filter {
-        $0.lastPathComponent.hasPrefix(".native-recovery-")
-      }
-      XCTAssertEqual(previous.count, 1)
-      XCTAssertEqual(
-        try Data(contentsOf: previous[0].appendingPathComponent("previous.txt")),
-        Data("previous".utf8))
     }
 
     func testHelperRequirementDoesNotAcceptUnpinnedAdHocCode() {

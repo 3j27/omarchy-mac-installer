@@ -340,6 +340,19 @@ class AsahiStage1AdapterTests(unittest.TestCase):
         self.assertFalse(adapter.preflight_complete)
         self.assertEqual(dutil.add_calls, [])
 
+    def test_partial_helper_template_contract_stops_before_disk_calls(self):
+        for key, value in (("recovery_app", "/private/job/Recovery.app"),
+                           ("recovery_manifest", "/private/job/recovery.json"),
+                           ("recovery_requirement", "pinned identity")):
+            installer = FakeInstaller(FakeDiskUtil([[self.free]]))
+            adapter = self._adapter(installer)
+            setattr(adapter, key, value)
+            with self.subTest(key=key), self.assertRaisesRegex(
+                    AsahiAdapterError, "incomplete helper Recovery template contract"):
+                adapter.preflight(self.plan)
+            self.assertIsNone(adapter.template)
+            self.assertEqual(installer.dutil.add_calls, [])
+
     def test_embedded_layout_recovery_app_is_refused_before_partitioning(self):
         files = {
             "Contents/Info.plist": plistlib.dumps({
