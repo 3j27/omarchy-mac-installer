@@ -12,7 +12,7 @@ lists them. Each comes from this Mac's own macOS:
 - config-original.bin (J7CF): the driver extension's IZUBA_wifi.cfg;
 - the Bluetooth firmware and PTX: /usr/share/firmware/bluetooth;
 - the Bluetooth address: the device tree's /chosen.
-- the country policy (policy/world-XZ.bin and policy/US.bin, J7RP): derived
+- the world and all supported country policies (J7RP): derived
   from the driver extension's power tables by omarchy_mt7932_policy.
 
 Wi-Fi does not start without the country policy; Bluetooth does not need it.
