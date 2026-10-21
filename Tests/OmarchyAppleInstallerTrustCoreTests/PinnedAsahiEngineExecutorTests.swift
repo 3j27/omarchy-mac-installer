@@ -236,6 +236,28 @@
       XCTAssertFalse(FileManager.default.fileExists(atPath: journalDirectory(fixture.root).path))
     }
 
+    func testImageRecoveryDoesNotPrepareInstallerTemplate() async throws {
+      let fixture = try makeFixture(imageNativeRecovery: true)
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let executor = rootExecutor(prepareRecoveryTemplate: { _ in
+        throw NativeRecoveryTemplateError.unavailable
+      })
+      let result = try await executor.execute(
+        fixture.package, authorization: try machineOwnerAuthorization())
+      XCTAssertEqual(result, fixture.transcript)
+    }
+
+    func testOlderAppWithoutTemplateKeepsLegacyImageFallback() async throws {
+      let fixture = try makeFixture(includeRecoveryTemplate: false)
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let executor = rootExecutor(prepareRecoveryTemplate: { _ in
+        throw NativeRecoveryTemplateError.unavailable
+      })
+      let result = try await executor.execute(
+        fixture.package, authorization: try machineOwnerAuthorization())
+      XCTAssertEqual(result, fixture.transcript)
+    }
+
     func testOlderEngineCannotIgnoreTheNativeRecoveryContract() async throws {
       let fixture = try makeFixture(includeRecoveryCapability: false)
       defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -611,7 +633,9 @@
       repairManifest: Data? = nil,
       standardError: Data? = nil,
       includeRestoreImage: Bool = true,
-      includeRecoveryCapability: Bool = true
+      includeRecoveryCapability: Bool = true,
+      includeRecoveryTemplate: Bool = true,
+      imageNativeRecovery: Bool = false
     ) throws -> PinnedExecutorFixture {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(
         "omarchy-pinned-executor-\(UUID().uuidString.lowercased())",
@@ -749,14 +773,22 @@
       let repairManifestURL = repairManifest.map { _ in
         packageURL.appendingPathComponent("repair.json")
       }
-      for url in [manifestURL, requestURL, identityURL, metadataURL, payloadURL] {
+      for url in [manifestURL, requestURL, identityURL, payloadURL] {
         try writePrivate(Data("fixture".utf8), to: url)
       }
+      let metadata = imageNativeRecovery
+        ? #"{"os_list":[{"omarchy_target":"apple-silicon-full-os","recovery_gui":"omarchy-native-v1"}]}"#
+        : #"{"os_list":[{"omarchy_target":"apple-silicon-full-os"}]}"#
+      try writePrivate(Data(metadata.utf8), to: metadataURL)
       if let repairManifest, let repairManifestURL {
         try writePrivate(repairManifest, to: repairManifestURL)
       }
       let restoreImageURL = packageURL.appendingPathComponent(RestoreImageHelper.fileName)
       try writePrivate(Data("decoder".utf8), to: restoreImageURL)
+      let recoveryTemplateURL = packageURL.appendingPathComponent("native-recovery.json")
+      if includeRecoveryTemplate {
+        try writePrivate(Data("template".utf8), to: recoveryTemplateURL)
+      }
 
       return PinnedExecutorFixture(
         root: root,
@@ -770,6 +802,7 @@
           payloadURL: payloadURL,
           repairManifestURL: repairManifestURL,
           restoreImageURL: includeRestoreImage ? restoreImageURL : nil,
+          recoveryTemplateURL: includeRecoveryTemplate ? recoveryTemplateURL : nil,
           bindingDigest: "sha256:" + String(repeating: "b", count: 64),
           planDigest: String(repeating: "a", count: 64),
           deviceIdentifier: "apple,j314s",

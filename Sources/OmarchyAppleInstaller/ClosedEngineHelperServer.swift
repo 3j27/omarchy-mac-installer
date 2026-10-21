@@ -188,19 +188,13 @@
       self.selfUninstaller = selfUninstaller
     }
 
-    public func recoveryAccount(
-      action: String, ticket: String, username: String, password: Data,
-      recoveryTemplate: Data = Data()
-    )
+    public func recoveryAccount(action: String, ticket: String, username: String, password: Data)
       async throws -> RecoveryAccountReply
     {
       guard !isRetiring else { throw ClosedEngineHelperError.retiring }
       guard ["inspect", "handoff"].contains(action) else {
         throw ClosedEngineHelperError.invalidOperation
       }
-      guard (action == "handoff") == !recoveryTemplate.isEmpty,
-        UInt64(recoveryTemplate.count) <= NativeRecoveryTemplate.maximumArchiveBytes
-      else { throw NativeRecoveryTemplateError.unsafeTemplate }
       try work.beginJob()
       defer { work.endJob() }
       let directory = workingDirectory
@@ -229,9 +223,7 @@
       }
       let record: RecoveryAccountRecord? = try await Task.detached {
         try RecoveryAccountHandoff.requireStartupSelection(for: observed.target)
-        try NativeRecoveryTemplate.refresh(data: recoveryTemplate, in: directory)
         try RecoveryAccountHandoff.updateRecoveryApp(for: observed.target)
-        try RecoveryAccountHandoff.requireStartupSelection(for: observed.target)
         return try RecoveryAccountInstaller.inspect(observed.target)
 
       }.value
@@ -593,15 +585,13 @@
 
     public func recoveryAccount(
       action: String, ticket: String, username: String, password: Data,
-      recoveryTemplate: Data,
       reply: @escaping @Sendable (Data?, NSError?) -> Void
     ) {
       let server = server
       Task {
         do {
           let result = try await server.recoveryAccount(
-            action: action, ticket: ticket, username: username, password: password,
-            recoveryTemplate: recoveryTemplate)
+            action: action, ticket: ticket, username: username, password: password)
           reply(try JSONEncoder().encode(result), nil)
         } catch {
           let message =

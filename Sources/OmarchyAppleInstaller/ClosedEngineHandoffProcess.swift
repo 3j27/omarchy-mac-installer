@@ -156,7 +156,9 @@
       let restoreImageURL = pending.appendingPathComponent(RestoreImageHelper.fileName)
       let restoreImageArtifact = try copyRestoreImage(restoreImage, to: restoreImageURL)
       let recoveryArtifact: EngineHandoffArtifact?
-      if let recoveryTemplate {
+      if let recoveryTemplate,
+        try NativeRecoveryTemplate.imageNeedsTemplate(metadataURL: assets.metadata.fileURL)
+      {
         let bytes = try NativeRecoveryTemplate.archiveData(from: recoveryTemplate)
         let file = pending.appendingPathComponent(NativeRecoveryTemplate.archiveFileName)
         try bytes.write(to: file, options: .withoutOverwriting)

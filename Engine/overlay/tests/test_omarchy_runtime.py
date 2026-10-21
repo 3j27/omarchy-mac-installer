@@ -114,6 +114,23 @@ class EngineRuntimeTests(unittest.TestCase):
                 runtime = EngineRuntime.from_environment(environment)
                 self.assertEqual(runtime.mode, mode)
 
+    def test_released_apps_without_helper_template_use_the_image_contract(self):
+        environment = self._install_environment()
+        for key in ("OMARCHY_RECOVERY_APP", "OMARCHY_RECOVERY_MANIFEST",
+                    "OMARCHY_RECOVERY_REQUIREMENT"):
+            del environment[key]
+        runtime = EngineRuntime.from_environment(environment)
+        runtime.inspect("j314sap", True)
+        adapter = Mock()
+        with patch("omarchy_runtime.omarchy_planner.collect_inventory", return_value=self.inventory), \
+             patch("omarchy_runtime.omarchy_execution.admit_execution", return_value=self.plan), \
+             patch("omarchy_runtime.omarchy_asahi.AsahiStage1Adapter", return_value=adapter) as create, \
+             patch("omarchy_runtime.omarchy_stage1.run_stage1", return_value="awaiting_recovery"):
+            self.assertEqual(self._run_layout(runtime), "awaiting_recovery")
+        self.assertIsNone(create.call_args.kwargs["recovery_app"])
+        self.assertIsNone(create.call_args.kwargs["recovery_manifest"])
+        self.assertIsNone(create.call_args.kwargs["recovery_requirement"])
+
     def test_install_requires_owner_and_recovery_branding(self):
         for key in (
             "OMARCHY_MACHINE_OWNER",

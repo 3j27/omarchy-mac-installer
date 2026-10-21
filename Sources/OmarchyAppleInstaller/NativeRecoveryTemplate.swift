@@ -47,6 +47,23 @@
     static let archiveFileName = "native-recovery.json"
     static let maximumArchiveBytes: UInt64 = 64 << 20
 
+    static func imageNeedsTemplate(metadataURL: URL) throws -> Bool {
+      guard metadataURL.isFileURL,
+        let size = try? metadataURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+        size > 0, size <= 1 << 20,
+        let bytes = try? Data(contentsOf: metadataURL), bytes.count == size,
+        let metadata = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+        let entries = metadata["os_list"] as? [[String: Any]]
+      else { throw NativeRecoveryTemplateError.unsafeTemplate }
+      let targets = entries.filter { $0["omarchy_target"] as? String == "apple-silicon-full-os" }
+      guard targets.count == 1 else { throw NativeRecoveryTemplateError.unsafeTemplate }
+      guard let mode = targets[0]["recovery_gui"] else { return true }
+      guard mode as? String == "omarchy-native-v1" else {
+        throw NativeRecoveryTemplateError.unsafeTemplate
+      }
+      return false
+    }
+
     static func bundledURL() -> URL {
       Bundle.main.bundleURL.appendingPathComponent(
         "Contents/Resources/RecoveryTemplate/" + InstallerProductIdentity.recoveryAppBundleName)
@@ -104,31 +121,6 @@
       return try prepare(
         data: Data(contentsOf: archive), in: parent, owner: owner,
         requirement: requirement, verify: verify)
-    }
-
-    /// Refresh from the authenticated app at handoff, without starting or
-    /// replaying an installation. The helper still chooses the signature policy.
-    static func refresh(data: Data, in parent: URL) throws {
-      guard let requirement = requirement(environment: ProcessInfo.processInfo.environment) else {
-        throw NativeRecoveryTemplateError.unavailable
-      }
-      try refresh(
-        data: data, in: parent,
-        destination: URL(
-          fileURLWithPath: InstallerProductIdentity.installedRecoveryTemplateDirectory),
-        owner: 0, requirement: requirement)
-    }
-
-    static func refresh(
-      data: Data, in parent: URL, destination: URL, owner: uid_t, requirement: String
-    ) throws {
-      let prepared = try prepare(
-        data: data, in: parent, owner: owner, requirement: requirement
-      ) { try verify($0, requirement: requirement) }
-      defer { prepared.remove() }
-      try publish(
-        prepared, to: destination, owner: owner,
-        verify: { try verify($0, requirement: requirement) })
     }
 
     static func prepare(
@@ -239,7 +231,17 @@
         retireStaged = true
       } else {
         try FileManager.default.moveItem(at: staged, to: destination)
-        try flushDirectory(parent)
+        retireStaged = false
+        do {
+          try flushDirectory(parent)
+        } catch {
+          // The first publication has no previous tree. Move the candidate
+          // back before reporting a durability failure.
+          try FileManager.default.moveItem(at: destination, to: staged)
+          retireStaged = true
+          try flushDirectory(parent)
+          throw error
+        }
       }
     }
 

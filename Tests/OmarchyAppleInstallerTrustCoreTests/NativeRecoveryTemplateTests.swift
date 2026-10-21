@@ -5,6 +5,22 @@
   @testable import OmarchyAppleInstallerTrustCore
 
   final class NativeRecoveryTemplateTests: XCTestCase {
+    func testImageRecoveryTakesPriorityOverInstallerTemplate() throws {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let metadata = root.appendingPathComponent("installer-data.json")
+      try Data(#"{"os_list":[{"omarchy_target":"apple-silicon-full-os","recovery_gui":"omarchy-native-v1"}]}"#.utf8)
+        .write(to: metadata)
+      XCTAssertFalse(try NativeRecoveryTemplate.imageNeedsTemplate(metadataURL: metadata))
+      try Data(#"{"os_list":[{"omarchy_target":"apple-silicon-full-os"}]}"#.utf8)
+        .write(to: metadata)
+      XCTAssertTrue(try NativeRecoveryTemplate.imageNeedsTemplate(metadataURL: metadata))
+      try Data(#"{"os_list":[{"omarchy_target":"apple-silicon-full-os","recovery_gui":"unknown"}]}"#.utf8)
+        .write(to: metadata)
+      XCTAssertThrowsError(try NativeRecoveryTemplate.imageNeedsTemplate(metadataURL: metadata))
+    }
+
     private func fixture() throws -> (URL, URL) {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
       let app = root.appendingPathComponent("Source.app")
@@ -205,47 +221,6 @@
         ) { try NativeRecoveryTemplate.verify($0, requirement: wrong) })
     }
 
-    func testHandoffRefreshRotatesTheTemplateAndRejectsThePreviousPin() throws {
-      let (root, app, originalPin) = try signedFixture()
-      defer { try? FileManager.default.removeItem(at: root) }
-      let destination = root.appendingPathComponent("Helpers/RecoveryTemplate")
-      let original = try NativeRecoveryTemplate.archiveData(from: app)
-      try NativeRecoveryTemplate.refresh(
-        data: original, in: root, destination: destination, owner: geteuid(),
-        requirement: originalPin)
-      let retained = destination.appendingPathComponent(
-        InstallerProductIdentity.recoveryAppBundleName)
-      try NativeRecoveryTemplate.verify(retained, requirement: originalPin)
-
-      let resource = app.appendingPathComponent("Contents/Resources/updated.txt")
-      try FileManager.default.createDirectory(
-        at: resource.deletingLastPathComponent(), withIntermediateDirectories: true,
-        attributes: [.posixPermissions: 0o700])
-      try Data("current Recovery resources".utf8).write(to: resource)
-      _ = try codesign(["--force", "--sign", "-", app.path])
-      let description = try codesign(["--display", "--verbose=4", app.path])
-      let hash = try XCTUnwrap(description.split(separator: "\n").first { $0.hasPrefix("CDHash=") })
-      let currentPin = "cdhash H\"" + hash.dropFirst(7) + "\""
-      XCTAssertNotEqual(originalPin, currentPin)
-      let current = try NativeRecoveryTemplate.archiveData(from: app)
-      try NativeRecoveryTemplate.refresh(
-        data: current, in: root, destination: destination, owner: geteuid(),
-        requirement: currentPin)
-      try NativeRecoveryTemplate.verify(retained, requirement: currentPin)
-      XCTAssertEqual(
-        try Data(contentsOf: retained.appendingPathComponent("Contents/Resources/updated.txt")),
-        Data("current Recovery resources".utf8))
-      XCTAssertThrowsError(
-        try NativeRecoveryTemplate.refresh(
-          data: original, in: root, destination: destination, owner: geteuid(),
-          requirement: currentPin))
-      try NativeRecoveryTemplate.verify(retained, requirement: currentPin)
-      XCTAssertFalse(
-        try FileManager.default.contentsOfDirectory(atPath: root.path).contains {
-          $0.hasPrefix("native-recovery-")
-        })
-    }
-
     func testFirstPublicationCreatesItsMissingValidatedParent() throws {
       let (root, app) = try fixture()
       defer { try? FileManager.default.removeItem(at: root) }
@@ -264,6 +239,29 @@
           atPath:
             destination.appendingPathComponent(InstallerProductIdentity.recoveryAppBundleName).path)
       )
+    }
+
+    func testFirstPublicationRollsBackWhenDirectoryFlushFails() throws {
+      let (root, app) = try fixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let prepared = try NativeRecoveryTemplate.prepare(
+        source: app, in: root, owner: geteuid(), requirement: "identity", verify: { _ in })
+      defer { prepared.remove() }
+      let destination = root.appendingPathComponent("RecoveryTemplate")
+      var flushes = 0
+      XCTAssertThrowsError(
+        try NativeRecoveryTemplate.publish(
+          prepared, to: destination, owner: geteuid(), verify: { _ in },
+          flushDirectory: { _ in
+            flushes += 1
+            if flushes == 1 { throw NativeRecoveryTemplateError.unsafeTemplate }
+          }))
+      XCTAssertEqual(flushes, 2)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+      XCTAssertFalse(
+        try FileManager.default.contentsOfDirectory(atPath: root.path).contains {
+          $0.hasPrefix(".native-recovery-")
+        })
     }
 
     func testPublicationRetainsOldTreeUntilTheNewEntryIsDurable() throws {

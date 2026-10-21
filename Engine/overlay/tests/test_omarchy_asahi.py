@@ -261,6 +261,29 @@ class AsahiStage1AdapterTests(unittest.TestCase):
             "expected_bootstrap": {"ownerUUIDs": ["original owner"]},
         })
 
+    def test_image_native_template_wins_over_installer_template(self):
+        metadata = self._target_metadata()
+        metadata["recovery_gui"] = "omarchy-native-v1"
+        self._write_metadata([metadata])
+        installer = FakeInstaller(FakeDiskUtil([[self.free]]))
+        adapter = self._adapter(installer)
+        adapter.recovery_app = "/private/job/Recovery.app"
+        adapter.recovery_manifest = "/private/job/recovery.json"
+        adapter.recovery_requirement = 'cdhash H"' + 'a' * 40 + '"'
+        with patch("omarchy_asahi.omarchy_recovery.validate_source") as helper, patch(
+            "omarchy_asahi.omarchy_recovery.validate_payload"
+        ) as image:
+            adapter.preflight(self.plan)
+        helper.assert_not_called()
+        image.assert_called_once()
+        self.assertTrue(adapter.native_recovery_gui)
+        self.assertFalse(adapter.use_helper_recovery)
+        adapter.prepare_target(self.plan)
+        with patch("omarchy_asahi.omarchy_recovery.stage") as stage:
+            adapter.install_stub_and_esp(self.plan)
+        self.assertIsNone(stage.call_args.kwargs["app_source"])
+        self.assertIsNone(stage.call_args.kwargs["manifest_path"])
+
     def test_invalid_helper_template_or_source_owner_stops_before_disk_calls(self):
         import omarchy_recovery
         for failed in ("template", "owner"):

@@ -122,20 +122,26 @@
       } catch {
         throw PinnedAsahiEngineExecutionError.restoreImageRejected
       }
-      let recovery: PreparedNativeRecoveryTemplate
+      let recovery: PreparedNativeRecoveryTemplate?
       do {
-        recovery = try prepareRecoveryTemplate(package)
+        if try NativeRecoveryTemplate.imageNeedsTemplate(metadataURL: package.metadataURL),
+          package.recoveryTemplateURL != nil
+        {
+          recovery = try prepareRecoveryTemplate(package)
+        } else {
+          recovery = nil
+        }
       } catch {
         throw PinnedAsahiEngineExecutionError.recoveryTemplateRejected
       }
-      defer { recovery.remove() }
+      defer { recovery?.remove() }
       let journal = try preparePersistentJournal(for: package)
       var environment = installEnvironment(
         package: package,
         authorization: authorization,
         operation: operation
       )
-      environment.merge(recovery.environment) { _, new in new }
+      if let recovery { environment.merge(recovery.environment) { _, new in new } }
       environment[RestoreImageHelper.pathEnvironmentVariable] = restoreImage.path
       environment[RestoreImageHelper.requirementEnvironmentVariable] = restoreImageRequirement
       return try run(

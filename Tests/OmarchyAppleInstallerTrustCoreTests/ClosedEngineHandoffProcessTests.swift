@@ -366,7 +366,7 @@
       )
 
       let engine = Data("engine-a".utf8)
-      let metadata = Data("metadata".utf8)
+      let metadata = Data(#"{"os_list":[{"omarchy_target":"apple-silicon-full-os"}]}"#.utf8)
       let payload = Data("payload".utf8)
       let restoreImageBytes = Data("signed decoder".utf8)
       let restoreImage = root.appendingPathComponent("Helpers/\(RestoreImageHelper.fileName)")
