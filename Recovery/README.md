@@ -2,7 +2,7 @@
 
 The Omarchy-branded native Recovery interface lives alongside the main installer. It has two explicit build modes, targeting macOS 13 independently of the main installer's macOS 15 requirement.
 
-Older Recovery stubs can omit frameworks available in full macOS despite the same deployment version. Recovery computes its SHA-256 checks with CommonCrypto in libSystem, and the app build refuses direct CryptoKit or CryptoTokenKit linkage. The deployment target and link check still need a boot test in the affected M1/M2 Recovery stub before claiming that launch is qualified.
+Older Recovery stubs can omit frameworks available in full macOS despite the same deployment version. The Recovery interface is programmatic AppKit and uses no SwiftUI or Combine. Recovery computes its SHA-256 checks with CommonCrypto in libSystem. The app build refuses direct SwiftUI, Combine, CryptoKit or CryptoTokenKit linkage. The deployment target and link check still need a boot test in the affected Recovery stub before claiming that launch is qualified.
 
 ## Preview
 
@@ -69,7 +69,7 @@ File snapshots preserve original bytes, absence, ownership, permissions and flag
 
 The macOS CI job builds the enrollment app, runs `Recovery/test-all.sh <output>`, verifies its bundle, and builds the preview variant. Run the same fixture script on macOS locally. It runs the existing pure fixtures plus file snapshots, directory-swap interruption checks and the injected installation phase runner. It never enrolls a boot object or creates a live account. Debug/release package and Recovery builds remain separate native validation gates.
 
-The GUI clears password state on completion/dismissal, and owned native command buffers are wiped before release. SwiftUI String/Data copies cannot be guaranteed to have no allocator or framework copies; this is a bounded best-effort lifetime policy, not a claim of complete process-memory erasure.
+The GUI clears password state on completion/dismissal, and owned native command buffers are wiped before release. AppKit field editing and Swift String/Data copies cannot be guaranteed to have no allocator or framework copies; this is a bounded best-effort lifetime policy, not a claim of complete process-memory erasure.
 
 On Create Recovery Account, **Skip, Restart Now** restarts directly only after checking the completed installation, its startup bundle, and the selected default volume both before saving and immediately before restarting. A different default stops the action with Startup Disk guidance. It does not open Startup Disk, create an account, or mark ownership complete. The receipt records the deferral while keeping `recoveryAccountRequired` intact, so opening the installer in paired Recovery still offers account setup. Preview builds show a simulated restart alert.
 

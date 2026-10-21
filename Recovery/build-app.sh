@@ -21,10 +21,17 @@ fi
 cp .build/release/OmarchyRecovery "$APP/Contents/MacOS/OmarchyRecovery"
 [[ "$("$APP/Contents/MacOS/OmarchyRecovery" --build-mode)" == "$MODE" ]]
 # The small Recovery OS may omit frameworks present in a full macOS install.
-# SHA-256 uses CommonCrypto from libSystem; refuse a CryptoKit dependency.
+# Recovery stubs can omit UI and hashing frameworks present in full macOS.
 dependencies=$(xcrun otool -L "$APP/Contents/MacOS/OmarchyRecovery")
-if [[ $dependencies == *'/CryptoKit.framework/'* || $dependencies == *'/CryptoTokenKit.framework/'* ]]; then
+if [[ $dependencies == *'/SwiftUI.framework/'* ||
+      $dependencies == *'/Combine.framework/'* ||
+      $dependencies == *'/CryptoKit.framework/'* ||
+      $dependencies == *'/CryptoTokenKit.framework/'* ]]; then
   echo 'Recovery executable links a framework unavailable in older Recovery OS' >&2
+  exit 1
+fi
+if grep -REn '^[[:space:]]*import[[:space:]]+(SwiftUI|Combine|CryptoKit|CryptoTokenKit)' Sources; then
+  echo 'Recovery sources import a framework unavailable in older Recovery OS' >&2
   exit 1
 fi
 cat > "$APP/Contents/Info.plist" <<PLIST
