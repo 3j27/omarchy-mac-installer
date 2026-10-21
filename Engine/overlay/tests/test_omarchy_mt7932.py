@@ -1,13 +1,18 @@
 # SPDX-License-Identifier: MIT
+import hashlib
 import os
 from pathlib import Path
 import struct
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import omarchy_mt7932 as mt  # noqa: E402
+import omarchy_mt7932_policy  # noqa: E402
+from test_omarchy_mt7932_policy import synthetic_pins, synthetic_tables, write_tables  # noqa: E402
 
 
 def der(tag, content):
@@ -177,6 +182,25 @@ class CollectTests(unittest.TestCase):
         self.write(mt.IZUBA, mt.WIFI_RAM, b'ram')
         self.write(mt.IZUBA, 'IZUBA_PPR_MT7932.bin', b'BLOB' + b'p' * 408)
         self.write(mt.IZUBA, 'IZUBA_wifi.cfg', config().encode())
+        # Synthetic power tables, and the policy pins they derive.
+        write_tables(self.root / mt.IZUBA)
+        original_derive = omarchy_mt7932_policy.derive
+        expected_inventory = omarchy_mt7932_policy.inventory_digest(
+            original_derive(synthetic_tables(), pins=None, input_pins=None))
+        def derive(tables, *args, **kwargs):
+            kwargs.setdefault('inventory_pin', expected_inventory)
+            return original_derive(tables, *args, **kwargs)
+        builder = mock.patch.object(omarchy_mt7932_policy, 'derive', derive)
+        builder.start()
+        self.addCleanup(builder.stop)
+        pins = mock.patch.dict(omarchy_mt7932_policy.PINNED_OUTPUT, synthetic_pins(), clear=True)
+        pins.start()
+        self.addCleanup(pins.stop)
+        inputs = mock.patch.dict(omarchy_mt7932_policy.PINNED_INPUT, {
+            name: hashlib.sha256(data).hexdigest() for name, data in synthetic_tables().items()
+        })
+        inputs.start()
+        self.addCleanup(inputs.stop)
         self.write(mt.FACTORY_DATA, 'BWC2-00008140-0000',
                    bwc2({b'OCA2': oca2(), b'WCAL': self.wcal, b'BCAL': self.bcal, b'OCAL': b'older'}))
         for name in mt.BT_FIRMWARE:
@@ -189,7 +213,7 @@ class CollectTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
 
-    def test_every_input_but_the_country_policy_is_collected(self):
+    def test_every_input_and_the_country_policy_is_collected(self):
         files = mt.collect(str(self.root), chosen=self.chosen)
         self.assertEqual(sorted(files), sorted([
             'mediatek/mt7932/IZUBA_WIFI_MT7932_patch_mcu_1_2_hdr.bin',
@@ -198,6 +222,8 @@ class CollectTests(unittest.TestCase):
             'mediatek/mt7932/oca2.bin',
             'mediatek/mt7932/wcal.bin',
             'mediatek/mt7932/config-original.bin',
+            'mediatek/mt7932/policy/world-XZ.bin',
+            'mediatek/mt7932/policy/US.bin',
             'mediatek/MT7932B0_OS_TypeB_0.1.44.0_241001003711.bin',
             'mediatek/MT7932B1_OS_TypeB_0.1.133.0_260128190103.bin',
             'mediatek/MT7932_PTB_IzubaA_0.1.0.0_20251021141303.ptx',
@@ -207,7 +233,31 @@ class CollectTests(unittest.TestCase):
         self.assertEqual(files['mediatek/mt7932/wcal.bin'], self.wcal)
         self.assertEqual(files['mediatek/j700-mt7932-btcal.bin'], self.bcal)
         self.assertEqual(files['mediatek/mt7932/oca2.bin'], oca2())
+        derived = omarchy_mt7932_policy.derive(synthetic_tables(), pins=None, input_pins=None)
+        for name in ('world-XZ.bin', 'US.bin'):
+            path = 'mediatek/mt7932/policy/' + name
+            self.assertEqual(files[path], derived[path])
+        self.assertEqual(omarchy_mt7932_policy.policy_parse(files['mediatek/mt7932/policy/US.bin'], b'US'), 0)
+
+    def test_the_policy_can_be_left_to_its_own_step(self):
+        files = mt.collect(str(self.root), chosen=self.chosen, policy=False)
         self.assertFalse(any('policy' in name for name in files))
+        self.assertEqual(sorted(mt.country_policy(str(self.root))), [
+            'mediatek/mt7932/policy/US.bin', 'mediatek/mt7932/policy/world-XZ.bin',
+        ])
+
+    def test_a_policy_off_its_pin_is_refused(self):
+        omarchy_mt7932_policy.PINNED_OUTPUT['mediatek/mt7932/policy/US.bin'] = '0' * 64
+        with self.assertRaisesRegex(mt.Mt7932Error, 'US.bin is not the pinned policy'):
+            mt.collect(str(self.root), chosen=self.chosen)
+        self.assertNotIn('policy', ' '.join(mt.collect(str(self.root), chosen=self.chosen, policy=False)))
+
+    def test_a_table_of_another_version_is_refused(self):
+        tables = synthetic_tables()
+        tables[omarchy_mt7932_policy.DB_NAME] = tables[omarchy_mt7932_policy.DB_NAME].replace(b'2025-12-11', b'2026-06-29')
+        write_tables(self.root / mt.IZUBA, tables)
+        with self.assertRaisesRegex(mt.Mt7932Error, 'not the pinned input'):
+            mt.country_policy(str(self.root))
 
     def test_a_ppr_of_another_size_is_refused(self):
         self.write(mt.IZUBA, 'IZUBA_PPR_MT7932.bin', b'BLOB' + b'p' * 400)

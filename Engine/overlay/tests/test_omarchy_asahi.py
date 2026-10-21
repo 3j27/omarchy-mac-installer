@@ -2201,21 +2201,85 @@ class NeoRadioFirmwareTests(unittest.TestCase):
     files.update({"mediatek/" + name: name.encode() for name in (
         radio.BT_PTX, "j700-mt7932-btcal.bin", "j700-mt7932-bdaddr.bin"
     )})
+    policy = {
+        "mediatek/mt7932/policy/world-XZ.bin": b"J7RP world",
+        "mediatek/mt7932/policy/US.bin": b"J7RP US",
+    }
 
-    def run_hook(self, device_class, collect, required=True):
+    def run_hook(self, device_class, collect, required=True, policy=None):
         package = SimpleNamespace(added=[])
         package.add_file = lambda name, data: package.added.append((name, data))
         installer = SimpleNamespace(sysinfo=SimpleNamespace(device_class=device_class))
         firmware = SimpleNamespace(core=SimpleNamespace(FWFile=lambda name, data: ("FWFile", name, data)))
         with patch("omarchy_asahi.asahi_firmware", firmware):
-            _collect_neo_radios(installer, package, collect=collect, required=required)
+            _collect_neo_radios(installer, package, collect=collect, policy=policy or (lambda: self.policy),
+                                required=required)
         return package.added
 
     def test_a_neo_adds_every_collected_file(self):
         added = self.run_hook("j700ap", lambda: self.files)
+        everything = {**self.files, **self.policy}
         self.assertEqual(added, [
-            (name, ("FWFile", name, data)) for name, data in sorted(self.files.items())
+            (name, ("FWFile", name, data)) for name, data in sorted(everything.items())
         ])
+
+    def test_a_failed_policy_keeps_bluetooth_and_the_other_radio_files(self):
+        def broken():
+            raise self.radio.Mt7932Error("the Wi-Fi country policy cannot be derived: version")
+
+        def unexpected():
+            raise KeyError("a parser fault nobody anticipated")
+
+        for policy in (broken, unexpected, lambda: {},
+                       lambda: {"mediatek/mt7932/policy/world-XZ.bin": b"J7RP"}):
+            with self.subTest(policy=policy), self.assertLogs(level="WARNING") as logs:
+                added = self.run_hook("j700ap", lambda: self.files, required=False, policy=policy)
+            self.assertEqual(added, [
+                (name, ("FWFile", name, data)) for name, data in sorted(self.files.items())
+            ])
+            self.assertIn("country policy unavailable", logs.output[0])
+
+    def test_the_fetched_root_derives_the_policy_in_its_own_step(self):
+        calls = []
+
+        @contextmanager
+        def root():
+            yield "/fetched"
+
+        def collect(path, policy=True):
+            calls.append(("collect", path, policy))
+            return self.files
+
+        def country_policy(path):
+            calls.append(("policy", path))
+            raise self.radio.Mt7932Error("the Wi-Fi country policy cannot be derived: version")
+
+        package = SimpleNamespace(added=[])
+        package.add_file = lambda name, data: package.added.append(name)
+        installer = SimpleNamespace(sysinfo=SimpleNamespace(device_class="j700ap"))
+        firmware = SimpleNamespace(core=SimpleNamespace(FWFile=lambda name, data: data))
+        with patch("omarchy_asahi.asahi_firmware", firmware), \
+                patch("omarchy_asahi.omarchy_apple_aea.neo_radio_root", root), \
+                patch("omarchy_asahi.omarchy_mt7932.collect", collect), \
+                patch("omarchy_asahi.omarchy_mt7932.country_policy", country_policy):
+            with self.assertLogs(level="WARNING"):
+                _collect_neo_radios(installer, package, required=False)
+            self.assertEqual(calls, [("collect", "/fetched", False), ("policy", "/fetched")])
+            self.assertEqual(package.added, sorted(self.files))
+            with self.assertRaisesRegex(AsahiAdapterError, "country policy"):
+                _collect_neo_radios(installer, package, required=True)
+
+    def test_required_radios_require_the_country_policy(self):
+        def broken():
+            raise self.radio.Mt7932Error("US.bin is not the pinned policy")
+
+        with self.assertRaisesRegex(AsahiAdapterError, "not the pinned policy"):
+            self.run_hook("j700ap", lambda: self.files, policy=broken)
+        for missing in self.policy:
+            partial = dict(self.policy)
+            partial[missing] = b""
+            with self.subTest(missing=missing), self.assertRaisesRegex(AsahiAdapterError, missing):
+                self.run_hook("j700ap", lambda: self.files, policy=lambda: partial)
 
     def test_other_macs_collect_nothing(self):
         def collect():
