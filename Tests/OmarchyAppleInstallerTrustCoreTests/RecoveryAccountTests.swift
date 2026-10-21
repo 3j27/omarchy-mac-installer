@@ -153,6 +153,32 @@
       XCTAssertThrowsError(try RecoveryAccountHandoff.requireStartupSelection(target, info: [:]))
     }
 
+    func testHandoffTakesRecoveryFromTheInstallerThatAsked() {
+      let name = InstallerProductIdentity.recoveryAppBundleName
+      let helperCopy = InstallerProductIdentity.installedRecoveryTemplateDirectory + "/" + name
+      let fromDiskImage = "/Volumes/Installer/\(InstallerProductIdentity.appName).app"
+      let candidates = RecoveryAccountHandoff.recoveryTemplateCandidates(
+        clientBundle: URL(fileURLWithPath: fromDiskImage)
+      ).map(\.path)
+      XCTAssertEqual(
+        candidates, [fromDiskImage + "/Contents/Resources/RecoveryTemplate/" + name, helperCopy])
+      // An app elsewhere never stands in for the one asking: an older copy in
+      // /Applications once put its Recovery app on a newer installation.
+      XCTAssertFalse(candidates.contains { $0.hasPrefix("/Applications/") })
+      XCTAssertEqual(
+        RecoveryAccountHandoff.recoveryTemplateCandidates(clientBundle: nil).map(\.path),
+        [helperCopy])
+    }
+
+    func testClientBundleResolvesOnlyAProcessMeetingTheRequirement() throws {
+      let bundle = try XCTUnwrap(
+        RecoveryAccountHandoff.clientBundle(pid: getpid(), requirement: "always"))
+      XCTAssertTrue(FileManager.default.fileExists(atPath: bundle.path))
+      // Whoever owns the PID now must still satisfy the client requirement.
+      XCTAssertNil(RecoveryAccountHandoff.clientBundle(pid: getpid(), requirement: "never"))
+      XCTAssertNil(RecoveryAccountHandoff.clientBundle(pid: -1, requirement: "always"))
+    }
+
     func testCompletedInstallationRequiresLivePartitionIdentities() throws {
       let ids = (1...4).map { String(format: "%08d-1111-4111-8111-111111111111", $0) }
       let evidence = [
