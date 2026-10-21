@@ -21,6 +21,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private var accountConfirmationField: NSSecureTextField?
   private var accountButton: NSButton?
   private var skipButton: NSButton?
+  private var offerAccountButton: NSButton?
   private var detailsButton: NSButton?
   private var issueShowing = false
   private var issueRepair = false
@@ -115,7 +116,10 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       model.stage == .installing ? 110 : model.stage == .complete ? 48 : 28
     progressIndicator?.doubleValue = model.progress * 100
     operationLabel?.stringValue = model.currentOperation + "…"
-    primaryButton?.isEnabled = !model.checkingEnvironment && !model.restartingCompletedSetup
+    primaryButton?.isEnabled =
+      !model.checkingEnvironment && !model.restartingCompletedSetup
+      && !model.restartingWithoutAccount
+    offerAccountButton?.isEnabled = !model.restartingWithoutAccount
     detailsButton?.isHidden = model.stage == .welcome && log.text.isEmpty
     debugButton?.title = model.debugEnabled ? "Disable Debug" : "Enable Debug"
     proxyButton?.title = model.proxyEnabled ? "Disable Proxy" : "Enable Proxy"
@@ -123,7 +127,9 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       model.creatingAccount
       ? "PREPARING…" : model.accountAlreadyStarted ? "CONTINUE" : "CREATE ACCOUNT"
     accountButton?.isEnabled = model.canCreateAccount
-    skipButton?.title = model.restartingWithoutAccount ? "Restarting…" : "Skip, Restart Now"
+    if !model.accountOffered {
+      skipButton?.title = model.restartingWithoutAccount ? "Restarting…" : "Skip, Restart Now"
+    }
     skipButton?.isEnabled = !model.creatingAccount && !model.restartingWithoutAccount
     if let field = accountUsernameField {
       field.isEnabled =
@@ -186,6 +192,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     accountConfirmationField = nil
     accountButton = nil
     skipButton = nil
+    offerAccountButton = nil
     detailsButton = nil
 
     switch model.stage {
@@ -317,9 +324,10 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
 
   private func buildFooter() {
     let center = NSStackView()
-    center.orientation = model.stage == .account ? .vertical : .horizontal
-    center.spacing = model.stage == .account ? 6 : 12
-    center.alignment = model.stage == .account ? .centerX : .centerY
+    let stacked = model.stage == .account || (model.stage == .complete && model.accountOffered)
+    center.orientation = stacked ? .vertical : .horizontal
+    center.spacing = stacked ? 6 : 12
+    center.alignment = stacked ? .centerX : .centerY
     center.translatesAutoresizingMaskIntoConstraints = false
 
     switch model.stage {
@@ -345,8 +353,11 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
         title: "Create Account", target: self, action: #selector(accountPressed))
       center.addArrangedSubview(account)
       accountButton = account
-      let skip = RecoveryTextButton(
-        title: "Skip, Restart Now", target: self, action: #selector(skipPressed))
+      let skip =
+        model.accountOffered
+        ? RecoveryTextButton(title: "Back", target: self, action: #selector(backPressed))
+        : RecoveryTextButton(
+          title: "Skip, Restart Now", target: self, action: #selector(skipPressed))
       center.addArrangedSubview(skip)
       skipButton = skip
     case .complete:
@@ -354,6 +365,14 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
         title: "Restart", target: self, action: #selector(restartPressed))
       center.addArrangedSubview(restart)
       primaryButton = restart
+      if model.accountOffered {
+        let offer = RecoveryTextButton(
+          title: "Create a recovery account", target: self,
+          action: #selector(offerAccountPressed))
+        offer.font = OmarchyTheme.detail
+        center.addArrangedSubview(offer)
+        offerAccountButton = offer
+      }
     }
     footer.addSubview(center)
     NSLayoutConstraint.activate([
@@ -464,7 +483,21 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     accountPasswordField?.stringValue = ""
     accountConfirmationField?.stringValue = ""
   }
-  @objc private func restartPressed() { model.finishSetup() }
+  @objc private func backPressed() {
+    model.returnToCompletion()
+    accountPasswordField?.stringValue = ""
+    accountConfirmationField?.stringValue = ""
+  }
+  @objc private func offerAccountPressed() { model.showRecoveryAccountForm() }
+  @objc private func restartPressed() {
+    // Restarting without the optional account records the deferral, so a
+    // later Recovery session can still offer it.
+    if model.accountOffered {
+      model.skipRecoveryAccountAndRestart()
+    } else {
+      model.finishSetup()
+    }
+  }
 
   @discardableResult private func present(_ panel: RecoverySheet, focus: NSView? = nil) -> Bool {
     guard sheets.present(panel, on: view.window) else { return false }

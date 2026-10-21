@@ -14,7 +14,6 @@
     var environment = InstallerSimulationEnvironment(scenario: launchScenario)
     var canChangeChannel = false
     var session: InstallerSession?
-    var previewsRecoveryHandoff = false
     var removalScenario = RemovalPreviewScenario.success
 
     static var launchScenario: InstallerSimulationScenario {
@@ -33,7 +32,6 @@
       generation = UUID()
       canChangeChannel = false
       session = nil
-      previewsRecoveryHandoff = false
     }
 
     func showGuidance() {
@@ -51,22 +49,16 @@
     var onSessionAvailable: ((InstallerSession) -> Void)? = nil
 
     var body: some View {
-      Group {
-        if controls.previewsRecoveryHandoff {
-          RecoveryHandoffView(volumeName: "Omarchy")
-        } else {
-          OnePageInstallerView(
-            environment: controls.environment, channel: controls.channel,
-            onChannelAvailability: { controls.canChangeChannel = $0 },
-            onSessionAvailable: {
-              controls.session = $0
-              onSessionAvailable?($0)
-            }
-          )
-          .id(controls.generation)
-          .task { await continueAtLaunch() }
+      OnePageInstallerView(
+        environment: controls.environment, channel: controls.channel,
+        onChannelAvailability: { controls.canChangeChannel = $0 },
+        onSessionAvailable: {
+          controls.session = $0
+          onSessionAvailable?($0)
         }
-      }
+      )
+      .id(controls.generation)
+      .task { await continueAtLaunch() }
       .preferredColorScheme(controls.dark ? .dark : .light)
       .onChange(of: controls.scenario) { _, _ in controls.reset() }
       .onChange(of: controls.slow) { _, _ in controls.reset() }
