@@ -124,6 +124,12 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     }
     accountPasswordField?.isEnabled = !model.creatingAccount && !model.restartingWithoutAccount
     accountConfirmationField?.isEnabled = !model.creatingAccount && !model.restartingWithoutAccount
+    for (field, value) in [
+      (accountPasswordField, model.accountPassword),
+      (accountConfirmationField, model.accountConfirmation),
+    ] {
+      if let field, value.isEmpty, !field.stringValue.isEmpty { field.stringValue = "" }
+    }
     detailsViewer?.update(
       text: log.text.isEmpty ? model.operations.joined(separator: "\n") : log.text)
     if (model.environmentIssue != nil || model.failure != nil) && !issueShowing
@@ -440,7 +446,11 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     accountPasswordField?.stringValue = ""
     accountConfirmationField?.stringValue = ""
   }
-  @objc private func skipPressed() { model.skipRecoveryAccountAndRestart() }
+  @objc private func skipPressed() {
+    model.skipRecoveryAccountAndRestart()
+    accountPasswordField?.stringValue = ""
+    accountConfirmationField?.stringValue = ""
+  }
   @objc private func restartPressed() { model.finishSetup() }
 
   @discardableResult private func present(_ panel: RecoverySheet, focus: NSView? = nil) -> Bool {
@@ -457,11 +467,13 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
 
   private func closePanel() {
     guard let panel = activePanel else { return }
-    view.window?.endSheet(panel)
-    panel.orderOut(nil)
+    // endSheet runs the completion synchronously, and a refresh there can raise the
+    // next sheet; clear this one first so the new sheet keeps its reference.
     activePanel = nil
     authorizationField = nil
     detailsViewer = nil
+    view.window?.endSheet(panel)
+    panel.orderOut(nil)
     refresh()
   }
 
