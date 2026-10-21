@@ -48,6 +48,8 @@
         : "I have a current backup and approve the disk layout above."
     }
     public static let planInstall = "Install"
+    public static let installHoldAcknowledgement = "Tick the backup box above to continue."
+    public static let installHoldDownload = "Install unlocks once the download is verified."
     public static let downloadingPackagesTitle = "Downloading Omarchy"
     public static let encryptLinuxDiskTitle = "Encrypt the Omarchy disk"
     public static let encryptLinuxDiskPassword =

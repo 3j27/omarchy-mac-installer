@@ -163,7 +163,7 @@ struct OmarchyAppleInstallerApp: App {
       // translucent system title bar never tints from the wallpaper behind.
       .containerBackground(OmarchyTheme.window, for: .window)
     }
-    .defaultSize(width: 780, height: 660)
+    .defaultSize(width: 780, height: 760)
     .windowResizability(.contentMinSize)
     .windowStyle(.hiddenTitleBar)
     .commands {
