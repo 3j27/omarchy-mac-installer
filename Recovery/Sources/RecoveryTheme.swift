@@ -1,6 +1,17 @@
 import AppKit
 
-final class RecoveryPrimaryButton: NSButton {
+/// Draws keyboard focus around the full themed button, not AppKit's default bezel.
+class RecoveryButton: NSButton {
+  override var focusRingMaskBounds: NSRect { bounds }
+
+  override func drawFocusRingMask() {
+    NSBezierPath(
+      roundedRect: bounds, xRadius: OmarchyTheme.buttonRadius, yRadius: OmarchyTheme.buttonRadius
+    ).fill()
+  }
+}
+
+final class RecoveryPrimaryButton: RecoveryButton {
   override var intrinsicContentSize: NSSize {
     let size = super.intrinsicContentSize
     return NSSize(
@@ -26,7 +37,7 @@ final class RecoveryPrimaryButton: NSButton {
   required init?(coder: NSCoder) { fatalError("Use the programmatic initializer") }
 }
 
-final class RecoverySecondaryButton: NSButton {
+final class RecoverySecondaryButton: RecoveryButton {
   override var intrinsicContentSize: NSSize {
     let size = super.intrinsicContentSize
     return NSSize(width: size.width + 32, height: max(OmarchyTheme.buttonHeight, size.height))
@@ -52,7 +63,7 @@ final class RecoverySecondaryButton: NSButton {
   required init?(coder: NSCoder) { fatalError("Use the programmatic initializer") }
 }
 
-final class RecoveryTextButton: NSButton {
+final class RecoveryTextButton: RecoveryButton {
   override var intrinsicContentSize: NSSize {
     let size = super.intrinsicContentSize
     return NSSize(width: size.width + 24, height: max(OmarchyTheme.buttonHeight, size.height))

@@ -9,7 +9,6 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private var titleWidthConstraint: NSLayoutConstraint?
   private let content = NSView()
   private let footer = NSView()
-  private let attribution = NSTextField(labelWithString: "Made with ❤️ by Aurora Silicon")
   private var renderedStage: Stage?
   private var primaryButton: NSButton?
   private var debugButton: NSButton?
@@ -21,6 +20,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private var accountConfirmationField: NSSecureTextField?
   private var accountButton: NSButton?
   private var skipButton: NSButton?
+  private var detailsButton: NSButton?
   private var issueShowing = false
   private var issueRepair = false
   private var authorizationRepair = false
@@ -62,12 +62,6 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     content.translatesAutoresizingMaskIntoConstraints = false
     root.addSubview(content)
 
-    attribution.font = OmarchyTheme.detail
-    attribution.textColor = OmarchyTheme.secondaryText
-    attribution.alignment = .center
-    attribution.translatesAutoresizingMaskIntoConstraints = false
-    root.addSubview(attribution)
-
     footer.translatesAutoresizingMaskIntoConstraints = false
     root.addSubview(footer)
 
@@ -89,8 +83,6 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       footer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -32),
       footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -14),
       footer.heightAnchor.constraint(equalToConstant: 80),
-      attribution.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-      attribution.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8),
     ])
     refresh()
   }
@@ -108,10 +100,10 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     titleLabel.stringValue = stageTitle
     titleLabel.alignment = model.stage == .account ? .left : .center
     titleWidthConstraint?.constant = model.stage == .account ? 380 : 600
-    attribution.isHidden = model.stage != .welcome
     progressIndicator?.doubleValue = model.progress * 100
     operationLabel?.stringValue = model.currentOperation + "…"
-    primaryButton?.isEnabled = !model.checkingEnvironment
+    primaryButton?.isEnabled = !model.checkingEnvironment && !model.restartingCompletedSetup
+    detailsButton?.isHidden = model.stage == .welcome && log.text.isEmpty
     debugButton?.title = model.debugEnabled ? "Disable Debug" : "Enable Debug"
     proxyButton?.title = model.proxyEnabled ? "Disable Proxy" : "Enable Proxy"
     accountButton?.title = model.accountAlreadyStarted ? "CONTINUE" : "CREATE ACCOUNT"
@@ -119,7 +111,8 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     skipButton?.title = model.restartingWithoutAccount ? "Restarting…" : "Skip, Restart Now"
     skipButton?.isEnabled = !model.creatingAccount && !model.restartingWithoutAccount
     if let field = accountUsernameField {
-      field.isEnabled = !model.accountAlreadyStarted && !model.creatingAccount
+      field.isEnabled =
+        !model.accountAlreadyStarted && !model.creatingAccount && !model.restartingWithoutAccount
       if field.currentEditor() == nil && field.stringValue != model.accountUsername {
         field.stringValue = model.accountUsername
       }
@@ -139,7 +132,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       present(
         RecoverySheet(
           title: notice.title, message: notice.message,
-          width: 430, height: 210, body: NSView(), bodyHeight: 0, buttons: [done]))
+          width: 430, body: NSView(), bodyHeight: 0, buttons: [done]))
     }
   }
 
@@ -169,6 +162,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     accountConfirmationField = nil
     accountButton = nil
     skipButton = nil
+    detailsButton = nil
 
     switch model.stage {
     case .welcome: buildWelcome()
@@ -332,32 +326,24 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       center.addArrangedSubview(skip)
       skipButton = skip
     case .complete:
-      center.addArrangedSubview(
-        RecoveryPrimaryButton(
-          title: "Restart", target: self, action: #selector(restartPressed)))
+      let restart = RecoveryPrimaryButton(
+        title: "Restart", target: self, action: #selector(restartPressed))
+      center.addArrangedSubview(restart)
+      primaryButton = restart
     }
     footer.addSubview(center)
     NSLayoutConstraint.activate([
       center.centerXAnchor.constraint(equalTo: footer.centerXAnchor),
       center.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
     ])
-    let right = NSStackView()
-    right.orientation = .horizontal
-    right.alignment = .centerY
-    right.spacing = 12
-    right.translatesAutoresizingMaskIntoConstraints = false
-    if model.stage != .welcome || !log.text.isEmpty {
-      let details = RecoveryTextButton(
-        title: "Show details", target: self, action: #selector(detailsPressed))
-      right.addArrangedSubview(details)
-    }
-    if !right.arrangedSubviews.isEmpty {
-      footer.addSubview(right)
-      NSLayoutConstraint.activate([
-        right.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
-        right.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-      ])
-    }
+    let details = RecoveryTextButton(
+      title: "Show details", target: self, action: #selector(detailsPressed))
+    footer.addSubview(details)
+    NSLayoutConstraint.activate([
+      details.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
+      details.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+    ])
+    detailsButton = details
   }
 
   private func fieldRow(_ title: String, field: NSTextField) -> NSStackView {
@@ -416,6 +402,20 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     }
   }
 
+  func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+    guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
+    if control === accountUsernameField {
+      view.window?.makeFirstResponder(accountPasswordField)
+    } else if control === accountPasswordField {
+      view.window?.makeFirstResponder(accountConfirmationField)
+    } else if control === accountConfirmationField {
+      if model.canCreateAccount { accountPressed() }
+    } else {
+      return false
+    }
+    return true
+  }
+
   @objc private func startPressed() {
     LaunchTrace.mark("ui.continue.pressed")
     if model.recoveryInterface {
@@ -438,8 +438,8 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   @objc private func skipPressed() { model.skipRecoveryAccountAndRestart() }
   @objc private func restartPressed() { model.finishSetup() }
 
-  private func present(_ panel: RecoverySheet, focus: NSView? = nil) {
-    guard let window = view.window, activePanel == nil else { return }
+  @discardableResult private func present(_ panel: RecoverySheet, focus: NSView? = nil) -> Bool {
+    guard let window = view.window, activePanel == nil else { return false }
     activePanel = panel
     window.beginSheet(panel) { [weak self, weak panel] _ in
       guard let self, self.activePanel === panel else { return }
@@ -447,6 +447,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       self.refresh()
     }
     if let focus { panel.makeFirstResponder(focus) }
+    return true
   }
 
   private func closePanel() {
@@ -469,9 +470,13 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     let owner =
       RecoveryActions.inRecovery
       ? (model.authorizationOwner?.username ?? "the volume owner") : NSUserName()
-    let explanation =
-      "Enter password for " + owner + "."
-      + (repair ? "" : " Your macOS security settings are unaffected.")
+    var explanation = "Enter password for " + owner + "."
+    if !repair {
+      explanation +=
+        model.authorizationUsesSourceOwner
+        ? " Use your existing macOS owner’s password to set up Omarchy. Your macOS security settings are unaffected."
+        : " Use your Omarchy installation’s credentials to adjust its security settings. The security of your macOS installations is unaffected."
+    }
     let field = NSSecureTextField()
     field.placeholderString = "Password"
     field.font = OmarchyTheme.body
@@ -480,7 +485,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     field.bezelStyle = .roundedBezel
     field.focusRingType = .exterior
     field.translatesAutoresizingMaskIntoConstraints = false
-    field.widthAnchor.constraint(equalToConstant: 340).isActive = true
+    field.widthAnchor.constraint(equalToConstant: 374).isActive = true
     field.heightAnchor.constraint(equalToConstant: 28).isActive = true
     authorizationField = field
     let body = NSStackView()
@@ -493,8 +498,8 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       let note = label(
         "Omarchy will allow custom Aura boot arguments, including USB proxy mode.", size: 11,
         alignment: .left)
-      note.preferredMaxLayoutWidth = 340
-      note.widthAnchor.constraint(equalToConstant: 340).isActive = true
+      note.preferredMaxLayoutWidth = 374
+      note.widthAnchor.constraint(equalToConstant: 374).isActive = true
       body.addArrangedSubview(note)
     }
     let cancel = RecoverySecondaryButton(
@@ -506,16 +511,19 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     proceed.keyEquivalent = "\r"
     let panel = RecoverySheet(
       title: repair ? "Authorize startup disk" : "Authorize installation",
-      message: explanation, width: 430, height: showBootArgumentNote ? 270 : 230,
+      message: explanation, width: 430,
       body: body, bodyHeight: showBootArgumentNote ? 72 : 32, buttons: [cancel, proceed])
     present(panel, focus: field)
   }
 
   @objc private func authorizePanelPressed() {
     let credential = authorizationField?.stringValue ?? ""
+    guard !credential.isEmpty else {
+      NSSound.beep()
+      return
+    }
     authorizationField?.stringValue = ""
     closePanel()
-    guard !credential.isEmpty else { return }
     if authorizationRepair {
       model.repairRecoveryBoot(password: credential) { [weak self] in
         self?.showAuthorization(repair: true)
@@ -544,8 +552,10 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     done.keyEquivalent = "\r"
     let panel = RecoverySheet(
       title: "Installation details",
-      message: "Command output from this installation.",
-      width: 550, height: 480, body: viewer, bodyHeight: 290, buttons: [copy, done])
+      message: log.truncated
+        ? "Showing recent output. Copy Log includes this attempt’s full log."
+        : "Command output from this installation.",
+      width: 550, body: viewer, bodyHeight: 290, buttons: [copy, done])
     present(panel)
   }
 
@@ -570,7 +580,6 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   }
 
   private func presentIssue() {
-    issueShowing = true
     let issue = model.environmentIssue
     issueRepair = issue?.canRepairStartupSelection == true
     let primary = RecoveryPrimaryButton(
@@ -583,9 +592,9 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     let panel = RecoverySheet(
       title: issue?.title ?? "Setup could not finish",
       message: issue?.message ?? model.failure ?? "",
-      width: 490, height: 270, body: NSView(), bodyHeight: 0,
+      width: 460, body: NSView(), bodyHeight: 0,
       buttons: [cancel, primary])
-    present(panel)
+    issueShowing = present(panel)
   }
 
   @objc private func issuePrimaryPressed() {

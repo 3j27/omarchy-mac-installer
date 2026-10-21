@@ -31,6 +31,7 @@ final class InstallerModel {
   var accountAlreadyStarted = false { didSet { changed() } }
   var creatingAccount = false { didSet { changed() } }
   var restartingWithoutAccount = false { didSet { changed() } }
+  var restartingCompletedSetup = false { didSet { changed() } }
   var accountNeedsAuthorization = false { didSet { changed() } }
   var previewNotice: (title: String, message: String)? { didSet { changed() } }
   private var checkingAccount = false
@@ -349,9 +350,15 @@ final class InstallerModel {
         previewNotice = ("Restart simulated", "This preview does not restart your Mac.")
         return
       }
+      guard !restartingCompletedSetup else { return }
+      restartingCompletedSetup = true
       DispatchQueue.global(qos: .userInitiated).async {
         do { try RecoveryActions.restartCompletedSetup() } catch {
-          DispatchQueue.main.async { self.failure = error.localizedDescription }
+          InstallerLog.shared.append("Restart failed: " + error.localizedDescription)
+          DispatchQueue.main.async {
+            self.restartingCompletedSetup = false
+            self.failure = error.localizedDescription
+          }
         }
       }
       return

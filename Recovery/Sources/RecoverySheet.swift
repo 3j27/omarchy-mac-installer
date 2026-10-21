@@ -3,11 +3,11 @@ import AppKit
 /// A fixed-size, keyboard-modal AppKit sheet styled like the Recovery window.
 final class RecoverySheet: NSPanel {
   init(
-    title: String, message: String, width: CGFloat, height: CGFloat,
+    title: String, message: String, width: CGFloat,
     body: NSView, bodyHeight: CGFloat, buttons: [NSButton]
   ) {
     super.init(
-      contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+      contentRect: NSRect(x: 0, y: 0, width: width, height: 200),
       styleMask: [.titled], backing: .buffered, defer: false)
     titleVisibility = .hidden
     titlebarAppearsTransparent = true
@@ -19,7 +19,7 @@ final class RecoverySheet: NSPanel {
       standardWindowButton(kind)?.isHidden = true
     }
 
-    let root = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+    let root = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 200))
     root.wantsLayer = true
     root.layer?.backgroundColor = OmarchyTheme.darkCGColor(OmarchyTheme.card)
     root.layer?.cornerRadius = OmarchyTheme.cardRadius
@@ -36,6 +36,7 @@ final class RecoverySheet: NSPanel {
     explanation.textColor = OmarchyTheme.secondaryText
     explanation.lineBreakMode = .byWordWrapping
     explanation.maximumNumberOfLines = 0
+    explanation.preferredMaxLayoutWidth = width - 56
     explanation.translatesAutoresizingMaskIntoConstraints = false
     root.addSubview(explanation)
 
@@ -57,13 +58,17 @@ final class RecoverySheet: NSPanel {
       explanation.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 12),
       explanation.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 28),
       explanation.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
-      body.topAnchor.constraint(equalTo: explanation.bottomAnchor, constant: 18),
+      body.topAnchor.constraint(
+        equalTo: explanation.bottomAnchor, constant: bodyHeight > 0 ? 18 : 6),
       body.centerXAnchor.constraint(equalTo: root.centerXAnchor),
       body.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -56),
       body.heightAnchor.constraint(equalToConstant: bodyHeight),
       actions.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
       actions.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24),
-      body.bottomAnchor.constraint(lessThanOrEqualTo: actions.topAnchor, constant: -14),
+      body.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -14),
+      root.widthAnchor.constraint(equalToConstant: width),
     ])
+    // Size to the wrapped message so short notices stay compact and failures never overflow.
+    setContentSize(NSSize(width: width, height: root.fittingSize.height))
   }
 }
