@@ -2,9 +2,11 @@
 """A MacBook Neo's Touch ID (Mesa) calibration, read from macOS.
 
 Accept both the comb/fdrd/secb FSCl record handled by Aurora's Linux
-extractor and the standalone signed FSC2 format. The format on a
-sensor-equipped J700 has not yet been hardware-qualified. No calibration
-is read on J700 variants without an on-board SPI2 sensor controller.
+extractor and the standalone signed FSC2 format. The enclave loads
+calibration only in the combined layout, so a standalone FSC2 image is
+rebuilt like the root key, from this Mac's own factory records. No
+calibration is read on J700 variants without an on-board SPI2 sensor
+controller.
 """
 
 import fcntl
@@ -73,52 +75,65 @@ def root_key(data):
     This only checks the envelope. It does not establish the issuer chain or
     sensor binding, and never builds a replacement manifest or trust bundle.
     """
+    return _combined(data, b"MSRk", "root-key", "sensor root key")
+
+
+def sealed_calibration(data):
+    """Check a calibration in the combined layout the enclave loads,
+    comb { fdrd: IMG4 { IM4P(FSC2), [0] seal }, secb: trust bundle }, and
+    return it unchanged. Like root_key(), this checks only the envelope."""
+    return _combined(data, b"FSC2", "calibration", "sensor calibration")
+
+
+def _combined(data, payload_type, name, title):
+    """data, if it is one complete comb { fdrd: IMG4 { IM4P(payload_type),
+    [0] IM4M }, secb: trust bundle } record with nothing after it."""
     def children(start, end):
         fields = []
         for field in _children(data, start, end):
             if len(fields) >= 1024:
-                raise ValueError("too many root-key fields")
+                raise ValueError(f"too many {name} fields")
             fields.append(field)
         return fields
 
     try:
         if not 0 < len(data) <= 16 << 20:
-            raise ValueError("invalid root-key size")
+            raise ValueError(f"invalid {name} size")
         outer = _tlv(data, 0)
         if outer[0] != 0x30 or outer[2] != len(data):
             raise ValueError("invalid combined envelope")
         fields = children(outer[1], outer[2])
         if (len(fields) != 3 or _ia5(data, fields[0]) != b"comb"
                 or fields[1][0] != 0x30 or fields[2][0] != 0x30):
-            raise ValueError("root key requires its complete combined envelope")
+            raise ValueError(f"{name} requires its complete combined envelope")
         record = children(fields[1][1], fields[1][2])
         security = children(fields[2][1], fields[2][2])
         if (len(record) != 2 or _ia5(data, record[0]) != b"fdrd"
                 or record[1][0] != 4 or len(security) != 2
                 or _ia5(data, security[0]) != b"secb" or security[1][0] != 4
                 or security[1][1] == security[1][2]):
-            raise ValueError("missing root-key record or trust bundle")
+            raise ValueError(f"missing {name} record or trust bundle")
         image = _tlv(data, record[1][1])
         if image[0] != 0x30 or image[2] != record[1][2]:
-            raise ValueError("invalid embedded root-key image")
+            raise ValueError(f"invalid embedded {name} image")
         parts = children(image[1], image[2])
         if (len(parts) != 3 or _ia5(data, parts[0]) != b"IMG4"
                 or parts[1][0] != 0x30 or parts[2][0] != 0xA0):
-            raise ValueError("missing signed root-key envelope")
+            raise ValueError(f"missing signed {name} envelope")
         payload = children(parts[1][1], parts[1][2])
         if (len(payload) != 4 or _ia5(data, payload[0]) != b"IM4P"
-                or _ia5(data, payload[1]) != b"MSRk" or payload[2][0] != 0x16
+                or _ia5(data, payload[1]) != payload_type or payload[2][0] != 0x16
                 or payload[2][1] == payload[2][2] or payload[3][0] != 4
                 or payload[3][1] == payload[3][2]):
-            raise ValueError("invalid root-key payload")
+            raise ValueError(f"invalid {name} payload")
         wrapper = children(parts[2][1], parts[2][2])
         if len(wrapper) != 1 or wrapper[0][0] != 0x30:
-            raise ValueError("invalid root-key manifest wrapper")
+            raise ValueError(f"invalid {name} manifest wrapper")
         manifest = children(wrapper[0][1], wrapper[0][2])
         if len(manifest) < 2 or _ia5(data, manifest[0]) != b"IM4M":
-            raise ValueError("missing root-key manifest")
+            raise ValueError(f"missing {name} manifest")
     except (ValueError, IndexError) as error:
-        raise MesaError(f"invalid signed sensor root key: {error}") from error
+        raise MesaError(f"invalid signed {title}: {error}") from error
     return bytes(data)
 
 
@@ -178,25 +193,44 @@ def factory_root_key(directory=FACTORY_CACHE):
     """
     _, record = _one(directory, "MSRk-*")
     _, seal = _one(directory, "seal-*")
-    trust = _trust_bundle(directory)
+    return root_key(_reseal(record, seal, _trust_bundle(directory), "MSRk", "root key"))
+
+
+def factory_calibration(image, directory=FACTORY_CACHE):
+    """A standalone signed FSC2 calibration rebuilt the way the enclave
+    loads it.
+
+    The enclave refuses the plain IMG4 (LOAD_CALIBRATION fails), but accepts
+    the same IM4P under the FDR sealing manifest with the trust bundle as
+    secb, exactly like the root key. Every byte comes from this Mac's own
+    calibration and factory records; the result is checked with
+    sealed_calibration().
+    """
+    _, seal = _one(directory, "seal-*")
+    return sealed_calibration(_reseal(image, seal, _trust_bundle(directory), "FSC2", "calibration"))
+
+
+def _reseal(record, seal, trust, kind, name):
+    """comb { fdrd: IMG4 { record's IM4P, [0] seal }, secb: trust }: one of
+    this Mac's signed records with its own manifest replaced by the FDR
+    sealing manifest, as macOS stores appv and fCfg."""
     try:
         outer = _tlv(record, 0)
         parts = list(_children(record, outer[1], outer[2]))
         if (outer[0] != 0x30 or outer[2] != len(record) or len(parts) != 3
                 or _ia5(record, parts[0]) != b"IMG4" or parts[1][0] != 0x30):
-            raise ValueError("MSRk record is not an IMG4")
+            raise ValueError(f"{kind} record is not an IMG4")
         payload_start = parts[0][2]
         im4p = bytes(record[payload_start:parts[1][2]])
         manifest = _tlv(seal, 0)
         if manifest[0] != 0x30 or manifest[2] != len(seal):
             raise ValueError("seal record is not one DER manifest")
     except ValueError as error:
-        raise MesaError(f"cannot rebuild the sensor root key: {error}") from error
+        raise MesaError(f"cannot rebuild the sensor {name}: {error}") from error
     image = _der(0x30, _der(0x16, b"IMG4") + im4p + _der(0xA0, seal))
-    combined = _der(0x30, _der(0x16, b"comb")
-                    + _der(0x30, _der(0x16, b"fdrd") + _der(0x04, image))
-                    + _der(0x30, _der(0x16, b"secb") + _der(0x04, trust)))
-    return root_key(combined)
+    return _der(0x30, _der(0x16, b"comb")
+                + _der(0x30, _der(0x16, b"fdrd") + _der(0x04, image))
+                + _der(0x30, _der(0x16, b"secb") + _der(0x04, trust)))
 
 
 def fsc2_calibrations(data):
@@ -328,7 +362,18 @@ def device_size(fd, ioctl=fcntl.ioctl):
     return block_size * block_count
 
 
-def collect(device, *, root_key_record=None):
+def loadable_calibration(found, factory=FACTORY_CACHE):
+    """found in the combined layout the enclave loads: an FSCl comb record
+    as it is, a standalone FSC2 IMG4 rebuilt from the factory records."""
+    try:
+        outer = _tlv(found, 0)
+        standalone = _ia5(found, _tlv(found, outer[1])) == b"IMG4"
+    except ValueError as error:
+        raise MesaError(f"invalid calibration record: {error}") from error
+    return factory_calibration(found, factory) if standalone else found
+
+
+def collect(device, *, root_key_record=None, factory=FACTORY_CACHE):
     """{firmware path: bytes} for this Mac's Touch ID, read from the raw
     iBoot System Container device, never written."""
     # The production adapter supplies factory_root_key(), rebuilt from this
@@ -348,7 +393,7 @@ def collect(device, *, root_key_record=None):
             container += block
     finally:
         os.close(fd)
-    files = {FIRMWARE_NAME: calibration(container)}
+    files = {FIRMWARE_NAME: loadable_calibration(calibration(container), factory)}
     if root is not None:
         files[ROOT_KEY_NAME] = root
     return files

@@ -16,6 +16,12 @@ The result is `comb { fdrd: IMG4 { IM4P(MSRk), [0] seal }, secb: trustobject }`.
 
 On a Touch ID-equipped Neo (macOS 26.6.2, 25G83) this rebuilds a 12,688-byte container, byte-identical to the one captured from macOS that already brings the sensor up on Linux and enrols. `root_key()` accepts it.
 
+## Calibration
+
+The calibration that `collect()` carves from the iBoot System Container is either an FSCl `comb` record or a standalone signed FSC2 `IMG4`. The enclave loads only the combined layout: it refuses the plain FSC2 image (`LOAD_CALIBRATION` fails), and accepts the same `IM4P` under this Mac's `seal-<ECID>` with the trust bundle as `secb`, the same records the root key uses. `factory_calibration()` rebuilds it that way, and `collect()` writes the result as `apple/mesacal-j700.bin`, so the copy in `vendorfw` that Linux loads after every boot is the sealed one. An FSCl record already has this layout and is kept as it is. If the factory records are missing, collection of a standalone FSC2 calibration fails rather than installing a file the enclave refuses.
+
+The calibration is not the device-private key, so its collection stays on by default.
+
 Collection stays off in the adapter (`COLLECT_NEO_ROOT_KEY`). `collect()` adds the record to the vendor firmware package, so turning collection on would place a copy of the key in each of these, and every one must be dealt with first:
 
 - `vendorfw/firmware.tar` and `vendorfw/firmware.cpio` on the ESP. FAT has no per-file permissions, so a mode inside the archive does not protect the file on disk. Either keep the record out of these archives under its own path, or make sure the ESP is readable only by root wherever it is mounted.
