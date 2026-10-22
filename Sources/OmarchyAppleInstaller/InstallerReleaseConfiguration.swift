@@ -10,7 +10,7 @@
     case invalidURL(String)
     case invalidTrustRoot
     case invalidHelperIdentity
-    case unexpectedHTTPStatus(Int)
+    case unexpectedHTTPStatus(Int, requestedURL: URL? = nil, responseURL: URL? = nil)
     case oversizedDocument(String)
     case invalidCatalogSignature
     case releaseResourcesUnavailable
@@ -463,7 +463,8 @@
         (200...299).contains(response.statusCode)
       else {
         throw InstallerReleaseConfigurationError.unexpectedHTTPStatus(
-          (response as? HTTPURLResponse)?.statusCode ?? 0
+          (response as? HTTPURLResponse)?.statusCode ?? 0,
+          requestedURL: url, responseURL: response.url
         )
       }
       guard let finalURL = response.url,

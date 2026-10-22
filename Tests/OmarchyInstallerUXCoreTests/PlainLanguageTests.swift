@@ -496,6 +496,19 @@
       XCTAssertTrue(try XCTUnwrap(failure.remedy).contains("release channel"))
     }
 
+    func testMissingCatalogDetailsIncludeRequestedAndRedirectedURLs() throws {
+      let requested = URL(string: "https://example.org/catalog-edge.signed.json")!
+      let redirected = URL(string: "https://cdn.example.org/missing.json")!
+      let failure = PlainLanguage.failure(
+        for: InstallerReleaseConfigurationError.unexpectedHTTPStatus(
+          404, requestedURL: requested, responseURL: redirected))
+
+      XCTAssertEqual(failure.headline, "This channel’s release list wasn’t found")
+      XCTAssertTrue(try XCTUnwrap(failure.technicalDetail).contains("404"))
+      XCTAssertTrue(try XCTUnwrap(failure.technicalDetail).contains(requested.absoluteString))
+      XCTAssertTrue(try XCTUnwrap(failure.technicalDetail).contains(redirected.absoluteString))
+    }
+
     func testOtherServerFailuresAreDistinctFromAnEmptyChannel() {
       let failure = PlainLanguage.failure(
         for: InstallerReleaseConfigurationError.unexpectedHTTPStatus(503)

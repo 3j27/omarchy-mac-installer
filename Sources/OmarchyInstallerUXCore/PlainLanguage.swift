@@ -915,7 +915,7 @@
             plainDetail: releaseResourcesUnavailable,
             technicalDetail: technical
           )
-        case .unexpectedHTTPStatus(404):
+        case .unexpectedHTTPStatus(404, _, _):
           return FailureDisplay(
             headline: "This channel’s release list wasn’t found",
             plainDetail:

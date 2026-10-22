@@ -42,3 +42,16 @@ catalog with the same trust root instead of fetching a channel. Production
 builds omit the pair so the app reads its channel at run time.
 
 The helper identity, team and catalog base in `release.json` come from `Packaging/identity.conf`; `test/all` fails when the descriptor no longer matches it.
+
+## Local review builds while catalogs use GitHub
+
+Match `APP_CATALOG_HOST: stopgap` in `.github/workflows/mac-app-release.yml` when assembling a local review app. The default descriptor above targets the future catalog host, which currently returns HTTP 404. Generate a separate descriptor with the supported temporary URLs and the same trust root; do not change the production descriptor or key:
+
+```bash
+mkdir -p build/review-release
+cp Release/trust-root.ed25519.pub build/review-release/
+bash scripts/make-release-descriptor --public-key Release/trust-root.ed25519.pub --output build/review-release/release.json --stopgap --adhoc
+OMARCHY_APP_SIGNING_IDENTITY=- bash Packaging/build-app.sh build/review-release build/review-app
+```
+
+Use fresh output directories. The app still verifies catalog signatures against the unchanged Omacom key. HTTP failure details include the requested URL and final response URL so a missing catalog can be distinguished from a redirect to a missing asset. Switch local builds to the base descriptor when the release workflow switches `APP_CATALOG_HOST` to `base`.
