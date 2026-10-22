@@ -22,6 +22,7 @@ struct CredentialSheet: View {
 
   @State private var input = CredentialInput(username: "")
   @FocusState private var focus: Field?
+  @State private var showsLongWait = false
 
   private enum Field: Hashable {
     case username
@@ -90,10 +91,16 @@ struct CredentialSheet: View {
           .disabled(isSimulation)
       }
 
-      if !context.isVerifying, let message = errorMessage {
+      if context.isVerifying || context.error != nil {
         HStack(alignment: .top, spacing: 8) {
-          Image(systemName: "exclamationmark.triangle")
-          Text(message).foregroundStyle(OmarchyTheme.danger)
+          if context.isVerifying {
+            ProgressView().controlSize(.small)
+            Text(
+              showsLongWait ? PlainLanguage.authorizeStillWorking : PlainLanguage.authorizeChecking)
+          } else if let message = errorMessage {
+            Image(systemName: "exclamationmark.triangle")
+            Text(message).foregroundStyle(OmarchyTheme.danger)
+          }
         }
         .font(OmarchyTheme.detail)
         .foregroundStyle(OmarchyTheme.secondaryText)
@@ -113,11 +120,6 @@ struct CredentialSheet: View {
           .focusEffectDisabled()
         }
         Spacer(minLength: 0)
-        ProgressView().controlSize(.small)
-          .frame(width: 16, height: 16)
-          .opacity(context.isVerifying ? 1 : 0)
-          .accessibilityLabel(PlainLanguage.authorizeChecking)
-          .accessibilityHidden(!context.isVerifying)
         Button(PlainLanguage.authorizeCancel, action: cancel)
           .omarchySecondaryButton()
           .fixedSize()
@@ -141,6 +143,16 @@ struct CredentialSheet: View {
       input.username = isSimulation ? "simulation" : NSUserName()
       if isSimulation { input.password = "simulation-only" }
       if !isSimulation { focus = input.username.isEmpty ? .username : .password }
+    }
+    // The spinner alone reads as stuck once the helper moves from checking
+    // the password to preparing the package; after a few seconds say so.
+    .task(id: context.isVerifying) {
+      showsLongWait = false
+      guard context.isVerifying else { return }
+      try? await Task.sleep(for: .seconds(5))
+      if !Task.isCancelled {
+        showsLongWait = true
+      }
     }
     .onChange(of: context.error) { _, error in
       if error == .credentialsRejected {

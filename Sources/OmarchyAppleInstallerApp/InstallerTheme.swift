@@ -28,21 +28,21 @@ enum OmarchyTheme {
   /// segment in both appearances.
   static let handle = dynamic(light: 0x1F_5FD6, dark: 0x3D_74E8)
 
-  // Try Omarchy's button feedback: in dark mode a primary button brightens to
-  // pale cyan under the pointer and turns cyan while pressed; in light mode it
+  // Button feedback stays in the accent's blue: in dark mode a primary button
+  // lightens under the pointer and deepens while pressed; in light mode it
   // deepens instead, so its white label keeps its contrast. A secondary button
-  // takes an accent border and brighter text on hover and a tinted surface
+  // takes an accent border and lighter blue text on hover and a tinted surface
   // when pressed; every label stays at 4.5:1 or better.
-  static let buttonHover = dynamic(light: 0x2A_6FD6, dark: 0xB4_F9F8)
-  static let buttonPressed = dynamic(light: 0x00_7197, dark: 0x7D_CFFF)
-  static let buttonHoverText = dynamic(light: 0x25_63C9, dark: 0xB4_F9F8)
+  static let buttonHover = dynamic(light: 0x2A_6FD6, dark: 0x9A_B8FA)
+  static let buttonPressed = dynamic(light: 0x00_7197, dark: 0x66_90EC)
+  static let buttonHoverText = dynamic(light: 0x25_63C9, dark: 0x9A_B8FA)
   static let buttonPressedSurface = dynamic(light: 0xE6_E8EF, dark: 0x41_4868)
 
   // MARK: Metrics
 
   static let cardRadius: CGFloat = 8
   static let buttonRadius: CGFloat = 6
-  static let buttonHeight: CGFloat = 34
+  static let buttonHeight: CGFloat = 32
   static let buttonTracking: CGFloat = 0.35
   /// Extra leading for small help text, which often wraps: about 1.4 times
   /// its size instead of SF Mono's default 1.2.
@@ -53,15 +53,15 @@ enum OmarchyTheme {
   // Try Omarchy's scale, all in the system monospaced face. Views pick a role
   // and never set their own point size.
   static let title = mono(22, .bold)
-  static let heading = mono(15, .bold)
+  static let heading = mono(13, .bold)
   /// Try Omarchy's subtitle line ("OMARCHY  ·  APPLE SILICON"): short facts
   /// drawn uppercase in the accent colour.
-  static let eyebrow = mono(11, .semibold)
-  static let body = mono(13)
-  static let detail = mono(11)
-  static let control = mono(12, .medium)
-  static let button = mono(12, .bold)
-  static let badge = mono(11, .bold)
+  static let eyebrow = mono(10, .semibold)
+  static let body = mono(11)
+  static let detail = mono(10)
+  static let control = mono(11, .medium)
+  static let button = mono(11, .bold)
+  static let badge = mono(10, .bold)
   static let technical = mono(10)
   static let numeral = mono(13, .bold)
 

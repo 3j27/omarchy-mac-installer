@@ -155,16 +155,15 @@ struct OmarchyAppleInstallerApp: App {
           simulationScenario: previewRemovalScenario)
       }
       .preferredColorScheme(previewColorScheme)
-      .frame(minWidth: 640, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
-      .ignoresSafeArea(.container, edges: .top)
+      .frame(minWidth: 640)
       .omarchyTypography()
       .tint(OmarchyTheme.accent)
       // The window itself takes the theme colour, title bar included, so the
       // translucent system title bar never tints from the wallpaper behind.
       .containerBackground(OmarchyTheme.window, for: .window)
     }
-    .defaultSize(width: 780, height: 660)
-    .windowResizability(.contentMinSize)
+    .defaultSize(width: 780, height: 600)
+    .windowResizability(.contentSize)
     .windowStyle(.hiddenTitleBar)
     .commands {
       #if DEBUG
@@ -183,7 +182,6 @@ struct OmarchyAppleInstallerApp: App {
             Toggle("Slow Playback", isOn: $simulation.slow)
             Toggle("Dark Appearance", isOn: $simulation.dark)
             Divider()
-            Button("Preview Recovery Handoff…") { simulation.previewsRecoveryHandoff = true }
             Picker("Removal Scenario", selection: $simulation.removalScenario) {
               ForEach(RemovalPreviewScenario.allCases, id: \.self) { item in
                 Text(item.rawValue).tag(item)
