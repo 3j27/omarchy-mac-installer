@@ -10,14 +10,20 @@ macOS keeps the records in `/System/Volumes/Hardware/FactoryData/System/Library/
 
 - `MSRk-<sensor>`: an `IMG4` whose `IM4P` carries the key. Its own factory manifest chains to a root the enclave does not trust, so only the `IM4P` is used.
 - `seal-<ECID>`: the FDR sealing manifest (`IM4M`), which does chain to `secb`.
-- `trustobject-<sha256>`: the trust bundle, used as `secb`. Its name must match its digest, and `trustobject-current` must be identical.
+- `trustobject-<sha256>`: the trust bundle, used as `secb`. It is the named bundle whose bytes and digest match `trustobject-current`; older bundles that a macOS update leaves in the cache are ignored. Without `trustobject-current`, exactly one named bundle must be present and match its name.
 
-The result is `comb { fdrd: IMG4 { IM4P(MSRk), [0] seal }, secb: trustobject }`. That's the layout macOS uses for the other records in the same cache (`appv`, `fCfg` carry the same seal and trust bundle), so no manifest is synthesized and nothing crosses machines. Exactly one of each record is required, and anything missing, ambiguous or mismatched is rejected.
+The result is `comb { fdrd: IMG4 { IM4P(MSRk), [0] seal }, secb: trustobject }`. That's the layout macOS uses for the other records in the same cache (`appv`, `fCfg` carry the same seal and trust bundle), so no manifest is synthesized and nothing crosses machines. Exactly one `MSRk` and one `seal` record are required, and anything missing, ambiguous or mismatched is rejected.
 
 On a Touch ID-equipped Neo (macOS 26.6.2, 25G83) this rebuilds a 12,688-byte container, byte-identical to the one captured from macOS that already brings the sensor up on Linux and enrols. `root_key()` accepts it.
 
-Collection stays off in the adapter (`COLLECT_NEO_ROOT_KEY`) until the firmware archive writer and the installed system keep `apple/msrk-j700.bin` root-only `0600`. A cold boot after a fresh install with the collected file is still to be done.
+Collection stays off in the adapter (`COLLECT_NEO_ROOT_KEY`). `collect()` adds the record to the vendor firmware package, so turning collection on would place a copy of the key in each of these, and every one must be dealt with first:
+
+- `vendorfw/firmware.tar` and `vendorfw/firmware.cpio` on the ESP. FAT has no per-file permissions, so a mode inside the archive does not protect the file on disk. Either keep the record out of these archives under its own path, or make sure the ESP is readable only by root wherever it is mounted.
+- The per-install Recovery firmware baseline (`Recovery/README.md`), which copies those archives into `Aurora/Recovery/InstallData/AuraPayloads` on the stub's macOS volume.
+- The installed system, which must keep `apple/msrk-j700.bin` root-owned `0600`.
+
+Turning collection on changes installer behaviour, so it belongs in its own change, together with the cold boot after a fresh install with the collected file, which is still to be done.
 
 This work is separate from country-policy extraction and encryption recovery. It does not change either path or enable fingerprint setup by default.
 
-The root-key record is device-private. Its required mode is root-owned `0600` in staging and on the installed system; containing private staging directories use `0700`. Automatic collection must remain inactive until the archive writer and installation path preserve that mode. General world-readable firmware defaults are unsuitable for this record.
+The root-key record is device-private. Its required mode is root-owned `0600` in staging and on the installed system; containing private staging directories use `0700`. Automatic collection must remain inactive until every copy listed above is protected. General world-readable firmware defaults are unsuitable for this record.
