@@ -1,3 +1,4 @@
+import hashlib
 import os
 import plistlib
 from pathlib import Path
@@ -11,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from omarchy_mesa import (  # noqa: E402
     DKIOCGETBLOCKCOUNT, DKIOCGETBLOCKSIZE, MesaError, calibration, collect, device_size,
-    has_builtin_sensor,
+    factory_calibration, has_builtin_sensor, sealed_calibration,
 )
 
 
@@ -26,9 +27,32 @@ def ia5(text):
     return der(0x16, text.encode())
 
 
+def im4p(kind=b"FSC2", payload=b"CALB" + b"\x5a" * 300):
+    return der(0x30, ia5("IM4P") + der(0x16, kind) + ia5("mesa") + der(0x04, payload))
+
+
 def img4(kind=b"FSC2", payload=b"CALB" + b"\x5a" * 300, manifest=b"IM4M"):
-    im4p = der(0x30, ia5("IM4P") + der(0x16, kind) + ia5("mesa") + der(0x04, payload))
-    return der(0x30, ia5("IMG4") + im4p + der(0xA0, der(0x30, der(0x16, manifest))))
+    return der(0x30, ia5("IMG4") + im4p(kind, payload) + der(0xA0, der(0x30, der(0x16, manifest))))
+
+
+SEAL = der(0x30, ia5("IM4M") + der(2, b"\0") + der(4, b"sealing manifest"))
+TRUST = b"synthetic trust bundle"
+
+
+def factory_cache(directory, seal=SEAL, trust=TRUST):
+    """The seal and trust records of a factory cache, as macOS names them."""
+    root = Path(directory)
+    (root / "seal-0000").write_bytes(seal)
+    (root / ("trustobject-" + hashlib.sha256(trust).hexdigest().upper())).write_bytes(trust)
+    (root / "trustobject-current").write_bytes(trust)
+    return root
+
+
+def sealed():
+    """What the enclave loads for img4(): its IM4P under SEAL, with TRUST as secb."""
+    image = der(0x30, ia5("IMG4") + im4p() + der(0xA0, SEAL))
+    return der(0x30, ia5("comb") + der(0x30, ia5("fdrd") + der(0x04, image))
+               + der(0x30, ia5("secb") + der(0x04, TRUST)))
 
 
 def comb(image=None):
@@ -62,7 +86,9 @@ class Fsc2CalibrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             device = os.path.join(root, "rdisk0s1")
             Path(device).write_bytes(b"\0" * 9000 + blob + b"\0" * 9000)
-            self.assertEqual(collect(device), {"apple/mesacal-j700.bin": blob})
+            factory = factory_cache(tempfile.mkdtemp(dir=root))
+            self.assertEqual(collect(device, factory=factory),
+                             {"apple/mesacal-j700.bin": sealed()})
 
     def test_a_raw_disk_device_is_sized_by_its_driver(self):
         # Seeking to the end of /dev/rdiskN reports 0 on macOS, which refused
@@ -107,6 +133,45 @@ class Fsc2CalibrationTests(unittest.TestCase):
         damaged = bytes([0x30, blob[1]]) + length.to_bytes(header - 2, "big") + blob[header:]
         with self.assertRaisesRegex(MesaError, "found 0"):
             calibration(damaged)
+
+
+class SealedCalibrationTests(unittest.TestCase):
+    def test_standalone_fsc2_is_resealed_like_the_root_key(self):
+        # The enclave refuses the plain FSC2 IMG4 and loads its IM4P under the
+        # FDR sealing manifest with the trust bundle as secb.
+        with tempfile.TemporaryDirectory() as directory:
+            result = factory_calibration(img4(), factory_cache(directory))
+        self.assertEqual(result, sealed())
+        self.assertNotIn(b"IM4M FSC2", result)
+        self.assertEqual(sealed_calibration(result), result)
+
+    def test_collect_seals_fsc2_but_keeps_an_fscl_record_as_is(self):
+        with tempfile.TemporaryDirectory() as root:
+            device = Path(root) / "rdisk0s1"
+            device.write_bytes(comb())
+            missing = Path(root) / "no-factory-cache"
+            self.assertEqual(collect(device, factory=missing), {"apple/mesacal-j700.bin": comb()})
+            device.write_bytes(img4())
+            with self.assertRaises(MesaError):
+                collect(device, factory=missing)
+
+    def test_unsealable_records_are_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            factory = factory_cache(directory)
+            for image in (img4()[:-1], comb()):
+                with self.subTest(image=image[:12]), self.assertRaises(MesaError):
+                    factory_calibration(image, factory)
+        with tempfile.TemporaryDirectory() as directory:
+            factory = factory_cache(directory, seal=b"not a manifest")
+            with self.assertRaises(MesaError):
+                factory_calibration(img4(), factory)
+
+    def test_only_a_complete_sealed_fsc2_is_accepted(self):
+        good = sealed()
+        for candidate in (img4(), good[:-1], good + b"trailing", good.replace(b"FSC2", b"MSRk"),
+                          good.replace(b"secb", b"none"), comb()):
+            with self.subTest(candidate=candidate[:24]), self.assertRaises(MesaError):
+                sealed_calibration(candidate)
 
 
 class SensorPresenceTests(unittest.TestCase):

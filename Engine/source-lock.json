@@ -141,7 +141,7 @@
     }
   },
   "downstream_overlay": {
-    "version": "v0.9.2-omarchy.20261022.016e3c0be020",
+    "version": "v0.9.2-omarchy.20261022.31425f17fb9b",
     "capability": "candidate_bound_full_os_stage_one_authenticated_recovery",
     "minimum_app_version": "2.3.0",
     "engine_modes": [
@@ -277,12 +277,12 @@
       {
         "path": "overlay/src/omarchy_mesa.py",
         "destination": "src/omarchy_mesa.py",
-        "sha256": "15524b061fc59193933bbe215d3310300dc8730475fa7d0caad3de6388884d40"
+        "sha256": "25bbc6d1cfcbdd1b91e918fa110fa233e4aaef5608dd2b10a603bdd6c98bb171"
       },
       {
         "path": "overlay/tests/test_omarchy_mesa.py",
         "destination": "tests/test_omarchy_mesa.py",
-        "sha256": "9a9f116ba9099b0aad251df7c32ff732cd717e0a687ebd47068d3a187543f4f4"
+        "sha256": "ed81b57738b06954ee4c331768297a13cfb101bf0b2f89f664add5e631655bb5"
       },
       {
         "path": "overlay/src/omarchy_firmware.py",
@@ -467,9 +467,9 @@
     }
   ],
   "validation_artifact": {
-    "filename": "installer-v0.9.2-omarchy.20261022.016e3c0be020.tar.gz",
-    "size_bytes": 17902188,
-    "sha256": "0da8acf5c27475643aefb54d68a57cf0fc0110a3b5a3c2ef2b170fae097d83fb",
+    "filename": "installer-v0.9.2-omarchy.20261022.31425f17fb9b.tar.gz",
+    "size_bytes": 17902703,
+    "sha256": "5fea6b561e6fb82260f573bae099c70ba2e9998df56d38cf285987432320d4b5",
     "reproducibility_scope": "two-identical-python-overlay-repacks-authenticated-base",
     "signature": "absent",
     "metadata_sha256": "2e6181ce6b6e17c11039e04bfadade8d10ae0e11889885ad8c9960b68f179a5d"

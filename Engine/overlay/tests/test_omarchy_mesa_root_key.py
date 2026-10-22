@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import hashlib
 
 from omarchy_mesa import MesaError, ROOT_KEY_NAME, collect, factory_root_key, root_key
-from test_omarchy_mesa import der, ia5, img4
+from test_omarchy_mesa import der, factory_cache, ia5, img4
 
 
 def root_image(extra_manifest_fields=0):
@@ -55,11 +55,14 @@ class RootKeyEnvelopeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "container"
             path.write_bytes(img4())
-            self.assertNotIn(ROOT_KEY_NAME, collect(path))
+            factory = Path(directory) / "factory"
+            factory.mkdir()
+            factory_cache(factory)
+            self.assertNotIn(ROOT_KEY_NAME, collect(path, factory=factory))
             data = combined_root()
-            self.assertEqual(collect(path, root_key_record=data)[ROOT_KEY_NAME], data)
+            self.assertEqual(collect(path, root_key_record=data, factory=factory)[ROOT_KEY_NAME], data)
             with self.assertRaises(MesaError):
-                collect(path, root_key_record=root_image())
+                collect(path, root_key_record=root_image(), factory=factory)
 
 
 class FactoryRootKeyTests(unittest.TestCase):
