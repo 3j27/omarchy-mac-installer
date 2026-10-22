@@ -456,18 +456,21 @@ repositories() {
 # /etc/pacman.conf, so the installed Mac resolves every package from the
 # repository the image took it from, and its first update swaps nothing. The
 # template must name exactly the pinned repositories; its servers are not
-# used. A candidate set keeps the Apple profile's order.
+# used, and it may leave out [aur], which carries none of Omarchy's packages.
+# A candidate set keeps the Apple profile's order.
 read_repository_order() {
   [[ $(set_kind) == channel ]] || return 0
-  local archive template text order=()
+  local archive template text order=() named pinned without_aur
   archive=$candidates/$(candidate_archive omarchy-settings)
   template=usr/share/omarchy/default/pacman/aarch64-apple/pacman-$(field omarchy_channel).conf
   [[ $(bsdtar -tvf "$archive" "$template" 2>/dev/null) == -* ]] ||
     fail "the runtime ships no Apple pacman template for the channel ($template)"
   text=$(bsdtar -xOf "$archive" "$template") || fail "could not read the runtime's ${template##*/}"
   mapfile -t order < <(pacman_repositories <(printf '%s\n' "$text"))
-  [[ $(printf '%s\n' "${order[@]}" | LC_ALL=C sort | paste -sd' ' -) == \
-    "$(printf '%s\n' "${repository_order[@]}" | LC_ALL=C sort | paste -sd' ' -)" ]] ||
+  named=$(printf '%s\n' "${order[@]}" | LC_ALL=C sort | paste -sd' ' -)
+  pinned=$(printf '%s\n' "${repository_order[@]}" | LC_ALL=C sort | paste -sd' ' -)
+  without_aur=$(printf '%s\n' "${repository_order[@]}" | grep -vx aur | LC_ALL=C sort | paste -sd' ' -)
+  [[ $named == "$pinned" || $named == "$without_aur" ]] ||
     fail "the runtime's ${template##*/} names the repositories ${order[*]}, not the pinned ${repository_order[*]}"
   repository_order=("${order[@]}")
 }

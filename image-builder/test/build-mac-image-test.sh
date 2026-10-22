@@ -861,14 +861,31 @@ runtime_template "$RUNTIME_TEMPLATE"
 )
 pass "a channel image searches [omarchy] first, as its runtime's Apple template does; a candidate set keeps [omarchy] last"
 
+runtime_template "$(sed '/^\[aur\]/,$d' <<<"$RUNTIME_TEMPLATE")"
+(
+  candidates=$channel/candidates
+  field() { sed -n "s/^$1=//p" "$channel/inputs"; }
+  fail() { builder_fail "$@"; }
+  read_repository_order
+  [[ ${repository_order[*]} == "omarchy asahi-alarm core extra alarm" ]] ||
+    fail "a template without [aur] gives its own order: ${repository_order[*]}"
+  sections=$(render_config /repos /cache | sed -n 's/^\[\(.*\)\]$/\1/p' | paste -sd' ' -)
+  [[ $sections == "options omarchy-candidates omarchy asahi-alarm core extra alarm omarchy-aarch64" ]] ||
+    fail "a channel image whose template leaves out [aur] searches no [aur]: $sections"
+)
+runtime_template "$RUNTIME_TEMPLATE"
+pass "a runtime template without [aur] builds an image that searches no [aur]"
+
 refused_order() {
   local expected=$1 what=$2 refusal
   refusal=$( (candidates=$channel/candidates; field() { sed -n "s/^$1=//p" "$channel/inputs"; }
     fail() { builder_fail "$@"; }; read_repository_order) 2>&1 >/dev/null) && fail "$what is refused"
   [[ $refusal == *"$expected"* ]] || fail "$what is refused: $refusal"
 }
-runtime_template "$(sed '/^\[aur\]/,$d' <<<"$RUNTIME_TEMPLATE")"
-refused_order "names the repositories omarchy asahi-alarm core extra alarm, not the pinned" "a template missing a pinned repository"
+runtime_template "$(sed '/^\[extra\]/,+1d' <<<"$RUNTIME_TEMPLATE")"
+refused_order "names the repositories omarchy asahi-alarm core alarm aur, not the pinned" "a template missing a pinned repository"
+runtime_template "$(sed -e '/^\[extra\]/,+1d' -e '/^\[aur\]/,$d' <<<"$RUNTIME_TEMPLATE")"
+refused_order "names the repositories omarchy asahi-alarm core alarm, not the pinned" "a template missing [aur] and a pinned repository"
 runtime_template "$RUNTIME_TEMPLATE"$'[omarchy-aarch64]\nServer = https://example.invalid\n'
 refused_order "not the pinned" "a template with a repository the record does not pin"
 runtime_template ""
