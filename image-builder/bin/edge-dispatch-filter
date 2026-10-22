@@ -358,12 +358,13 @@ def check_archive(path, entry):
 
 def repository_order(settings, channel='edge'):
     """The repositories in the order the runtime's Apple template for CHANNEL names them, as
-    build-mac-image's read_repository_order reads it: exactly the pinned ones, servers ignored."""
+    build-mac-image's read_repository_order reads it: exactly the pinned ones, or all of them
+    but [aur], servers ignored."""
     template = TEMPLATE.format(channel=channel)
     text = member(settings, template)
     require(text is not None, f'the runtime ships no Apple pacman template for the channel ({template})')
     order = [name for name in SECTION.findall(text) if name != 'options']
-    require(sorted(order) == sorted(PINNED_ORDER),
+    require(sorted(order) in (sorted(PINNED_ORDER), sorted(set(PINNED_ORDER) - {'aur'})),
             f"the runtime's {template.rsplit('/', 1)[1]} names the repositories {' '.join(order)}, "
             f"not the pinned {' '.join(PINNED_ORDER)}")
     return order
