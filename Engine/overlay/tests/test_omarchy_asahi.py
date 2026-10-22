@@ -2401,7 +2401,8 @@ class NeoRadioFirmwareTests(unittest.TestCase):
 class NeoTouchIdCalibrationTests(unittest.TestCase):
     """The MacBook Neo's FSC2 calibration joins its vendor firmware package."""
 
-    def run_hook(self, device_class, collect, partitions=None, sensor_present=lambda: True, required=True):
+    def run_hook(self, device_class, collect, partitions=None, sensor_present=lambda: True, required=True,
+                 factory_root_key=None, collect_root_key=None):
         package = SimpleNamespace(added=[])
         package.add_file = lambda name, data: package.added.append((name, data))
         dutil = SimpleNamespace(
@@ -2414,7 +2415,14 @@ class NeoTouchIdCalibrationTests(unittest.TestCase):
         installer = SimpleNamespace(sysinfo=SimpleNamespace(device_class=device_class), dutil=dutil)
         firmware = SimpleNamespace(core=SimpleNamespace(FWFile=lambda name, data: ("FWFile", name, data)))
         with patch("omarchy_asahi.asahi_firmware", firmware):
-            _collect_neo_touch_id(installer, package, collect=collect, sensor_present=sensor_present, required=required)
+            if factory_root_key is None:
+                import omarchy_mesa
+
+                def factory_root_key():
+                    raise omarchy_mesa.MesaError("no factory root key in this test")
+            _collect_neo_touch_id(installer, package, collect=collect, sensor_present=sensor_present,
+                                  factory_root_key=factory_root_key, required=required,
+                                  collect_root_key=collect_root_key)
         return package.added
 
     def test_a_neo_reads_the_raw_iboot_system_container(self):
@@ -2431,6 +2439,26 @@ class NeoTouchIdCalibrationTests(unittest.TestCase):
 
     def test_other_macs_collect_nothing(self):
         self.assertEqual(self.run_hook("j613ap", lambda device: self.fail("read the container")), [])
+
+    def test_a_factory_root_key_is_collected_with_calibration(self):
+        records = []
+
+        def collect(device, root_key_record=None):
+            records.append(root_key_record)
+            files = {"apple/mesacal-j700.bin": b"img4"}
+            if root_key_record is not None:
+                files["apple/msrk-j700.bin"] = root_key_record
+            return files
+
+        self.run_hook("j700ap", collect, factory_root_key=lambda: self.fail("collected while disabled"))
+        self.assertEqual(records, [None])
+        records.clear()
+        added = self.run_hook("j700ap", collect, factory_root_key=lambda: b"comb", collect_root_key=True)
+        self.assertEqual(records, [b"comb"])
+        self.assertEqual(added, [
+            ("apple/mesacal-j700.bin", ("FWFile", "apple/mesacal-j700.bin", b"img4")),
+            ("apple/msrk-j700.bin", ("FWFile", "apple/msrk-j700.bin", b"comb")),
+        ])
 
     def test_a_failed_collection_stops_installation(self):
         import omarchy_mesa
