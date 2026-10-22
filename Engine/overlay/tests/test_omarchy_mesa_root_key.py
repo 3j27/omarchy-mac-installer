@@ -83,6 +83,22 @@ class FactoryRootKeyTests(unittest.TestCase):
                                      security=self.trust)
             self.assertEqual(factory_root_key(self.cache(directory)), expected)
 
+    def test_trust_bundle_follows_trustobject_current(self):
+        expected = combined_root(der(0x30, ia5("IMG4") + self.payload + der(0xA0, self.seal)),
+                                 security=self.trust)
+        stale = b"bundle from an older macOS"
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.cache(directory)
+            (root / ("trustobject-" + hashlib.sha256(stale).hexdigest().upper())).write_bytes(stale)
+            self.assertEqual(factory_root_key(root), expected)
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.cache(directory)
+            (root / "trustobject-current").unlink()
+            self.assertEqual(factory_root_key(root), expected)
+            (root / ("trustobject-" + hashlib.sha256(stale).hexdigest().upper())).write_bytes(stale)
+            with self.assertRaises(MesaError):
+                factory_root_key(root)
+
     def test_mismatched_or_missing_records_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = self.cache(directory, current=b"another bundle")

@@ -141,6 +141,30 @@ def _one(directory, pattern):
         return os.path.basename(found[0]), fd.read(16 << 20)
 
 
+def _trust_bundle(directory):
+    """The trust bundle the enclave is given: the trustobject-<sha256>
+    record that trustobject-current holds. A macOS update can leave older
+    named bundles in the cache, so only without trustobject-current must
+    there be exactly one."""
+    current = os.path.join(directory, "trustobject-current")
+    if not os.path.exists(current):
+        name, trust = _one(directory, "trustobject-*")
+        if hashlib.sha256(trust).hexdigest() != name.split("-", 1)[1].lower():
+            raise MesaError("trust bundle does not match its name")
+        return trust
+    with open(current, "rb") as fd:
+        trust = fd.read(16 << 20)
+    digest = hashlib.sha256(trust).hexdigest()
+    named = [path for path in glob.glob(os.path.join(directory, "trustobject-*"))
+             if os.path.basename(path).split("-", 1)[1].lower() == digest]
+    if not named:
+        raise MesaError("no named trust bundle matches trustobject-current")
+    with open(named[0], "rb") as fd:
+        if fd.read(len(trust) + 1) != trust:
+            raise MesaError("trustobject-current differs from the named trust bundle")
+    return trust
+
+
 def factory_root_key(directory=FACTORY_CACHE):
     """This Mac's combined sensor root-key container, rebuilt from its own
     factory cache the way macOS hands it to the enclave.
@@ -154,15 +178,7 @@ def factory_root_key(directory=FACTORY_CACHE):
     """
     _, record = _one(directory, "MSRk-*")
     _, seal = _one(directory, "seal-*")
-    name, trust = _one(directory, "trustobject-*")
-    digest = name.split("-", 1)[1].lower()
-    if hashlib.sha256(trust).hexdigest() != digest:
-        raise MesaError("trust bundle does not match its name")
-    current = os.path.join(directory, "trustobject-current")
-    if os.path.exists(current):
-        with open(current, "rb") as fd:
-            if fd.read(len(trust) + 1) != trust:
-                raise MesaError("trustobject-current differs from the named trust bundle")
+    trust = _trust_bundle(directory)
     try:
         outer = _tlv(record, 0)
         parts = list(_children(record, outer[1], outer[2]))
