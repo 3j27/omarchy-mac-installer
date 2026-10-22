@@ -32,7 +32,9 @@ import re
 import sys
 from pathlib import Path
 
-REQUIRED_PACMAN_SECTIONS = ("asahi-alarm", "core", "extra", "alarm", "aur", "omarchy")
+# [aur] is not required: ALARM's [aur] carries none of Omarchy's packages, and
+# the runtime's templates may leave it out.
+REQUIRED_PACMAN_SECTIONS = ("asahi-alarm", "core", "extra", "alarm", "omarchy")
 # Repositories an image must never be left pointing at: the mx-mac fork's
 # channels and the builder's own candidate repository.
 FORBIDDEN_PACMAN_SECTIONS = ("omarchy-aurora", "omarchy-aarch64", "omarchy-candidates")

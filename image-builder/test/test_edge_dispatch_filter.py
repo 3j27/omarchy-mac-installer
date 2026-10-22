@@ -173,11 +173,18 @@ class EdgeDispatchFilterTest(unittest.TestCase):
     def test_a_template_that_does_not_name_the_pinned_repositories_is_refused(self):
         for name, text, message in (
                 ("missing", False, "no Apple pacman template"),
-                ("short", template(EDGE_ORDER[:-1]), "names the repositories omarchy asahi-alarm core extra alarm, not"),
+                ("short", template(tuple(n for n in EDGE_ORDER if n != "extra")),
+                 "names the repositories omarchy asahi-alarm core alarm aur, not"),
+                ("short-without-aur", template(tuple(n for n in EDGE_ORDER if n not in ("extra", "aur"))),
+                 "names the repositories omarchy asahi-alarm core alarm, not"),
                 ("extra", template(EDGE_ORDER + ("testing",)), "not the pinned"),
                 ("crlf-missing", template(EDGE_ORDER[1:]).replace(b"\n", b"\r\n"), "not the pinned")):
             with self.subTest(name), self.assertRaisesRegex(ValueError, message):
                 self.decide("linux-aurora", edge=make_edge(self.base / f"edge-{name}", template_text=text))
+
+    def test_a_template_may_leave_out_aur(self):
+        edge = make_edge(self.base / "edge-without-aur", order=EDGE_ORDER[:-1])
+        self.assertEqual(self.decide(edge=edge)["repository_order"], list(EDGE_ORDER[:-1]))
 
     def test_a_crlf_template_reads_as_sed_reads_it(self):
         edge = make_edge(self.base / "edge-crlf", template_text=template(EDGE_ORDER).replace(b"\n", b"\r\n"))

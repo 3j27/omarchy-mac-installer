@@ -19,6 +19,11 @@ struct OnePageInstallerView: View {
   /// The size the owner chose for Omarchy, kept through installation so the
   /// header names it instead of the most Omarchy could take.
   @State private var chosenOmarchyBytes: UInt64?
+  @State private var contentHeight: CGFloat = 400
+  /// Set while the native Recovery handoff is prepared before shutdown, and
+  /// what to tell the owner if that or the shutdown request fails.
+  @State private var preparingShutdown = false
+  @State private var shutdownFailure: String?
   /// Which channel this Mac reads. Owned by the scene so the banner always
   /// names the channel the next preparation will actually fetch; `nil` when
   /// the bundle has no release descriptor to fetch from.
@@ -43,14 +48,30 @@ struct OnePageInstallerView: View {
   }
 
   var body: some View {
-    Group {
-      if let account = session.recoveryAccount, let target = account.target {
-        RecoveryHandoffView(volumeName: target.volumeName, session: session)
-      } else if case .awaitingRecovery = session.phase {
-        RecoveryHandoffView(volumeName: "Omarchy", session: session.isSimulation ? nil : session)
-      } else {
-        installerPage
+    ScrollView {
+      VStack(spacing: 0) {
+        OmarchyWordmark()
+          .frame(maxWidth: 400)
+          .padding(.top, 24)
+          .padding(.bottom, 16)
+        header.padding(.bottom, 20)
+        VStack(alignment: .leading, spacing: 14) { stage }
+          .frame(maxWidth: 560)
+        HStack(spacing: 16) { actions }
+          .padding(.top, 24)
+          .padding(.bottom, 24)
       }
+      .frame(maxWidth: .infinity)
+      .padding(.horizontal, 40)
+      .background {
+        GeometryReader { geometry in
+          Color.clear.preference(key: InstallerContentHeight.self, value: geometry.size.height)
+        }
+      }
+    }
+    .frame(height: min(contentHeight, 680))
+    .onPreferenceChange(InstallerContentHeight.self) { height in
+      if height > 0 { contentHeight = height }
     }
     .foregroundStyle(OmarchyTheme.text)
     .background(OmarchyTheme.window)
@@ -99,7 +120,7 @@ struct OnePageInstallerView: View {
         action: PlainLanguage.shutdownConfirmationAction,
         onConfirm: {
           showsShutdownConfirmation = false
-          session.shutDown()
+          shutDown()
         },
         onCancel: { showsShutdownConfirmation = false }
       )
@@ -115,16 +136,6 @@ struct OnePageInstallerView: View {
         },
         onCancel: { showsRecoveryRetryConfirmation = false }
       )
-    }
-  }
-
-  private var installerPage: some View {
-    InstallerPageLayout {
-      header
-    } content: {
-      VStack(alignment: .leading, spacing: 18) { stage }
-    } actions: {
-      HStack(spacing: 16) { actions }
     }
   }
 
@@ -188,7 +199,11 @@ struct OnePageInstallerView: View {
         .padding(.top, 6)
 
     case .existingInstallRefused:
-      existingInstallRefusedPanel()
+      if let handoff = pendingRecoveryHandoff {
+        recoveryPanel(handoff)
+      } else {
+        existingInstallRefusedPanel()
+      }
 
     case .preparingPlan(let update), .planPrepared(_, let update):
       DownloadPanel(update: update)
@@ -287,29 +302,26 @@ struct OnePageInstallerView: View {
         .keyboardShortcut(.defaultAction)
 
     case .existingInstallRefused:
-      Button(PlainLanguage.closeInstaller) { NSApplication.shared.terminate(nil) }
-        .omarchyPrimaryButton()
-        .keyboardShortcut(.defaultAction)
+      if pendingRecoveryHandoff != nil {
+        shutDownButton
+      } else {
+        Button(PlainLanguage.closeInstaller) { NSApplication.shared.terminate(nil) }
+          .omarchyPrimaryButton()
+          .keyboardShortcut(.defaultAction)
+      }
 
     case .planReview:
-      VStack(spacing: 10) {
-        Button(PlainLanguage.planInstall) {
-          // Approve the exact plan and go straight to the password. If the
-          // helper is not ready the page stays here and says so.
-          session.approve()
-          if session.canStartInstallation {
-            session.presentInstallCredentials()
-          }
-        }
-        .omarchyPrimaryButton()
-        .disabled(session.planInstallHold != nil)
-        .keyboardShortcut(.defaultAction)
-        if let hold = session.planInstallHold {
-          Text(hold)
-            .font(OmarchyTheme.detail)
-            .foregroundStyle(OmarchyTheme.secondaryText)
+      Button(PlainLanguage.planInstall) {
+        // Approve the exact plan and go straight to the password. If the
+        // helper is not ready the page stays here and says so.
+        session.approve()
+        if session.canStartInstallation {
+          session.presentInstallCredentials()
         }
       }
+      .omarchyPrimaryButton()
+      .disabled(session.planInstallHold != nil)
+      .keyboardShortcut(.defaultAction)
 
     case .awaitingInstall:
       Button("Change size") { session.editPlan() }
@@ -326,11 +338,7 @@ struct OnePageInstallerView: View {
         .foregroundStyle(OmarchyTheme.accent)
 
     case .awaitingRecovery:
-      if !session.isSimulation {
-        Button(PlainLanguage.recoveryShutDown) { showsShutdownConfirmation = true }
-          .omarchyPrimaryButton()
-          .keyboardShortcut(.defaultAction)
-      }
+      shutDownButton
 
     case .done:
       Button("Close") { NSApplication.shared.terminate(nil) }
@@ -509,8 +517,52 @@ struct OnePageInstallerView: View {
         NSPasteboard.general.setString(text, forType: .string)
       }
       .omarchySecondaryButton()
-      if let message = session.shutdownMessage {
+      if let message = shutdownFailure ?? session.shutdownMessage {
         Text(message).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+      }
+    }
+  }
+
+  private var shutDownButton: some View {
+    Button(PlainLanguage.recoveryShutDown) { showsShutdownConfirmation = true }
+      .omarchyPrimaryButton()
+      .disabled(preparingShutdown)
+      .keyboardShortcut(.defaultAction)
+  }
+
+  /// The Recovery steps for an installation that finished but has not been
+  /// through Recovery yet, found when the installer is opened again.
+  private var pendingRecoveryHandoff: HandoffDisplay? {
+    guard let target = session.recoveryAccount?.target else { return nil }
+    let guide = session.powerButtonGuide
+    return HandoffDisplay(
+      headline: "Finish the installation in Recovery",
+      steps: [
+        RecoveryStep(number: 1, title: "Shut down completely."),
+        RecoveryStep(number: 2, title: guide.holdInstruction),
+        RecoveryStep(number: 3, title: "Choose “\(target.volumeName)” → Finish Installation."),
+      ],
+      warning: "Don’t restart normally yet: unfinished setup can cause a boot loop.")
+  }
+
+  /// A live installation prepares the native Recovery handoff before asking
+  /// macOS to shut down; the simulation only plays the shutdown.
+  private func shutDown() {
+    shutdownFailure = nil
+    guard !session.isSimulation else {
+      session.shutDown()
+      return
+    }
+    preparingShutdown = true
+    Task { @MainActor in
+      defer { preparingShutdown = false }
+      do {
+        if !(try await session.prepareRecoveryHandoffAndShutdown()) {
+          shutdownFailure =
+            "Your Mac couldn’t shut down. Save your work, then choose Apple menu → Shut Down. Keep the setup steps handy."
+        }
+      } catch {
+        shutdownFailure = error.localizedDescription
       }
     }
   }
@@ -849,20 +901,19 @@ private struct DiskSplitPanel: View {
           }
           Text("Omarchy will use the space selected above.")
             .omarchyHelpText()
-            .padding(.trailing, 28)
+          if isBusy {
+            // A released divider re-plans through the engine, which takes a
+            // moment; say so instead of leaving the bar and the tick inert.
+            HStack(spacing: 8) {
+              ProgressView()
+                .controlSize(.small)
+              Text(PlainLanguage.replanning)
+                .font(OmarchyTheme.detail)
+                .foregroundStyle(OmarchyTheme.secondaryText)
+            }
+          }
         }
         .padding(.vertical, 4)
-      }
-      .overlay(alignment: .bottomTrailing) {
-        if isBusy {
-          ProgressView()
-            .controlSize(.small)
-            .frame(width: 16, height: 16)
-            .padding(.trailing, 14)
-            .padding(.bottom, 16)
-            .accessibilityLabel(PlainLanguage.replanning)
-            .help(PlainLanguage.replanning)
-        }
       }
       ForEach(plan.spaceCautions(for: displayedOmarchyBytes), id: \.self) { caution in
         Text(caution).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
@@ -1029,5 +1080,12 @@ private struct SizeEditButtonStyle: ButtonStyle {
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
     }
+  }
+}
+
+private struct InstallerContentHeight: PreferenceKey {
+  static let defaultValue: CGFloat = 0
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+    value = max(value, nextValue())
   }
 }
